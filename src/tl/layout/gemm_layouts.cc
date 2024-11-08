@@ -50,12 +50,22 @@ From https://github.com/RadeonOpenCompute/amd_matrix_instruction_calculator
 ./matrix_calculator.py --architecture cdna1 --instruction v_mfma_f32_16x16x16f16
 --detail-instruction
 */
+// Fragment makeGemmFragmentCDNA16x16() {
+//   IterVar i = make_itervar("i", 16);
+//   IterVar j = make_itervar("j", 16);
+//   IterVar rep = make_itervar("rep", 1);
+//   PrimExpr forward_thread = 16 * FloorDiv(i->var, 4) + j;
+//   PrimExpr index = FloorMod(i->var, 4);
+//   return Fragment({i, j}, {index}, forward_thread, rep);
+// }
+
+// WARNING: Hacky Linear Layout Transformation
 Fragment makeGemmFragmentCDNA16x16() {
   IterVar i = make_itervar("i", 16);
   IterVar j = make_itervar("j", 16);
   IterVar rep = make_itervar("rep", 1);
-  PrimExpr forward_thread = 16 * FloorDiv(i->var, 4) + j;
-  PrimExpr index = FloorMod(i->var, 4);
+  PrimExpr forward_thread = i * 4 + FloorDiv(j->var, 4);
+  PrimExpr index = FloorMod(j->var, 4);
   return Fragment({i, j}, {index}, forward_thread, rep);
 }
 
