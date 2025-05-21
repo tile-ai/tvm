@@ -304,11 +304,6 @@ PrimExpr max_value(const DataType& dtype, Span span) {
       return FloatImm(dtype, 57344.0, span);
     } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fn) {
       return FloatImm(dtype, 448.0, span);
-    } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
-      // Maximum value for e4m3fnuz (no negative values, unsigned, no zero)
-      // 4 exponent bits, 3 mantissa bits, no sign bit
-      // Max value = (2^(2^4-1)) * (2 - 2^(-3))
-      return FloatImm(dtype, 240.0, span);
     }
   }
   LOG(FATAL) << "Cannot decide max_value for type" << dtype;
