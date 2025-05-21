@@ -41,33 +41,17 @@
 namespace tvm {
 namespace codegen {
 
-std::string GetFP8Type(DataType type) {
-  std::stringstream stream;
-  int32_t lanes = type.lanes();
-  std::string vec;
-  if (type.is_scalar()) {
-    vec = "";
-  } else if (lanes == 2) {
-    vec = "_2";
-  } else if (lanes == 4) {
-    vec = "_4";
-  } else if (lanes == 8) {
-    vec = "_8";
-  } else if (lanes == 16) {
-    vec = "_16";
+std::string GetFP8Type(const DataType& dtype) {
+  if (dtype.code() == DataType::kFloat8_e4m3fn) {
+    return "__nv_fp8_e4m3";
+  } else if (dtype.code() == DataType::kFloat8_e4m3fnuz) {
+    return "__nv_fp8_e4m3fnuz";
+  } else if (dtype.code() == DataType::kFloat8_e5m2) {
+    return "__nv_fp8_e5m2";
   } else {
-    LOG(FATAL) << "Only support scalar and vector types of width (2, 4, 8, 16) for FP8";
+    LOG(FATAL) << "Unknown float8 type: " << dtype;
+    return "";
   }
-  if (type.code() == DataType::kFloat8_e4m3fn) {
-    stream << "fp8_e4" << vec << "_t";
-  } else if (type.code() == DataType::kFloat8_e4m3fnuz) {
-    stream << "fp8_e4" << vec << "_t";
-  } else if (type.code() == DataType::kFloat8_e5m2) {
-    stream << "fp8_e5" << vec << "_t";
-  } else {
-    LOG(FATAL) << "Unsupported FP8 type in CUDA codegen";
-  }
-  return stream.str();
 }
 
 CodeGenCUDA::CodeGenCUDA() { restrict_keyword_ = "__restrict__"; }
@@ -243,81 +227,20 @@ void CodeGenCUDA::BindThreadIndex(const IterVar& iv) {
 void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
   int lanes = t.lanes();
   if (t.is_handle()) {
-    ICHECK(t.is_scalar()) << "do not yet support vector types";
+    ICHECK_EQ(lanes, 1) << "does not support vector types";
     os << "void*";
     return;
   }
-
   if (t.is_void()) {
     os << "void";
     return;
   }
-
-  bool fail = false;
-  if (t.is_float()) {
-    switch (t.bits()) {
-      case 16:
-        enable_fp16_ = true;
-        if (t.is_scalar()) {
-          os << "half";
-        } else if (lanes <= 8) {
-          ICHECK_EQ(lanes % 2, 0) << "Only support an even number of lanes for half type";
-          if (lanes <= 4) {
-            os << "half" << lanes;
-          } else {
-            os << "uint" << lanes / 2;
-          }
-        } else {
-          fail = true;
-        }
-        break;
-      case 32:
-        if (lanes <= 4) {
-          os << "float";
-        } else if (lanes <= 8) {
-          // Emit CUDA code to access fp32 vector elements for 4 < lanes <= 8.
-          //
-          // float8 is stored as ulonglong4
-          //
-          // f8.v1 is emitted as *(float2*)(&(ul4.x)).x
-          // f8.v2 is emitted as *(float2*)(&(ul4.x)).y
-          //
-          ICHECK_EQ(lanes % 2, 0) << "only support even lane for float type with lanes > 4";
-          os << "ulonglong" << lanes / 2;
-        } else {
-          fail = true;
-        }
-        break;
-      case 64:
-        os << "double";
-        break;
-      default:
-        fail = true;
-        break;
-    }
-    if (!fail && (t.is_scalar() || t.bits() == 16)) return;
-    if (!fail && (lanes > 4 && lanes <= 8 && t.bits() == 32)) return;
-    if (!fail && (lanes >= 2 && lanes <= 4)) {
-      os << lanes;
-      return;
-    }
-  } else if (t.is_bfloat16()) {
-    enable_bf16_ = true;
-    if (t.is_scalar()) {
-      os << "nv_bfloat16";
-    } else if (lanes <= 8) {
-      ICHECK_EQ(lanes % 2, 0) << "only support even lane for half type";
-      os << "uint" << lanes / 2;
-    } else {
-      fail = true;
-    }
-    if (!fail) return;
+  if (t == DataType::Bool()) {
+    os << "bool";
+    return;
   } else if (t.is_float8()) {
     enable_fp8_ = true;
     os << GetFP8Type(t);
-    return;
-  } else if (t == DataType::Bool()) {
-    os << "bool";
     return;
   } else if (t.is_vector_bool()) {
     // CUDA does not support bool vectors.
@@ -375,100 +298,44 @@ void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
       }
       case 8: {
         if (t.lanes() == 4) {
-          // directly 4 8 bit int in integer.
-          enable_int8_ = true;
-
-          // We use int for int8x4 instead of char4 because using char4 is
-          // likely to produce extra instructions to pack four int8 elements
-          // into 32-bit data.
+          // directly 4 8-bit int in integer.
           os << "int";
           return;
-        } else if (t.lanes() == 8) {
-          enable_int8_ = true;
-          os << "int2";
-          return;
-        } else if (t.lanes() == 16) {
-          enable_int8_ = true;
-          os << "int4";
-          return;
-        } else if (!t.is_uint() && t.is_scalar()) {
-          os << "signed char";
-          break;
-        } else {
-          os << "char";
-          break;
         }
-      }
-      case 16: {
-        if (t.is_scalar()) {
-          os << "short";
-        } else if (t.lanes() <= 4) {
-          os << "short" << lanes;
-        } else if (t.lanes() <= 8) {
-          // Emit CUDA code to access int16 vector elements.
-          //
-          // short4 is stored as int2
-          //
-          // s4.x is emitted as *(short2*)(&(i2.x)).x
-          // s4.y is emitted as *(short2*)(&(i2.x)).y
-          // s4.z is emitted as *(short2*)(&(i2.y)).x
-          // s4.w is emitted as *(short2*)(&(i2.y)).y
-          //
-          ICHECK_EQ(t.lanes() % 2, 0) << "only support even lane for shorT type with lanes > 4";
-          os << "int" << t.lanes() / 2;
-        } else {
-          fail = true;
-        }
-        if (!fail) {
-          return;
-        }
-        break;
-      }
-      case 32: {
-        if (t.is_scalar()) {
-          os << "int";
-        } else if (t.lanes() <= 4) {
-          os << "int" << t.lanes();
-        } else if (t.lanes() <= 8) {
-          // Emit CUDA code to access int32 vector elements for 4 < lanes <= 8.
-          //
-          // int8 is stored as longlong4
-          //
-          // i8.v1 is emitted as *(int2*)(&(l4.x)).x
-          // i8.v2 is emitted as *(int2*)(&(l4.x)).y
-          //
-          ICHECK_EQ(lanes % 2, 0) << "only support even lane for int32 type with lanes > 4";
-          os << "longlong" << lanes / 2;
-        } else {
-          fail = true;
-        }
-        if (!fail) {
-          return;
-        }
-        break;
-      }
-      case 64: {
-        if (t.is_scalar()) {
-          os << "int64_t";
-        } else if (t.lanes() == 2) {
-          os << "longlong2";
-        } else if (t.lanes() == 3) {
-          os << "longlong3";
-        } else if (t.lanes() == 4) {
-          os << "longlong4";
-        }
+        os << "int8_t";
         return;
       }
-      default:
-        fail = true;
-        break;
+      case 16: {
+        os << "int16_t";
+        return;
+      }
+      case 32: {
+        os << "int32_t";
+        return;
+      }
+      case 64: {
+        os << "int64_t";
+        return;
+      }
+      default: {
+        LOG(FATAL) << "Cannot convert type " << t << " to CUDA type!";
+        return;
+      }
     }
-    if (!fail && lanes == 1) {
-      return;
-    }
-    if (!fail && (lanes >= 2 && lanes <= 4)) {
-      os << lanes;
-      return;
+  } else if (t.is_float()) {
+    switch (t.bits()) {
+      case 16: {
+        os << "half";
+        return;
+      }
+      case 32: {
+        os << "float";
+        return;
+      }
+      case 64: {
+        os << "double";
+        return;
+      }
     }
   }
   LOG(FATAL) << "Cannot convert type " << t << " to CUDA type";
