@@ -128,7 +128,7 @@ class DataType {
   bool is_float4_e2m1fn() const { return (code() == DataType::kFloat4_e2m1fn && bits() == 4); }
   bool is_float8() const {
     return (code() == DataType::kFloat || code() == DataType::kFloat8_e4m3fn ||
-            code() == DataType::kFloat8_e5m2) &&
+            code() == DataType::kFloat8_e5m2 || code() == DataType::kFloat8_e4m3fnuz) &&
            bits() == 8;
   }
   bool is_float8_e4m3fn() const { return (code() == DataType::kFloat8_e4m3fn && bits() == 8); }

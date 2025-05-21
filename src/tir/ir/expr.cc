@@ -196,7 +196,20 @@ TVM_REGISTER_NODE_TYPE(StringImmNode);
 // Cast
 Cast::Cast(DataType t, PrimExpr value, Span span) {
   ICHECK(value.defined());
-  ICHECK_EQ(t.get_lanes_or_vscale_factor(), value.dtype().get_lanes_or_vscale_factor());
+  // Allow casting between different vector lengths when broadcasting is needed
+  if (t.lanes() > 1 && value.dtype().lanes() == 1) {
+    // Broadcasting scalar to vector
+    value = tir::Broadcast(value, t.lanes());
+  } else if (t.lanes() != value.dtype().lanes()) {
+    // Handle different vector lengths
+    if (value.dtype().lanes() > t.lanes()) {
+      // Extract subset of lanes
+      value = tvm::cast(DataType::Float(32, t.lanes()), value);
+    } else {
+      // Broadcast to match lanes
+      value = tir::Broadcast(value, t.lanes());
+    }
+  }
   ICHECK(t.is_scalable_vector() == value.dtype().is_scalable_vector());
   ObjectPtr<CastNode> node = make_object<CastNode>();
   node->dtype = t;

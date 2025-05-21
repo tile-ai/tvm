@@ -213,8 +213,43 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, const Span& span) {
   }
 
   if (!dtype.is_float() && !dtype.is_int() && !dtype.is_uint()) {
-    LOG(INFO) << "Invalid target type: " << dtype;
-    CHECK(false) << "Cannot match type " << rhs_dtype << " vs " << dtype;
+    if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
+      // Handle e4m3fnuz_float8 type conversion
+      if (dtype.lanes() > 1) {
+        // For vector types, first convert to float32 with same number of lanes
+        DataType float32_type = DataType::Float(32, dtype.lanes());
+        if (rhs_dtype.lanes() == 1) {
+          // Convert scalar to float32 first
+          rhs = tvm::cast(DataType::Float(32), rhs);
+          // Then broadcast to vector
+          rhs = tir::Broadcast(rhs, dtype.lanes());
+        } else if (rhs_dtype.lanes() != dtype.lanes()) {
+          // Handle different vector lengths
+          if (rhs_dtype.lanes() > dtype.lanes()) {
+            // Extract subset of lanes
+            rhs = tvm::cast(float32_type, rhs);
+          } else {
+            // Broadcast to match lanes
+            rhs = tir::Broadcast(rhs, dtype.lanes());
+          }
+        }
+        // Convert to target type
+        rhs = tvm::cast(dtype, rhs);
+      } else {
+        // For scalar types, convert through float32
+        if (rhs_dtype.is_float()) {
+          rhs = tvm::cast(dtype, rhs);
+        } else {
+          rhs = tvm::cast(DataType::Float(32), rhs);
+          rhs = tvm::cast(dtype, rhs);
+        }
+      }
+    } else if (dtype.is_float8()) {
+      rhs = tvm::cast(dtype, rhs);
+    } else {
+      LOG(INFO) << "Invalid target type: " << dtype;
+      CHECK(false) << "Cannot match type " << rhs_dtype << " vs " << dtype;
+    }
   }
 
   if (dtype.is_float()) {
@@ -270,7 +305,10 @@ PrimExpr max_value(const DataType& dtype, Span span) {
     } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fn) {
       return FloatImm(dtype, 448.0, span);
     } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
-      return FloatImm(dtype, 240.0, span);  // Maximum value for e4m3fnuz
+      // Maximum value for e4m3fnuz (no negative values, unsigned, no zero)
+      // 4 exponent bits, 3 mantissa bits, no sign bit
+      // Max value = (2^(2^4-1)) * (2 - 2^(-3))
+      return FloatImm(dtype, 240.0, span);
     }
   }
   LOG(FATAL) << "Cannot decide max_value for type" << dtype;
@@ -313,7 +351,9 @@ PrimExpr min_value(const DataType& dtype, Span span) {
     } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fn) {
       return FloatImm(dtype, -448.0, span);
     } else if (dtype.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
-      return FloatImm(dtype, 0.0, span);  // Minimum value for e4m3fnuz (no negative values)
+      // Minimum value for e4m3fnuz (unsigned, no zero)
+      // Smallest normalized number = 2^(-7)
+      return FloatImm(dtype, 0.0078125, span);
     }
   }
   LOG(FATAL) << "Cannot decide min_value for type" << dtype;
@@ -368,6 +408,17 @@ PrimExpr cast(const DataType& t, PrimExpr value, Span span) {
       return make_const(t, op->value, op->span);
     }
     ICHECK(!value.dtype().is_handle()) << "Can't cast a handle to other types.";
+    
+    // Special handling for float8_e4m3fnuz type
+    if (t.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
+      if (value.dtype().is_float()) {
+        return tir::Cast(t, value, span);
+      } else {
+        // Convert through float32 first
+        return tir::Cast(t, tir::Cast(DataType::Float(32), value, span), span);
+      }
+    }
+    
     return tir::Cast(t, value, span);
   } else {
     DataType vtype = t.element_of();
@@ -379,7 +430,16 @@ PrimExpr cast(const DataType& t, PrimExpr value, Span span) {
         } else if (const FloatImmNode* op = value.as<FloatImmNode>()) {
           value = make_const(vtype, op->value, op->span);
         } else {
-          value = tir::Cast(vtype, value, span);
+          // Special handling for float8_e4m3fnuz type
+          if (vtype.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
+            if (value.dtype().is_float()) {
+              value = tir::Cast(vtype, value, span);
+            } else {
+              value = tir::Cast(vtype, tir::Cast(DataType::Float(32), value, span), span);
+            }
+          } else {
+            value = tir::Cast(vtype, value, span);
+          }
         }
       }
       if (t.is_scalable_vector()) {
@@ -389,9 +449,8 @@ PrimExpr cast(const DataType& t, PrimExpr value, Span span) {
       } else {
         return tir::Broadcast(value, t.lanes(), span);
       }
-    } else { /* value is a vector */
+    } else {
       ICHECK(value.dtype().is_scalable_vector() == t.is_scalable_vector());
-
       bool lanes_match = false;
       if (value.dtype().is_scalable_vector()) {
         lanes_match = value.dtype().vscale_factor() == t.vscale_factor();
@@ -399,13 +458,22 @@ PrimExpr cast(const DataType& t, PrimExpr value, Span span) {
         lanes_match = value.dtype().lanes() == t.lanes();
       }
       ICHECK(lanes_match);
+      
+      // Special handling for float8_e4m3fnuz type
+      if (t.code() == DataType::TypeCode::kFloat8_e4m3fnuz) {
+        if (value.dtype().is_float()) {
+          return tir::Cast(t, value, span);
+        } else {
+          return tir::Cast(t, tir::Cast(DataType::Float(32, t.lanes()), value, span), span);
+        }
+      }
+      
       if (const auto* broadcast = value.as<tir::BroadcastNode>()) {
         return tir::Broadcast(cast(vtype, broadcast->value, span), broadcast->lanes, span);
       } else if (const auto* ramp = value.as<tir::RampNode>()) {
         if (t.is_int() || t.is_uint()) {
-          // only cast to index data type can be folded to ramp
           return tir::Ramp(cast(vtype, ramp->base, span), cast(vtype, ramp->stride, span),
-                           ramp->lanes, span);
+                          ramp->lanes, span);
         }
       }
       return tir::Cast(t, value, span);
