@@ -57,6 +57,7 @@ class DataType {
     kHandle = TVMArgTypeCode::kTVMOpaqueHandle,
     kBFloat = kDLBfloat,
     kFloat8_e4m3fn = 6U,
+    kFloat8_e4m3fnuz = 23,
     kFloat8_e5m2 = 7U,
     kFloat4_e2m1fn = 8U,
     kCustomBegin = 129
@@ -85,7 +86,8 @@ class DataType {
     if (code == kBFloat) {
       ICHECK_EQ(bits, 16);
     }
-    if (code == kFloat8_e4m3fn || code == kFloat8_e5m2) {
+    if (code == kFloat8_e4m3fn || code == kFloat8_e5m2 ||
+        code == kFloat8_e4m3fnuz) {
       ICHECK_EQ(bits, 8);
     }
   }
@@ -125,13 +127,19 @@ class DataType {
   bool is_float4() const { return code() == DataType::kFloat4_e2m1fn && bits() == 4; }
   bool is_float4_e2m1fn() const { return (code() == DataType::kFloat4_e2m1fn && bits() == 4); }
   bool is_float8() const {
-    return (code() == DataType::kFloat || code() == DataType::kFloat8_e4m3fn ||
+    return (code() == DataType::kFloat || code() == DataType::kFloat8_e4m3fn || code() == DataType::kFloat8_e4m3fnuz ||
             code() == DataType::kFloat8_e5m2) &&
            bits() == 8;
   }
   bool is_float8_e4m3fn() const { return (code() == DataType::kFloat8_e4m3fn && bits() == 8); }
+  bool is_float8_e4m3fnuz() const {
+    return (code() == DataType::kFloat8_e4m3fnuz && bits() == 8);
+  }
   bool is_float8_e5m2() const { return (code() == DataType::kFloat8_e5m2 && bits() == 8); }
   bool is_e4m3_float8() const { return (code() == DataType::kFloat8_e4m3fn && bits() == 8); }
+  bool is_e4m3fnuz_float8() const {
+    return (code() == DataType::kFloat8_e4m3fnuz && bits() == 8);
+  }
 
   bool is_e5m2_float8() const { return (code() == DataType::kFloat8_e5m2 && bits() == 8); }
   /*! \return whether type is a float16 type. */
@@ -252,6 +260,13 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType NVFloat8E4M3(int lanes = 1) { return DataType(kFloat8_e4m3fn, 8, lanes); }
+  /*!
+   * \brief Construct NV float8 e4m3fnuz datatype.
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType NVFloat8E4M3UZN(int lanes = 1) { return DataType(kFloat8_e4m3fnuz, 8, lanes); }
+  
   /*!
    * \brief Construct NV float8 e5m2 datatype.
    * \param lanes The number of lanes
@@ -390,6 +405,8 @@ inline const char* DLDataTypeCode2Str(DLDataTypeCode type_code) {
       return "e4m3_float";
     case DataType::kFloat8_e5m2:
       return "e5m2_float";
+    case DataType::kFloat8_e4m3fnuz:
+      return "e4m3fnuz_float";
     default:
       LOG(FATAL) << "unknown type_code=" << static_cast<int>(type_code);
   }
@@ -441,12 +458,17 @@ inline DLDataType String2DLDataType(std::string s) {
   t.bits = 32;
   t.lanes = 1;
   const char* scan;
+  
   if (s.substr(0, 3) == "int") {
     t.code = kDLInt;
     scan = s.c_str() + 3;
   } else if (s.substr(0, 4) == "uint") {
     t.code = kDLUInt;
     scan = s.c_str() + 4;
+  } else if (s.find("e4m3fnuz") != std::string::npos) {
+    t.code = DataType::kFloat8_e4m3fnuz;
+    t.bits = 8;
+    scan = s.c_str() + 15;
   } else if (s.substr(0, 5) == "float") {
     t.code = kDLFloat;
     scan = s.c_str() + 5;
@@ -467,6 +489,10 @@ inline DLDataType String2DLDataType(std::string s) {
     t.code = DataType::kFloat8_e4m3fn;
     t.bits = 8;
     scan = s.c_str() + 10;
+  } else if (s.substr(0, 14) == "e4m3fnuz_float") {
+    t.code = DataType::kFloat8_e4m3fnuz;
+    t.bits = 8;
+    scan = s.c_str() + 14;
   } else if (s.substr(0, 10) == "e5m2_float") {
     t.code = DataType::kFloat8_e5m2;
     t.bits = 8;
@@ -489,7 +515,12 @@ inline DLDataType String2DLDataType(std::string s) {
   if (*xdelim == 'x') {
     t.lanes = static_cast<uint16_t>(scalable_multiplier * strtoul(xdelim + 1, &endpt, 10));
   }
-  ICHECK(endpt == s.c_str() + s.length()) << "unknown type " << s;
+  if (endpt != s.c_str() + s.length()) {
+    std::string unprocessed_part(endpt); 
+    std::cout << "Unknown type: '" << s << "'. Unprocessed part starts at: '" << unprocessed_part << "'";
+    ICHECK(endpt == s.c_str() + s.length())
+       << "Unknown type: '" << s << "'. Unprocessed part: '" << std::string(endpt) << "'";
+  }
   return t;
 }
 
