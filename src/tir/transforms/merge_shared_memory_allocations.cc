@@ -214,6 +214,10 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
       VisitNewScope(op);
     } else if (op->attr_key == attr::virtual_thread) {
       VisitNewScope(op);
+    } else if (op->attr_key == "kWarpSpecializationScope") {
+      IfThenElse body = Downcast<IfThenElse>(op->body);
+      this->VisitStmt(body->then_case);
+      this->VisitStmt(body->else_case.value());
     } else {
       StmtExprVisitor::VisitStmt_(op);
     }

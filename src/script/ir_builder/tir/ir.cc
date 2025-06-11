@@ -219,12 +219,50 @@ void Writes(Array<ObjectRef> buffer_slices) {
   frame->writes = writes;
 }
 
+/*! \brief Recursively merge two annotations, the new attrs will override the old ones */
+Map<String, Any> MergeAnnotations(const Map<String, Any>& new_attrs,
+                                  const Map<String, Any>& old_attrs) {
+  Map<String, Any> result = old_attrs;
+  for (const auto& [key, value] : new_attrs) {
+    auto old_value = old_attrs.Get(key);
+    // Case 1: the key is not in the old annotations, set the key to the new value
+    if (!old_value) {
+      result.Set(key, value);
+      continue;
+    }
+
+    // Case 2: the key is in the old annotations
+    // Case 2.1: both are dicts
+    auto old_dict = old_value->try_cast<Map<String, Any>>();
+    auto new_dict = value.try_cast<Map<String, Any>>();
+    if (old_dict && new_dict) {
+      auto merged_dict = MergeAnnotations(*old_dict, *new_dict);
+      result.Set(key, merged_dict);
+      continue;
+    }
+
+    // Case 2.2: the values are not both dicts, check if the keys are the same
+    if (!old_value->same_as(value)) {
+      LOG(FATAL) << "ValueError: Try to merge two annotations with different values for key <"
+                 << key << ">, previous one is " << old_value->cast<ObjectRef>() << ", new one is "
+                 << value.cast<ObjectRef>();
+    }
+  }
+  return result;
+}
+
 void BlockAttrs(Map<String, Any> attrs) {
   BlockFrame frame = FindBlockFrame("T.block_attr");
-  if (frame->annotations.defined()) {
-    LOG(FATAL) << "ValueError: Duplicate block annotations, previous one is " << frame->annotations;
+  // Case 1: no annotations, set the annotations to the new attrs
+  if (!frame->annotations) {
+    frame->annotations = attrs;
+    return;
   }
-  frame->annotations = attrs;
+
+  // Case 2: has annotations, try merge the new attrs with the old ones
+  auto annotations = frame->annotations.value();
+  auto merged_annotations = MergeAnnotations(attrs, annotations);
+  frame->annotations = merged_annotations;
 }
 
 Buffer AllocBuffer(Array<PrimExpr> shape, DataType dtype, Optional<Var> data,
@@ -235,6 +273,8 @@ Buffer AllocBuffer(Array<PrimExpr> shape, DataType dtype, Optional<Var> data,
                              offset_factor, buffer_type_str, axis_separators);
   IRBuilder builder = IRBuilder::Current();
   if (Optional<BlockFrame> frame = builder->GetLastFrame<BlockFrame>()) {
+    frame.value()->alloc_buffers.push_back(buffer);
+  } else if (Optional<BlockFrame> frame = builder->FindFrame<BlockFrame>()) {
     frame.value()->alloc_buffers.push_back(buffer);
   } else if (Optional<PrimFuncFrame> frame = builder->GetLastFrame<PrimFuncFrame>()) {
     frame.value()->root_alloc_buffers.push_back(buffer);

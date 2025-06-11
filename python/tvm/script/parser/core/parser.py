@@ -334,6 +334,9 @@ class Parser(doc.NodeVisitor):
         The list of dispatching tokens to dispatching parsing method
         of different IRs and different doc AST structure.
 
+    function_annotations: Optional[Dict[str, Dict[str, Any]]]
+        The function annotations for parsing.
+
     var_table : VarTable
         The variable table for parsing.
     """

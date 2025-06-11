@@ -26,7 +26,7 @@ from tvm.runtime import const
 
 from . import _ffi_api
 from .buffer import Buffer
-from .expr import Call, CommReducer, IntImm, PrimExprWithOp, Var
+from .expr import BufferLoad, Call, CommReducer, IntImm, PrimExprWithOp, Var
 
 
 def _pack_buffer(buf, span=None):
@@ -553,7 +553,7 @@ def tvm_struct_set(arr, index, field, value):
     return call_intrin("int32", "tir.tvm_struct_set", arr, index, field, value)
 
 
-def address_of(buffer_load, span=None):
+def address_of(buffer_or_buffer_load: Union[Buffer, BufferLoad], span=None):
     """Returns the address of an element in the buffer
 
     Parameters
@@ -569,6 +569,12 @@ def address_of(buffer_load, span=None):
     call : PrimExpr
         The call expression.
     """
+    if isinstance(buffer_or_buffer_load, Buffer):
+        buffer = buffer_or_buffer_load
+        n_dim = len(buffer.shape)
+        buffer_load = BufferLoad(buffer, [0] * n_dim)
+    else:
+        buffer_load = buffer_or_buffer_load
     return call_intrin("handle", "tir.address_of", buffer_load, span=span)
 
 

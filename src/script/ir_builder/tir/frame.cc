@@ -72,7 +72,7 @@ void BlockFrameNode::ExitWithScope() {
   }
   Map<String, Any> attrs = annotations.value_or({});
   if (int detect_access = (!reads.defined()) | (!writes.defined() << 1)) {
-    attrs.Set("tir.script_parsing_detect_access", tvm::IntImm(DataType::Int(64), detect_access));
+    attrs.Set("tir.script_parsing_detect_access", tvm::IntImm(DataType::Int(64), 0));
   }
   tvm::tir::Block block(iter_vars, reads.value_or(Array<tvm::tir::BufferRegion>()),
                         writes.value_or(Array<tvm::tir::BufferRegion>()), name, AsStmt(stmts), init,
