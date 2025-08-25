@@ -35,7 +35,8 @@ Buffer BufferDecl(Array<PrimExpr> shape, DataType dtype, String buffer_name, Opt
                   Optional<Array<PrimExpr>> strides, Optional<PrimExpr> elem_offset,
                   String storage_scope, int align, int offset_factor, String buffer_type,
                   Optional<Array<IntImm>> axis_separators) {
-  CHECK(buffer_type == "auto" || buffer_type == "default" || buffer_type.empty())
+  CHECK(buffer_type == "auto" || buffer_type == "default" || buffer_type == "distributed" || 
+        buffer_type == "meta_data" || buffer_type.empty())
       << "ValueError: `buffer_type` must be `auto` or `default` or empty";
   Var buffer_data;
   if (!data.defined()) {
@@ -51,10 +52,17 @@ Buffer BufferDecl(Array<PrimExpr> shape, DataType dtype, String buffer_name, Opt
     DataType shape_dtype = shape.empty() ? DataType::Int(32) : shape[0]->dtype;
     elem_offset = tvm::tir::Var("elem_offset", shape_dtype);
   }
+  tvm::tir::BufferType buffer_type_enum = tvm::tir::kDefault;
+  if (buffer_type == "distributed") {
+    buffer_type_enum = tvm::tir::kDistributed;
+  } else if (buffer_type == "meta_data") {
+    buffer_type_enum = tvm::tir::kMetaData;
+  } else if (buffer_type == "auto") {
+    buffer_type_enum = tvm::tir::kAutoBroadcast;
+  }
   return Buffer(buffer_data, dtype, shape, strides.value_or(Array<PrimExpr>()),
                 elem_offset.value_or(PrimExpr()), buffer_name, align, offset_factor,
-                (buffer_type == "auto" ? tvm::tir::kAutoBroadcast : tvm::tir::kDefault),
-                axis_separators.value_or(Array<IntImm>()));
+                buffer_type_enum, axis_separators.value_or(Array<IntImm>()));
 }
 
 PrimFuncFrame PrimFunc(bool is_private) {

@@ -56,6 +56,8 @@ enum BufferType : int {
   kDefault = 1,
   // Maps buffer[i][j][k] -> buffer[i][0][k] if dimension i's shape equals 1.
   kAutoBroadcast = 2,
+  kDistributed = 3,
+  kMetaData = 4,
 };
 
 /*! \brief Node to represent a buffer */
