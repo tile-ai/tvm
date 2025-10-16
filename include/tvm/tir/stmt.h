@@ -861,7 +861,7 @@ enum class ForKind : int {
  *
  * \code
  *
- *  for (loop_var = min; loop_var < min + extent; ++loop_var) {
+ *  for (loop_var = min; loop_var < min + step * extent; loop_var += step) {
  *    // body
  *  }
  * \endcode
@@ -874,6 +874,8 @@ class ForNode : public StmtNode {
   PrimExpr min;
   /*! \brief The extent of the iteration. */
   PrimExpr extent;
+  /*! \brief The step between consecutive iterations. */
+  PrimExpr step;
   /*! \brief The kind of the for loop. */
   ForKind kind;
   /*! \brief The body of the for loop. */
@@ -899,6 +901,7 @@ class ForNode : public StmtNode {
         .def_ro("loop_var", &ForNode::loop_var)
         .def_ro("min", &ForNode::min)
         .def_ro("extent", &ForNode::extent)
+        .def_ro("step", &ForNode::step)
         .def_ro("kind", &ForNode::kind)
         .def_ro("body", &ForNode::body)
         .def_ro("thread_binding", &ForNode::thread_binding)
@@ -907,7 +910,8 @@ class ForNode : public StmtNode {
 
   bool SEqualReduce(const ForNode* other, SEqualReducer equal) const {
     return equal.DefEqual(loop_var, other->loop_var) && equal(min, other->min) &&
-           equal(extent, other->extent) && equal(kind, other->kind) && equal(body, other->body) &&
+           equal(extent, other->extent) && equal(step, other->step) && equal(kind, other->kind) &&
+           equal(body, other->body) &&
            equal(thread_binding, other->thread_binding) && equal(annotations, other->annotations);
   }
 
@@ -915,6 +919,7 @@ class ForNode : public StmtNode {
     hash_reduce.DefHash(loop_var);
     hash_reduce(min);
     hash_reduce(extent);
+    hash_reduce(step);
     hash_reduce(kind);
     hash_reduce(body);
     hash_reduce(thread_binding);
@@ -933,7 +938,8 @@ class For : public Stmt {
  public:
   TVM_DLL For(Var loop_var, PrimExpr min, PrimExpr extent, ForKind kind, Stmt body,
               Optional<IterVar> thread_binding = std::nullopt,
-              Map<String, ffi::Any> annotations = Map<String, ffi::Any>(), Span span = Span());
+              Map<String, ffi::Any> annotations = Map<String, ffi::Any>(), Span span = Span(),
+              PrimExpr step = PrimExpr());
 
   TVM_DEFINE_OBJECT_REF_METHODS(For, Stmt, ForNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(ForNode);

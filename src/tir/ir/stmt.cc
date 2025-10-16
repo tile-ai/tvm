@@ -138,7 +138,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
 
 // For
 For::For(Var loop_var, PrimExpr min, PrimExpr extent, ForKind kind, Stmt body,
-         Optional<IterVar> thread_binding, Map<String, Any> annotations, Span span) {
+         Optional<IterVar> thread_binding, Map<String, Any> annotations, Span span, PrimExpr step) {
   ICHECK(loop_var.defined());
   ICHECK(min.defined());
   ICHECK(extent.defined());
@@ -153,6 +153,9 @@ For::For(Var loop_var, PrimExpr min, PrimExpr extent, ForKind kind, Stmt body,
   require_scalar_int_dtype(loop_var, "loop_var");
   require_scalar_int_dtype(min, "min");
   require_scalar_int_dtype(extent, "extent");
+  if (step.defined()) {
+    require_scalar_int_dtype(step, "step");
+  }
 
   // When extent or min is an IntImm but has narrower dtype than loop_var, we directly promote them
   // without raising errors.
@@ -170,14 +173,22 @@ For::For(Var loop_var, PrimExpr min, PrimExpr extent, ForKind kind, Stmt body,
 
   min = try_promote_imm_dtype(min);
   extent = try_promote_imm_dtype(extent);
+  if (!step.defined()) {
+    step = make_const(loop_var.dtype(), 1);
+  } else {
+    step = try_promote_imm_dtype(step);
+  }
 
   ICHECK(loop_var.dtype() == min.dtype()) << loop_var.dtype() << " vs " << min.dtype();
   ICHECK(loop_var.dtype() == extent.dtype()) << loop_var.dtype() << " vs " << extent.dtype();
+  ICHECK(loop_var.dtype() == step.dtype()) << loop_var.dtype() << " vs " << step.dtype();
+  ICHECK(!is_zero(step)) << "Step of a For loop cannot be zero";
 
   ObjectPtr<ForNode> node = make_object<ForNode>();
   node->loop_var = std::move(loop_var);
   node->min = std::move(min);
   node->extent = std::move(extent);
+  node->step = std::move(step);
   node->kind = kind;
   node->body = std::move(body);
   node->thread_binding = std::move(thread_binding);
@@ -188,12 +199,14 @@ For::For(Var loop_var, PrimExpr min, PrimExpr extent, ForKind kind, Stmt body,
 
 TVM_FFI_STATIC_INIT_BLOCK({
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tir.For", [](Var loop_var, PrimExpr min, PrimExpr extent, int kind,
-                                      Stmt body, Optional<IterVar> thread_binding,
-                                      Optional<Map<String, Any>> annotations, Span span) {
-    return For(loop_var, min, extent, static_cast<ForKind>(kind), body, thread_binding,
-               annotations.value_or(Map<String, Any>()), span);
-  });
+  refl::GlobalDef().def(
+      "tir.For",
+      [](Var loop_var, PrimExpr min, PrimExpr extent, int kind, Stmt body,
+         Optional<IterVar> thread_binding, Optional<Map<String, Any>> annotations, Span span,
+         Optional<PrimExpr> step) {
+        return For(loop_var, min, extent, static_cast<ForKind>(kind), body, thread_binding,
+                   annotations.value_or(Map<String, Any>()), span, step.value_or(PrimExpr()));
+      });
 });
 
 TVM_REGISTER_NODE_TYPE(ForNode);

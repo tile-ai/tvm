@@ -159,6 +159,7 @@ class For(Stmt):
     body: Stmt
     thread_binding: Optional[IterVar]
     annotations: Mapping[str, Object]
+    step: PrimExpr
     span: Optional[Span]
 
     def __init__(
@@ -171,6 +172,7 @@ class For(Stmt):
         thread_binding: Optional[IterVar] = None,
         annotations: Optional[Mapping[str, Object]] = None,
         span: Optional[Span] = None,
+        step: Optional[PrimExpr] = None,
     ) -> None:
         self.__init_handle_by_constructor__(
             _ffi_api.For,  # type: ignore
@@ -182,6 +184,7 @@ class For(Stmt):
             thread_binding,
             annotations,
             span,
+            step,
         )
 
 

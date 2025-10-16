@@ -747,6 +747,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       LOG(WARNING) << "Detect vectorize inside vectorized loop, ignoring...";
     }
     ICHECK(is_zero(op->min));
+    ICHECK(is_one(op->step));
     ICHECK(!op->extent.dtype().is_scalable_or_fixed_length_vector());
     PrimExpr extent = this->VisitExpr(op->extent);
     if (extent.dtype().is_scalable_or_fixed_length_vector()) {
@@ -757,7 +758,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       return GetRef<Stmt>(op);
     } else {
       return For(op->loop_var, op->min, extent, op->kind, body, op->thread_binding,
-                 op->annotations);
+                 op->annotations, op->span, op->step);
     }
   }
   // IfThenElse
@@ -973,6 +974,7 @@ class LoopVectorizer : public StmtMutator {
             << "Failed to vectorize loop with extent " << op->extent << " for target " << target_;
       }
       ICHECK(is_zero(op->min));
+      ICHECK(is_one(op->step));
       return Vectorizer(op->loop_var, op->extent, target_)(op->body);
     } else {
       return StmtMutator::VisitStmt_(op);
@@ -1000,7 +1002,8 @@ class VectorizeSkipper : public StmtMutator {
     Stmt stmt = StmtMutator::VisitStmt_(op);
     op = stmt.as<ForNode>();
     if (op->kind == ForKind::kVectorized) {
-      return For(op->loop_var, op->min, op->extent, ForKind::kSerial, op->body);
+      return For(op->loop_var, op->min, op->extent, ForKind::kSerial, op->body,
+                 op->thread_binding, op->annotations, op->span, op->step);
     } else {
       return stmt;
     }

@@ -364,19 +364,32 @@ Array<Var> Remap(String kinds, Array<PrimExpr> bindings, DataType dtype) {
 }  // namespace axis
 
 #define TVM_TIR_IR_BUILDER_FOR_FRAME(Method, Kind)                                                \
-  ForFrame Method(PrimExpr start, PrimExpr stop, Optional<Map<String, Any>> annotations) {        \
+  ForFrame Method(PrimExpr start, PrimExpr stop, Optional<PrimExpr> step,                         \
+                  Optional<Map<String, Any>> annotations) {                                       \
     PrimExpr min = start;                                                                         \
-    PrimExpr extent = arith::Analyzer().Simplify(stop - start);                                   \
+    PrimExpr diff = arith::Analyzer().Simplify(stop - start);                                     \
+    PrimExpr step_expr = step.value_or(tvm::tir::make_const(min.dtype(), 1));                     \
     ObjectPtr<ForFrameNode> n = make_object<ForFrameNode>();                                      \
-    int bits = std::max(min.dtype().bits(), extent.dtype().bits());                               \
-    n->vars = {Var("v", DataType(min.dtype().code(), bits, 1))};                                  \
-    n->doms = {Range::FromMinExtent(min, extent)};                                                \
-    n->f_make_for_loop = [annotations](Array<Var> vars, Array<Range> doms, tvm::tir::Stmt body) { \
-      ICHECK_EQ(vars.size(), 1);                                                                  \
-      ICHECK_EQ(doms.size(), 1);                                                                  \
-      return tvm::tir::For(vars[0], doms[0]->min, doms[0]->extent, Kind, body, std::nullopt,      \
-                           annotations.value_or(Map<String, Any>()));                             \
-    };                                                                                            \
+    int bits = std::max({min.dtype().bits(), diff.dtype().bits(), step_expr.dtype().bits()});     \
+    DataType dtype = DataType(min.dtype().code(), bits, 1);                                       \
+    PrimExpr min_cast = min.dtype() == dtype ? min : tvm::tir::Cast(dtype, min);                  \
+    PrimExpr diff_cast = diff.dtype() == dtype ? diff : tvm::tir::Cast(dtype, diff);              \
+    PrimExpr step_cast = step_expr.dtype() == dtype ? step_expr : tvm::tir::Cast(dtype, step_expr); \
+    n->vars = {Var("v", dtype)};                                                                  \
+    n->doms = {Range::FromMinExtent(min_cast, diff_cast)};                                        \
+    n->steps = {step_cast};                                                                       \
+    n->f_make_for_loop =                                                                          \
+        [annotations](Array<Var> vars, Array<Range> doms, Array<PrimExpr> steps,                  \
+                      tvm::tir::Stmt body) {                                                      \
+          ICHECK_EQ(vars.size(), 1);                                                              \
+          ICHECK_EQ(doms.size(), 1);                                                              \
+          ICHECK_EQ(steps.size(), 1);                                                             \
+          PrimExpr start = doms[0]->min;                                                          \
+          PrimExpr diff = doms[0]->extent;                                                        \
+          PrimExpr step = steps[0];                                                               \
+          return tvm::tir::For(vars[0], start, diff, Kind, body, std::nullopt,                    \
+                               annotations.value_or(Map<String, Any>()), Span(), step);           \
+        };                                                                                        \
     return ForFrame(n);                                                                           \
   }
 
@@ -397,13 +410,15 @@ ForFrame ThreadBinding(PrimExpr start, PrimExpr stop, String thread,
   DataType dtype = DataType(min.dtype().code(), bits, 1);
   n->vars = {Var("v", dtype)};
   n->doms = {Range::FromMinExtent(min, extent)};
+  n->steps = {make_const(dtype, 1)};
   n->f_make_for_loop = [annotations, thread, dtype](Array<Var> vars, Array<Range> doms,
-                                                    Stmt body) -> For {
+                                                    Array<PrimExpr> steps, Stmt body) -> For {
     ICHECK_EQ(vars.size(), 1);
     ICHECK_EQ(doms.size(), 1);
+    ICHECK_EQ(steps.size(), 1);
     IterVar iter_var(Range(nullptr), Var("iter", dtype), IterVarType::kThreadIndex, thread);
     return For(vars[0], doms[0]->min, doms[0]->extent, ForKind::kThreadBinding, body, iter_var,
-               annotations.value_or(Map<String, ffi::Any>()));
+               annotations.value_or(Map<String, ffi::Any>()), Span(), steps[0]);
   };
   return ForFrame(n);
 }
@@ -413,19 +428,23 @@ ForFrame Grid(Array<PrimExpr> extents) {
   ObjectPtr<ForFrameNode> n = make_object<ForFrameNode>();
   n->vars.reserve(extents.size());
   n->doms.reserve(extents.size());
+  n->steps.reserve(extents.size());
   for (const auto& extent : extents) {
     DataType dtype = extent.dtype();
     n->vars.push_back(Var("v", extent.dtype()));
     n->doms.push_back(Range(make_const(dtype, 0), extent));
+    n->steps.push_back(make_const(dtype, 1));
   }
-  n->f_make_for_loop = [](Array<Var> vars, Array<Range> doms, Stmt body) -> Stmt {
+  n->f_make_for_loop = [](Array<Var> vars, Array<Range> doms, Array<PrimExpr> steps,
+                          Stmt body) -> Stmt {
     ICHECK_EQ(vars.size(), doms.size());
+    ICHECK_EQ(vars.size(), steps.size());
     int n = vars.size();
     for (int i = n - 1; i >= 0; --i) {
       Range dom = doms[i];
       Var var = vars[i];
       body = For(var, dom->min, dom->extent, ForKind::kSerial, std::move(body),
-                 /*thread_binding=*/std::nullopt, /*annotations=*/{});
+                 /*thread_binding=*/std::nullopt, /*annotations=*/{}, Span(), steps[i]);
     }
     return body;
   };
@@ -726,10 +745,26 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .def("script.ir_builder.tir.AxisScan", axis::Scan)
       .def("script.ir_builder.tir.AxisOpaque", axis::Opaque)
       .def("script.ir_builder.tir.AxisRemap", axis::Remap)
-      .def("script.ir_builder.tir.Serial", Serial)
-      .def("script.ir_builder.tir.Parallel", Parallel)
-      .def("script.ir_builder.tir.Vectorized", Vectorized)
-      .def("script.ir_builder.tir.Unroll", Unroll)
+      .def("script.ir_builder.tir.Serial",
+           [](PrimExpr start, PrimExpr stop, Optional<PrimExpr> step,
+              Optional<Map<String, Any>> annotations) {
+             return Serial(start, stop, step, annotations);
+           })
+      .def("script.ir_builder.tir.Parallel",
+           [](PrimExpr start, PrimExpr stop, Optional<PrimExpr> step,
+              Optional<Map<String, Any>> annotations) {
+             return Parallel(start, stop, step, annotations);
+           })
+      .def("script.ir_builder.tir.Vectorized",
+           [](PrimExpr start, PrimExpr stop, Optional<PrimExpr> step,
+              Optional<Map<String, Any>> annotations) {
+             return Vectorized(start, stop, step, annotations);
+           })
+      .def("script.ir_builder.tir.Unroll",
+           [](PrimExpr start, PrimExpr stop, Optional<PrimExpr> step,
+              Optional<Map<String, Any>> annotations) {
+             return Unroll(start, stop, step, annotations);
+           })
       .def("script.ir_builder.tir.ThreadBinding", ThreadBinding)
       .def("script.ir_builder.tir.Grid", Grid)
       .def("script.ir_builder.tir.Assert", Assert)

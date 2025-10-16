@@ -672,10 +672,10 @@ void CodeGenSPIRV::VisitStmt_(const BufferStoreNode* op) {
 }
 
 void CodeGenSPIRV::VisitStmt_(const ForNode* op) {
-  ICHECK(is_zero(op->min));
   analyzer_->Bind(op->loop_var, Range::FromMinExtent(op->min, op->extent));
   spirv::Value init_value = MakeValue(op->min);
-  spirv::Value extent_value = MakeValue(op->extent);
+  spirv::Value step_value = MakeValue(op->step);
+  spirv::Value stop_value = MakeValue(op->min + op->extent);
   // Must get init label after making value(to make sure they are correct)
   spirv::Label init_label = builder_->CurrentLabel();
   spirv::Label head_label = builder_->NewLabel();
@@ -692,7 +692,16 @@ void CodeGenSPIRV::VisitStmt_(const ForNode* op) {
   builder_->StartLabel(head_label);
   spirv::PhiValue loop_var = builder_->MakePhi(init_value.stype, 2);
   loop_var.SetIncoming(0, init_value, init_label);
-  spirv::Value loop_cond = builder_->LT(loop_var, extent_value);
+  spirv::Value loop_cond;
+  if (const auto* imm = op->step.as<IntImmNode>()) {
+    loop_cond = imm->value > 0 ? builder_->LT(loop_var, stop_value)
+                               : builder_->GT(loop_var, stop_value);
+  } else {
+    spirv::Value zero = op->loop_var.dtype().is_int() ? builder_->IntImm(step_value.stype, 0)
+                                                      : builder_->UIntImm(step_value.stype, 0);
+    loop_cond = builder_->Select(builder_->GT(step_value, zero), builder_->LT(loop_var, stop_value),
+                                 builder_->GT(loop_var, stop_value));
+  }
   uint32_t control =
       (op->kind == ForKind::kUnrolled ? spv::LoopControlUnrollMask : spv::LoopControlMaskNone);
   builder_->MakeInst(spv::OpLoopMerge, merge_label, continue_label, control);
@@ -707,9 +716,7 @@ void CodeGenSPIRV::VisitStmt_(const ForNode* op) {
 
   // loop continue
   builder_->StartLabel(continue_label);
-  spirv::Value one = op->loop_var.dtype().is_int() ? builder_->IntImm(loop_var.stype, 1)
-                                                   : builder_->UIntImm(loop_var.stype, 1);
-  spirv::Value next_value = builder_->Add(loop_var, one);
+  spirv::Value next_value = builder_->Add(loop_var, step_value);
   loop_var.SetIncoming(1, next_value, builder_->CurrentLabel());
   builder_->MakeInst(spv::OpBranch, head_label);
   // loop merge

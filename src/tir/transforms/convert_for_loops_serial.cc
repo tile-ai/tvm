@@ -43,7 +43,7 @@ class ForLoopSerialConverter : public StmtExprMutator {
 Stmt ForLoopSerialConverter::VisitStmt_(const ForNode* op) {
   if (op->kind == ForKind::kParallel) {
     return For(op->loop_var, op->min, op->extent, ForKind::kSerial, op->body, op->thread_binding,
-               op->annotations, op->span);
+               op->annotations, op->span, op->step);
   }
   return StmtExprMutator::VisitStmt_(op);
 }

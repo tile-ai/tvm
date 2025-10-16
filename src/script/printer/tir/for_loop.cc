@@ -38,6 +38,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
           ICHECK(l->loop_var->dtype == l->extent->dtype);
           if (l->kind != tir::ForKind::kSerial ||  //
               !tir::is_zero(l->min) ||             //
+              !tir::is_one(l->step) ||             //
               !l->annotations.empty() ||           //
               f_var_dep(l->extent)) {
             break;
@@ -67,20 +68,26 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       ExprDoc lhs = DefineVar(loop->loop_var, *f, d);
       Optional<ExprDoc> min = std::nullopt;
       Optional<ExprDoc> max = std::nullopt;
+      Optional<ExprDoc> step = std::nullopt;
       Optional<ExprDoc> annotations = std::nullopt;
       Optional<ExprDoc> thread = std::nullopt;
-      if (tir::is_zero(loop->min)) {
+      bool has_unit_step = tir::is_one(loop->step);
+      PrimExpr stop_expr = loop->min + loop->extent;
+      if (!has_unit_step) {
+        step = d->AsDoc<ExprDoc>(loop->step, loop_p->Attr("step"));
+      }
+      if (tir::is_zero(loop->min) && has_unit_step) {
         max = d->AsDoc<ExprDoc>(loop->extent, loop_p->Attr("extent"));
       } else {
         min = d->AsDoc<ExprDoc>(loop->min, loop_p->Attr("min"));
-        max = d->AsDoc<ExprDoc>(loop->min + loop->extent, loop_p->Attr("extent"));
+        max = d->AsDoc<ExprDoc>(stop_expr, loop_p->Attr("extent"));
       }
       if (!loop->annotations.empty()) {
         annotations = d->AsDoc<ExprDoc>(loop->annotations, loop_p->Attr("annotations"));
       }
       ExprDoc prefix{nullptr};
       if (loop->kind == tir::ForKind::kSerial) {
-        if (loop->annotations.empty()) {
+        if (loop->annotations.empty() && has_unit_step) {
           prefix = IdDoc("range");
         } else {
           prefix = TIR(d, "serial");
@@ -106,6 +113,10 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       }
       if (max.defined()) {
         args.push_back(max.value());
+      }
+      if (step.defined()) {
+        kwargs_keys.push_back("step");
+        kwargs_values.push_back(step.value());
       }
       if (thread.defined()) {
         kwargs_keys.push_back("thread");
