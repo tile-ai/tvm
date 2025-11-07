@@ -211,6 +211,10 @@ struct ThreadScope {
     } else if (s.compare(0, 10, "threadIdx.") == 0) {
       r.rank = 1;
       r.dim_index = static_cast<int>(s[10] - 'x');
+    } else if (s.compare(0, 11, "clusterIdx.") == 0) {
+      // Cluster-level thread scope (rank 2), same xyz indexing convention
+      r.rank = 2;
+      r.dim_index = static_cast<int>(s[11] - 'x');
     } else {
       LOG(FATAL) << "Unknown threadscope " << s;
     }
