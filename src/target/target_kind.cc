@@ -449,6 +449,17 @@ TVM_REGISTER_TARGET_KIND("hexagon", kDLHexagon)
     .add_attr_option<int64_t>("vtcm-capacity")
     .set_default_keys({"hexagon", "cpu"});
 
+TVM_REGISTER_TARGET_KIND("ascend", kDLCPU)
+    .add_attr_option<ffi::String>("arch")
+    .add_attr_option<int64_t>("num-cores")
+    .add_attr_option<int64_t>("l1-memory")
+    .add_attr_option<int64_t>("ub-memory")
+    .add_attr_option<int64_t>("l0a-memory")
+    .add_attr_option<int64_t>("l0b-memory")
+    .add_attr_option<int64_t>("l0c-memory")
+    .add_attr_option<ffi::String>("backend", "ascendc")
+    .set_default_keys({"ascend", "npu"});
+
 TVM_REGISTER_TARGET_KIND("ext_dev", kDLExtDev);
 
 TVM_REGISTER_TARGET_KIND("composite", kDLCPU)  // line break
