@@ -683,6 +683,11 @@ class IRSubstitute : public StmtExprMutator {
       if (auto mapped_var = vmap_(var_node.value())) {
         return AttrStmt(mapped_var, op->attr_key, op->value, op->body);
       }
+    } else if (auto expr_node = op->node.as<PrimExpr>()) {
+      PrimExpr new_expr = VisitExpr(expr_node.value());
+      if (!new_expr.same_as(expr_node.value())) {
+        return AttrStmt(new_expr, op->attr_key, op->value, op->body);
+      }
     }
     return ret;
   }
