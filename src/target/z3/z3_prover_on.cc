@@ -1,6 +1,7 @@
 #include <tvm/arith/analyzer.h>
 #include <tvm/tir/expr.h>
 #include <tvm/tir/op.h>
+#include <tvm/tir/builtin.h>
 #include "z3++.h"
 
 #include <sstream>
@@ -492,7 +493,6 @@ private:
       return Create(op);
     }
   }
-  z3::expr VisitExpr_(const CallNode *op) override { return Create(op); }
   z3::expr VisitExpr_(const VarNode *op) override { return Create(op); }
   z3::expr VisitExpr_(const BufferLoadNode *op) override { return Create(op); }
   z3::expr VisitExpr_(const ProducerLoadNode *op) override { return Create(op); }
@@ -527,6 +527,93 @@ private:
   z3::expr VisitExpr_(const NotNode *op) override { return !VisitBool(op->a); }
   z3::expr VisitExpr_(const SelectNode *op) override { return z3::ite(VisitBool(op->condition), VisitInt(op->true_value), VisitInt(op->false_value)); }
   z3::expr VisitExpr_(const IntImmNode *op) override { return ctx->int_val(op->value); }
+
+  // Bitwise operations
+  z3::expr VisitExpr_(const CallNode *op) override {
+    // Check if this is a bitwise operation
+    if (op->op.same_as(tir::builtin::bitwise_and())) {
+      return VisitBitwiseOp(z3::operator&, op);
+    } else if (op->op.same_as(tir::builtin::bitwise_or())) {
+      return VisitBitwiseOp(z3::operator|, op);
+    } else if (op->op.same_as(tir::builtin::bitwise_xor())) {
+      return VisitBitwiseOp(z3::operator^, op);
+    } else if (op->op.same_as(tir::builtin::bitwise_not())) {
+      return VisitBitwiseNotOp(op);
+    } else if (op->op.same_as(tir::builtin::shift_left())) {
+      return VisitShiftOp(z3::shl, op);
+    } else if (op->op.same_as(tir::builtin::shift_right())) {
+      return VisitShiftOp(z3::ashr, op);
+    } else {
+      // For other call nodes, create a free variable
+      return Create(op);
+    }
+  }
+
+  /// @brief Helper function to visit binary bitwise operations
+  z3::expr VisitBitwiseOp(z3::expr(*op_func)(const z3::expr &, const z3::expr &), const CallNode *op) {
+    if (op->args.size() != 2) {
+      LOG(FATAL) << "Binary bitwise operation expects 2 arguments, got " << op->args.size();
+      TVM_FFI_UNREACHABLE();
+    }
+
+    const PrimExpr &a = op->args[0];
+    const PrimExpr &b = op->args[1];
+    unsigned bit_width = std::max(op->args[0].dtype().bits(), op->args[1].dtype().bits());
+
+    if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
+      return z3::bv2int(op_func(z3::int2bv(bit_width, VisitInt(a)), z3::int2bv(bit_width, VisitInt(b))), true);
+    } else {
+      return Create(op);
+    }
+  }
+
+  /// @brief Helper function to visit unary bitwise not operation
+  z3::expr VisitBitwiseNotOp(const CallNode *op) {
+    if (op->args.size() != 1) {
+      LOG(FATAL) << "Bitwise not operation expects 1 argument, got " << op->args.size();
+      TVM_FFI_UNREACHABLE();
+    }
+
+    const PrimExpr &a = op->args[0];
+
+    if (IsValidDType(a->dtype)) {
+      return ~VisitInt(a);
+    } else {
+      return Create(op);
+    }
+  }
+
+  /// @brief Helper function to visit shift operations
+  z3::expr VisitShiftOp(z3::expr(*op_func)(const z3::expr &, const z3::expr &), const CallNode *op) {
+    if (op->args.size() != 2) {
+      LOG(FATAL) << "Shift operation expects 2 arguments, got " << op->args.size();
+      TVM_FFI_UNREACHABLE();
+    }
+
+    const PrimExpr &a = op->args[0];
+    const PrimExpr &b = op->args[1];
+
+    // Shift operations require integer types for both operands
+    if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
+      // For shift operations, we need to ensure the shift amount is non-negative
+      // and within reasonable bounds
+      z3::expr a_expr = VisitInt(a);
+      z3::expr b_expr = VisitInt(b);
+
+      // Add constraint that shift amount should be non-negative
+      // This is a common assumption in many programming languages
+      solver.add(b_expr >= 0);
+
+      // Also limit shift amount to avoid unrealistic large shifts
+      // We'll limit to 64 bits (reasonable for most use cases)
+      solver.add(b_expr < 64);
+
+      return op_func(a_expr, b_expr);
+    } else {
+      return Create(op);
+    }
+  }
+
   z3::expr VisitExprDefault_(const Object* op) override {
     LOG(FATAL) << "Z3Prover only support integers, but got " << op->GetTypeKey() << ".";
     TVM_FFI_UNREACHABLE();
