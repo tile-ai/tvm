@@ -860,6 +860,31 @@ class ConstIntBoundAnalyzer::Impl
         add_info(x.Eval(), kNegInf, c.Eval()->value - 1);
       } else if ((x == c).Match(subexpr) || (c == x).Match(subexpr)) {
         add_info(x.Eval(), c.Eval()->value, c.Eval()->value);
+      } else if ((!x).Match(subexpr)) {
+        // Handle not operation: not(expr)
+        PrimExpr inner = x.Eval();
+        PVar<PrimExpr> inner_x;
+        PVar<IntImm> inner_c;
+
+        // Handle negated comparisons
+        if ((inner_c <= inner_x).Match(inner) || (inner_x >= inner_c).Match(inner)) {
+          // not(x >= c) -> x < c -> x <= c-1
+          add_info(inner_x.Eval(), kNegInf, inner_c.Eval()->value - 1);
+        } else if ((inner_c < inner_x).Match(inner) || (inner_x > inner_c).Match(inner)) {
+          // not(x > c) -> x <= c
+          add_info(inner_x.Eval(), kNegInf, inner_c.Eval()->value);
+        } else if ((inner_x <= inner_c).Match(inner) || (inner_x >= inner_c).Match(inner)) {
+          // not(x <= c) -> x > c -> x >= c+1
+          add_info(inner_x.Eval(), inner_c.Eval()->value + 1, kPosInf);
+        } else if ((inner_x < inner_c).Match(inner) || (inner_c > inner_x).Match(inner)) {
+          // not(x < c) -> x >= c
+          add_info(inner_x.Eval(), inner_c.Eval()->value, kPosInf);
+        } else if ((inner_x == inner_c).Match(inner) || (inner_c == inner_x).Match(inner)) {
+          // not(x == c) -> x != c
+          // This is more complex - we can't represent != with a single interval
+          // For now, we'll just skip this case
+        }
+        // Note: We don't recursively call DetectBoundInfo here to avoid infinite recursion
       }
     }
 
