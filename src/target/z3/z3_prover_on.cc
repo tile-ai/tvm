@@ -577,7 +577,11 @@ private:
     const PrimExpr &a = op->args[0];
 
     if (IsValidDType(a->dtype)) {
-      return ~VisitInt(a);
+      // Cast integer to bit-vector, apply bitwise not, then cast back.
+      unsigned bit_width = a.dtype().bits();
+      z3::expr a_int = VisitInt(a);
+      z3::expr a_bv = z3::int2bv(bit_width, a_int);
+      return z3::bv2int(~a_bv, true);
     } else {
       return Create(op);
     }
@@ -608,7 +612,13 @@ private:
       // We'll limit to 64 bits (reasonable for most use cases)
       solver.add(b_expr < 64);
 
-      return op_func(a_expr, b_expr);
+      unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
+      z3::expr a_bv = z3::int2bv(bit_width, a_expr);
+      z3::expr b_bv = z3::int2bv(bit_width, b_expr);
+
+      // Perform the shift in bit-vector domain, then cast back to int.
+      z3::expr result_bv = op_func(a_bv, b_bv);
+      return z3::bv2int(result_bv, true);
     } else {
       return Create(op);
     }
