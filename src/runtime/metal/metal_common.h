@@ -109,7 +109,7 @@ class Stream {
  public:
   explicit Stream(id<MTLDevice> device) { queue_ = [device newCommandQueue]; }
   ~Stream() { [queue_ release]; }
-  id<MTLCommandBuffer> GetCommandBuffer(std::string label = "", bool attach_error_callback = true) {
+  virtual id<MTLCommandBuffer> GetCommandBuffer(std::string label = "", bool attach_error_callback = true) {
     id<MTLCommandBuffer> cb = [queue_ commandBuffer];
     if (!label.empty()) {
       cb.label = [NSString stringWithUTF8String:label.c_str()];
@@ -141,12 +141,12 @@ class Stream {
   std::string error_description_;
 };
 
-class CBStream final : public Stream {
+class MetalRawStream final : public Stream {
 public:
-  explicit CBStream(id<MTLCommandBuffer> commandBuffer): Stream(nullptr) {
+  explicit MetalRawStream(id<MTLCommandBuffer> commandBuffer): Stream(nullptr) {
     buffer_ = commandBuffer;
   }
-  id<MTLCommandBuffer> GetCommandBuffer() {
+  id<MTLCommandBuffer> GetCommandBuffer(std::string label = "", bool attach_error_callback = true) override {
     return buffer_;
   }
 private:

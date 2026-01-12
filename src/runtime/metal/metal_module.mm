@@ -201,6 +201,12 @@ class MetalWrappedFunc {
       auto stream =
           metal::MetalWorkspace::Global()->CastStreamOrGetDefault(t->stream[device_id], device_id);
 
+      if (!(stream = dynamic_cast<metal::MetalRawStream*>(metal::MetalWorkspace::Global()->CastStreamOrGetDefault(t->stream[device_id], device_id)))) {
+        // stream is not MetalRawStream
+        stream->SetError("Internal error: stream not from torch.");
+        return;
+      }
+
       // skip launching so the error can be printed during sync
       if (stream->HasErrorHappened()) return;
 
@@ -212,9 +218,8 @@ class MetalWrappedFunc {
       auto maxTotalThreadsPerThreadgroup = scache_[device_id].maxTotalThreadsPerThreadgroup;
       CHECK_LE(blockSize, maxTotalThreadsPerThreadgroup);
       // attach error message directly in this functio
-      // id<MTLCommandBuffer> cb = stream->GetCommandBuffer(/*label=*/"TVMKernel:" + func_name_,
-      //                                                    /*attach_error_callback=*/false);
-      id<MTLCommandBuffer> cb = static_cast<metal::CBStream*>(stream)->GetCommandBuffer();
+      id<MTLCommandBuffer> cb = stream->GetCommandBuffer(/*label=*/"TVMKernel:" + func_name_,
+                                                         /*attach_error_callback=*/false);
       id<MTLComputeCommandEncoder> encoder = [cb computeCommandEncoder];
       [encoder setComputePipelineState:scache_[device_id]];
       for (size_t i = 0; i < num_buffer_args_; ++i) {
@@ -329,7 +334,7 @@ ffi::Module MetalModuleLoadFromBytes(const ffi::Bytes& bytes) {
 
 void SetMetalStream(TVMStreamHandle stream) {
   metal::MetalThreadEntry* t = metal::MetalThreadEntry::ThreadLocal();
-  auto s = new metal::CBStream(static_cast<id<MTLCommandBuffer>>(stream));
+  auto s = new metal::MetalRawStream(static_cast<id<MTLCommandBuffer>>(stream));
   if (t->stream.size() <= t->device.device_id) {
     t->stream.resize(t->device.device_id);
   }
