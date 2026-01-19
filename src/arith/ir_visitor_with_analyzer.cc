@@ -73,7 +73,7 @@ void IRVisitorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
   }
   else if(op->attr_key == tir::attr::tilelang_assume) {
     auto condition = Downcast<PrimExpr>(op->node);
-    With<ConstraintContext> constraint(&analyzer_, condition);
+    With<ConstraintContext> constraint(&analyzer_, condition, true);
     StmtExprVisitor::VisitStmt_(op);
   }
   else {
