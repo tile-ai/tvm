@@ -322,6 +322,14 @@ class CodeGenC : public ExprFunctor<void(const PrimExpr&, std::ostream&)>,
   bool print_ssa_form_{false};
   /*! \brief whether the module has a main function declared */
   bool has_tvm_ffi_main_func_{false};
+  /*! \brief Stack of select conditions for if_then_else codegen.
+   *
+   * When processing select(cond, true_value, false_value), we push the condition
+   * before processing true_value. This allows nested if_then_else to guard their
+   * branches with the outer select condition, preventing potential out-of-bounds
+   * access when the outer condition is false.
+   */
+  std::vector<std::string> select_condition_stack_;
 
  private:
   /*! \brief set of volatile buf access */
