@@ -68,7 +68,7 @@ llvm::Value* CodeGenX86_64::VisitExpr_(const CastNode* op) {
           DTypeToLLVMType(DataType::Float(32, from.lanes())),
           {
               MakeValue(tir::Call(DataType::Int(16, from.lanes()), tir::builtin::reinterpret(),
-                                  {op->value}, op->annotations)),
+                                  {op->value}, {})),
               MakeValue(tir::Broadcast(FloatImm(DataType::Float(32), 0), from.lanes())),
               /*mask=*/MakeValue(IntImm(DataType::Int(16), -1)),
               /*rounding-mode=*/MakeValue(IntImm(DataType::Int(32), 4)),
@@ -83,7 +83,7 @@ llvm::Value* CodeGenX86_64::VisitExpr_(const CastNode* op) {
       return CallVectorIntrin(llvm::Intrinsic::x86_vcvtph2ps_256, 8,
                               DTypeToLLVMType(DataType::Float(32, from.lanes())),
                               {MakeValue(tir::Call(DataType::Int(16, from.lanes()),
-                                                   tir::builtin::reinterpret(), {op->value}, op->annotations))});
+                                                   tir::builtin::reinterpret(), {op->value}, {}))});
     }
 #endif
   }
