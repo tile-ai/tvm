@@ -321,6 +321,24 @@ class CUDAWrappedFunc {
       }
       LOG(FATAL) << os.str();
     }
+
+    // Check for asynchronous CUDA errors that cuLaunchKernel's return value
+    // does not capture (e.g. illegal memory access during kernel execution).
+    // This matches the Cython backend's TILELANG_CHECK_LAST_ERROR macro.
+    if (result == CUDA_SUCCESS) {
+      cudaError_t last_err = cudaPeekAtLastError();
+      if (last_err != cudaSuccess) {
+        // Use driver API cuGetErrorName for the error name (cudaGetErrorName
+        // is not available in the cudart stub). The numeric values of
+        // cudaError_t and CUresult are identical for matching error codes.
+        const char* err_name = nullptr;
+        cuGetErrorName(static_cast<CUresult>(last_err), &err_name);
+        const char* err_str = cudaGetErrorString(last_err);
+        // Clear the sticky error so subsequent CUDA calls are not poisoned.
+        cudaGetLastError();
+        LOG(FATAL) << func_name_ << ": " << (err_name ? err_name : "unknown") << " - " << err_str;
+      }
+    }
   }
 
  private:
