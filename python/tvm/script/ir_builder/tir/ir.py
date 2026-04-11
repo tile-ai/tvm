@@ -1584,6 +1584,13 @@ if TYPE_CHECKING:
     class bfloat16x16: ...
     class bfloat16x32: ...
     class bfloat16x64: ...
+    class tfloat32: ...
+    class tfloat32x2: ...
+    class tfloat32x4: ...
+    class tfloat32x8: ...
+    class tfloat32x16: ...
+    class tfloat32x32: ...
+    class tfloat32x64: ...
 else:
     # pylint: disable=invalid-name
     int8 = func_gen(("Int8"))
@@ -1756,6 +1763,14 @@ else:
     bfloat16x16 = func_gen(("BFloat16x16"))
     bfloat16x32 = func_gen(("BFloat16x32"))
     bfloat16x64 = func_gen(("BFloat16x64"))
+
+    tfloat32 = func_gen(("TensorFloat32"))
+    tfloat32x2 = func_gen(("TensorFloat32x2"))
+    tfloat32x4 = func_gen(("TensorFloat32x4"))
+    tfloat32x8 = func_gen(("TensorFloat32x8"))
+    tfloat32x16 = func_gen(("TensorFloat32x16"))
+    tfloat32x32 = func_gen(("TensorFloat32x32"))
+    tfloat32x64 = func_gen(("TensorFloat32x64"))
     # pylint: enable=invalid-name
 
 
@@ -2337,6 +2352,13 @@ __all__ = float_types + [
     "bfloat16x16",
     "bfloat16x32",
     "bfloat16x64",
+    "tfloat32",
+    "tfloat32x2",
+    "tfloat32x4",
+    "tfloat32x8",
+    "tfloat32x16",
+    "tfloat32x32",
+    "tfloat32x64",
     "buffer",
     "buffer_decl",
     "prim_func",

@@ -897,6 +897,13 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
+      .def("script.ir_builder.tir.TensorFloat32", TensorFloat32)
+      .TVM_FFI_REFL_DEF_GLOBAL_LANES("script.ir_builder.tir.TensorFloat32", TensorFloat32);
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
       .def("script.ir_builder.tir.Boolean", Boolean)
       .def("script.ir_builder.tir.Handle", Handle)
       .def("script.ir_builder.tir.TensormapHandle", TensormapHandle)

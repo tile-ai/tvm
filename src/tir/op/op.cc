@@ -301,6 +301,8 @@ PrimExpr max_value(const DataType& dtype, Span span) {
     } else if (dtype.bits() == 16) {
       return FloatImm(dtype, 65504.0, span);
     }
+  } else if (dtype.is_tensorfloat32()) {
+    return FloatImm(dtype, std::numeric_limits<float>::max(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::max(), span);
   } else if (dtype.is_float8()) {
@@ -336,14 +338,7 @@ PrimExpr max_value(const DataType& dtype, Span span) {
 PrimExpr min_value(const DataType& dtype, Span span) {
   using namespace tir;
   ICHECK_EQ(dtype.lanes(), 1);
-  if (datatype::Registry::Global()->GetTypeRegistered(dtype.code())) {
-    // TODO(tkonolige): need to convert all registered min functions to use the span.
-    auto f = datatype::GetMinFunc(dtype.code());
-    ICHECK(f) << "No minimum function registered for custom dtype " << (unsigned int)dtype.code();
-    // TODO(@hypercubestart) Document this change (and others associated with the overflowing
-    // floatimm min bug)
-    return (*f)(dtype.bits()).cast<PrimExpr>();
-  } else if (dtype.is_int()) {
+  if (dtype.is_int()) {
     if (dtype.bits() == 64) {
       return IntImm(dtype, std::numeric_limits<int64_t>::lowest(), span);
     } else if (dtype.bits() < 64) {
@@ -361,6 +356,9 @@ PrimExpr min_value(const DataType& dtype, Span span) {
     } else if (dtype.bits() == 16) {
       return FloatImm(dtype, -65504.0, span);
     }
+  }
+  else if (dtype.is_tensorfloat32()) {
+    return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
   } else if (dtype.is_float8()) {
@@ -888,7 +886,7 @@ PrimExpr abs(PrimExpr x, Span span) {
       return IntImm(x.dtype(), std::abs(px->value), px->span);
     }
     return tir::Select(x >= make_zero(x.dtype()), x, -x, span);
-  } else if (x.dtype().is_float() || x.dtype().is_bfloat()) {
+  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tensorfloat32()) {
     using tir::FloatImmNode;
     const FloatImmNode* fx = x.as<FloatImmNode>();
     if (fx) {

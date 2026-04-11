@@ -47,6 +47,8 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def_packed("runtime._datatype_get_type_registered", [](ffi::PackedArgs args, ffi::Any* ret) {
         *ret = Registry::Global()->GetTypeRegistered(args[0].cast<int>());
       });
+  // Register tfloat32 as a custom datatype with type code 129
+  Registry::Global()->Register("tfloat32", 129);
 }
 
 Registry* Registry::Global() {
