@@ -151,6 +151,7 @@ def derived_object(cls: Type[T]) -> Type[T]:
     class TVMDerivedObject(metadata["cls"]):  # type: ignore
         """The derived object to avoid cyclic dependency."""
 
+        __slots__ = ("_inst", "__weakref__")
         _cls = cls
         _type = "TVMDerivedObject"
 
