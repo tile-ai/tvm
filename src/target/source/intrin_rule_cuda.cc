@@ -52,7 +52,7 @@ struct CUDAMath {
         default:
           return "";
       }
-    } else if (t.is_tensorfloat32()) {
+    } else if (t.is_tfloat32()) {
       if (name == "fabs") {
         return "abs";
       }

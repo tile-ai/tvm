@@ -301,7 +301,7 @@ PrimExpr max_value(const DataType& dtype, Span span) {
     } else if (dtype.bits() == 16) {
       return FloatImm(dtype, 65504.0, span);
     }
-  } else if (dtype.is_tensorfloat32()) {
+  } else if (dtype.is_tfloat32()) {
     return FloatImm(dtype, std::numeric_limits<float>::max(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::max(), span);
@@ -357,7 +357,7 @@ PrimExpr min_value(const DataType& dtype, Span span) {
       return FloatImm(dtype, -65504.0, span);
     }
   }
-  else if (dtype.is_tensorfloat32()) {
+  else if (dtype.is_tfloat32()) {
     return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
@@ -886,7 +886,7 @@ PrimExpr abs(PrimExpr x, Span span) {
       return IntImm(x.dtype(), std::abs(px->value), px->span);
     }
     return tir::Select(x >= make_zero(x.dtype()), x, -x, span);
-  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tensorfloat32()) {
+  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tfloat()) {
     using tir::FloatImmNode;
     const FloatImmNode* fx = x.as<FloatImmNode>();
     if (fx) {

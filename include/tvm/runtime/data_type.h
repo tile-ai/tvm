@@ -150,6 +150,8 @@ class DataType {
   bool is_float() const { return code() == DataType::kFloat; }
   /*! \return whether type is a bfloat type. */
   bool is_bfloat() const { return code() == DataType::kBFloat; }
+  /*! \return whether type is a tfloat type. */
+  bool is_tfloat() const { return code() == DataType::kTensorFloat32; }
   /*! \return whether type is any 8-bit custom Float8 variant. */
   bool is_float8() const {
     return bits() == 8 &&
@@ -189,8 +191,8 @@ class DataType {
   bool is_float6_e3m2fn() const { return bits() == 6 && code() == DataType::kFloat6_e3m2fn; }
   /*! \return whether type is Float4E2M1FN. */
   bool is_float4_e2m1fn() const { return bits() == 4 && code() == DataType::kFloat4_e2m1fn; }
-  /*! \return whether type is a tensorfloat32 type. */
-  bool is_tensorfloat32() const { return bits() == 32 && code() == DataType::kTensorFloat32; }
+  /*! \return whether type is a tfloat32 type. */
+  bool is_tfloat32() const { return bits() == 32 && code() == DataType::kTensorFloat32; }
   /*! \return whether type is a float16 type. */
   bool is_float16() const { return is_float() && bits() == 16; }
   /*! \return whether type is a bfloat16 type. */
