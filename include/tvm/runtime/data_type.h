@@ -72,8 +72,8 @@ class DataType {
     kFloat6_e2m3fn = kDLFloat6_e2m3fn,
     kFloat6_e3m2fn = kDLFloat6_e3m2fn,
     kFloat4_e2m1fn = kDLFloat4_e2m1fn,
-    kTensorFloat32 = 129,
-    kCustomBegin = 129
+    kCustomBegin = 129,
+    kTensorFloat32 = 130
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
