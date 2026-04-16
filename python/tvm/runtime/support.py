@@ -147,11 +147,17 @@ def derived_object(cls: Type[T]) -> Type[T]:
     metadata = getattr(base, "_tvm_metadata")
     fields = metadata.get("fields", [])
     methods = metadata.get("methods", [])
+    base_cls = metadata["cls"]
+    derived_slots = (
+        ("_inst",)
+        if hasattr(base_cls, "__weakref__") or getattr(base_cls, "__weakrefoffset__", 0)
+        else ("_inst", "__weakref__")
+    )
 
-    class TVMDerivedObject(metadata["cls"]):  # type: ignore
+    class TVMDerivedObject(base_cls):  # type: ignore
         """The derived object to avoid cyclic dependency."""
 
-        __slots__ = ("_inst", "__weakref__")
+        __slots__ = derived_slots
         _cls = cls
         _type = "TVMDerivedObject"
 
