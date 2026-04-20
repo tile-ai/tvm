@@ -103,7 +103,7 @@ class MetalModuleNode final : public ffi::ModuleObj {
 
     if (fmt_ == "metal") {
       MTLCompileOptions* opts = [MTLCompileOptions alloc];
-      opts.languageVersion = MTLLanguageVersion2_3;
+      opts.languageVersion = MTLLanguageVersion4_0;
       opts.fastMathEnabled = YES;
       // opts = nil;
       lib =
