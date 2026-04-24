@@ -72,7 +72,8 @@ class DataType {
     kFloat6_e2m3fn = kDLFloat6_e2m3fn,
     kFloat6_e3m2fn = kDLFloat6_e3m2fn,
     kFloat4_e2m1fn = kDLFloat4_e2m1fn,
-    kCustomBegin = 129
+    kCustomBegin = 129,
+    kFloat4_e2m1fn_unpacked = 130,  // Internal type, not in DLPack
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
@@ -108,6 +109,9 @@ class DataType {
     }
     if (code == kFloat4_e2m1fn) {
       ICHECK_EQ(bits, 4);
+    }
+    if (code == kFloat4_e2m1fn_unpacked) {
+      ICHECK_EQ(bits, 8);
     }
   }
   /*! \return The type code. */
@@ -185,6 +189,10 @@ class DataType {
   bool is_float6_e3m2fn() const { return bits() == 6 && code() == DataType::kFloat6_e3m2fn; }
   /*! \return whether type is Float4E2M1FN. */
   bool is_float4_e2m1fn() const { return bits() == 4 && code() == DataType::kFloat4_e2m1fn; }
+  /*! \return whether type is Float4E2M1FN unpacked (1 value per byte). */
+  bool is_float4_e2m1fn_unpacked() const {
+    return bits() == 8 && code() == DataType::kFloat4_e2m1fn_unpacked;
+  }
   /*! \return whether type is a float16 type. */
   bool is_float16() const { return is_float() && bits() == 16; }
   /*! \return whether type is a bfloat16 type. */
@@ -377,6 +385,14 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType Float4E2M1FN(int lanes = 1) { return DataType(kFloat4_e2m1fn, 4, lanes); }
+  /*!
+   * \brief Construct unpacked float4 e2m1fn datatype (1 value per byte).
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType Float4E2M1FNUnpacked(int lanes = 1) {
+    return DataType(kFloat4_e2m1fn_unpacked, 8, lanes);
+  }
   /*!
    * \brief Construct a bool type.
    * \param lanes The number of lanes.
