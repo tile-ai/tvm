@@ -49,6 +49,8 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       });
   // Register tfloat32 as a custom datatype with type code 130
   Registry::Global()->Register("tfloat32", 130);
+  // Register float4_e2m1fn_unpacked as a custom datatype with type code 131
+  Registry::Global()->Register("float4_e2m1fn_unpacked", 131);
 }
 
 Registry* Registry::Global() {

@@ -331,6 +331,8 @@ PrimExpr max_value(const DataType& dtype, Span span) {
     }
   } else if (dtype.is_float4()) {
     return FloatImm(dtype, 6.0, span);
+  } else if (dtype.is_float4_e2m1fn_unpacked()) {
+    return FloatImm(dtype, 6.0, span);
   }
   LOG(FATAL) << "Cannot decide max_value for type" << dtype;
 }
@@ -387,6 +389,8 @@ PrimExpr min_value(const DataType& dtype, Span span) {
       return FloatImm(dtype, -28.0, span);
     }
   } else if (dtype.is_float4()) {
+    return FloatImm(dtype, -6.0, span);
+  } else if (dtype.is_float4_e2m1fn_unpacked()) {
     return FloatImm(dtype, -6.0, span);
   }
   LOG(FATAL) << "Cannot decide min_value for type" << dtype;
@@ -886,7 +890,8 @@ PrimExpr abs(PrimExpr x, Span span) {
       return IntImm(x.dtype(), std::abs(px->value), px->span);
     }
     return tir::Select(x >= make_zero(x.dtype()), x, -x, span);
-  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tfloat()) {
+  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tfloat() ||
+             x.dtype().is_float4_e2m1fn_unpacked()) {
     using tir::FloatImmNode;
     const FloatImmNode* fx = x.as<FloatImmNode>();
     if (fx) {

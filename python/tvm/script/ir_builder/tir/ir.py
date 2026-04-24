@@ -1591,6 +1591,13 @@ if TYPE_CHECKING:
     class tfloat32x16: ...
     class tfloat32x32: ...
     class tfloat32x64: ...
+    class float4_e2m1fn_unpacked: ...
+    class float4_e2m1fn_unpackedx2: ...
+    class float4_e2m1fn_unpackedx4: ...
+    class float4_e2m1fn_unpackedx8: ...
+    class float4_e2m1fn_unpackedx16: ...
+    class float4_e2m1fn_unpackedx32: ...
+    class float4_e2m1fn_unpackedx64: ...
 else:
     # pylint: disable=invalid-name
     int8 = func_gen(("Int8"))
@@ -1771,6 +1778,14 @@ else:
     tfloat32x16 = func_gen(("TensorFloat32x16"))
     tfloat32x32 = func_gen(("TensorFloat32x32"))
     tfloat32x64 = func_gen(("TensorFloat32x64"))
+
+    float4_e2m1fn_unpacked = func_gen(("Float4E2M1FNUnpacked"))
+    float4_e2m1fn_unpackedx2 = func_gen(("Float4E2M1FNUnpackedx2"))
+    float4_e2m1fn_unpackedx4 = func_gen(("Float4E2M1FNUnpackedx4"))
+    float4_e2m1fn_unpackedx8 = func_gen(("Float4E2M1FNUnpackedx8"))
+    float4_e2m1fn_unpackedx16 = func_gen(("Float4E2M1FNUnpackedx16"))
+    float4_e2m1fn_unpackedx32 = func_gen(("Float4E2M1FNUnpackedx32"))
+    float4_e2m1fn_unpackedx64 = func_gen(("Float4E2M1FNUnpackedx64"))
     # pylint: enable=invalid-name
 
 
@@ -2284,6 +2299,7 @@ bases = [
     "float6_e2m3fn",
     "float6_e3m2fn",
     "float4_e2m1fn",
+    "float4_e2m1fn_unpacked",
     "float16",
     "float32",
     "float64",

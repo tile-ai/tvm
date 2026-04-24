@@ -73,8 +73,8 @@ class DataType {
     kFloat6_e3m2fn = kDLFloat6_e3m2fn,
     kFloat4_e2m1fn = kDLFloat4_e2m1fn,
     kCustomBegin = 129,
-    kTensorFloat32 = 130
-    kFloat4_e2m1fn_unpacked = 130,  // Internal type, not in DLPack
+    kTensorFloat32 = 130,
+    kFloat4_e2m1fn_unpacked = 131,  // Internal type, not in DLPack
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
