@@ -1783,6 +1783,101 @@ def test_scatter_nd():
     verify(Model)
 
 
+def test_segment_sum():
+    """SEGMENT_SUM lowers to scatter_nd with add reduction."""
+
+    class Model(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4, 2), dtype=tf.float32)])
+        def func(self, data):
+            return tf.raw_ops.SegmentSum(
+                data=data, segment_ids=tf.constant([0, 0, 1, 2], dtype=tf.int32)
+            )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(data: R.Tensor((4, 2), dtype="float32")) -> R.Tensor((3, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((3, 2), dtype="float32") = R.zeros(R.shape([3, 2]), dtype="float32")
+                lv1: R.Tensor((4, 1), dtype="int32") = R.expand_dims(
+                    R.const([0, 0, 1, 2], "int32"), axis=[1]
+                )
+                gv: R.Tensor((3, 2), dtype="float32") = R.scatter_nd(
+                    lv, lv1, data, reduction="add"
+                )
+                R.output(gv)
+            return gv
+
+    verify(Model, Expected)
+
+
+def test_unsorted_segment_min():
+    """UNSORTED_SEGMENT_MIN lowers to scatter_nd with min reduction."""
+
+    class Model(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4, 2), dtype=tf.float32)])
+        def func(self, data):
+            return tf.raw_ops.UnsortedSegmentMin(
+                data=data,
+                segment_ids=tf.constant([2, 0, 2, 1], dtype=tf.int32),
+                num_segments=tf.constant(3, dtype=tf.int32),
+            )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(data: R.Tensor((4, 2), dtype="float32")) -> R.Tensor((3, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((3, 2), dtype="float32") = R.full(
+                    R.shape([3, 2]), R.const(np.finfo(np.float32).max, "float32"), dtype="float32"
+                )
+                lv1: R.Tensor((4, 1), dtype="int32") = R.expand_dims(
+                    R.const([2, 0, 2, 1], "int32"), axis=[1]
+                )
+                gv: R.Tensor((3, 2), dtype="float32") = R.scatter_nd(
+                    lv, lv1, data, reduction="min"
+                )
+                R.output(gv)
+            return gv
+
+    verify(Model, Expected)
+
+
+def test_unsorted_segment_prod():
+    """UNSORTED_SEGMENT_PROD lowers to scatter_nd with mul reduction."""
+
+    class Model(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4, 2), dtype=tf.float32)])
+        def func(self, data):
+            return tf.raw_ops.UnsortedSegmentProd(
+                data=data,
+                segment_ids=tf.constant([1, 0, 1, 2], dtype=tf.int32),
+                num_segments=tf.constant(3, dtype=tf.int32),
+            )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(data: R.Tensor((4, 2), dtype="float32")) -> R.Tensor((3, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((3, 2), dtype="float32") = R.full(
+                    R.shape([3, 2]), R.const(1, "float32"), dtype="float32"
+                )
+                lv1: R.Tensor((4, 1), dtype="int32") = R.expand_dims(
+                    R.const([1, 0, 1, 2], "int32"), axis=[1]
+                )
+                gv: R.Tensor((3, 2), dtype="float32") = R.scatter_nd(
+                    lv, lv1, data, reduction="mul"
+                )
+                R.output(gv)
+            return gv
+
+    verify(Model, Expected)
+
+
 def test_batch_matmul():
     class BatchMatMul(tf.Module):
         @tf.function(
