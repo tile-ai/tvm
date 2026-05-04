@@ -3280,10 +3280,27 @@ class OperatorConverter:
         input_tensor_idx = input_tensor.tensor_idx
         in_expr = self.get_expr(input_tensor_idx)
 
-        block_shape = list(self.get_tensor_value(input_tensors[1]))
-        crops = self.get_tensor_value(input_tensors[2]).tolist()
+        block_shape = to_int_list(self.get_tensor_value(input_tensors[1]))
+        crops = self.get_tensor_value(input_tensors[2])
+        crop_begin = to_int_list(crops[:, 0])
+        crop_end = to_int_list(crops[:, 1])
 
-        out = relax.op.nn.batch_to_space_nd(in_expr, block_shape, crops)
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1, "output tensors length should be 1"
+        output_tensor = output_tensors[0]
+        output_shape = to_int_list(self.get_tensor_shape(output_tensor))
+        output_dtype = self.get_tensor_type_str(output_tensor.tensor.Type())
+
+        out = relax.op.call_dps_packed(
+            "topi.nn.batch_to_space_nd",
+            (
+                in_expr,
+                relax.ShapeExpr(block_shape),
+                relax.ShapeExpr(crop_begin),
+                relax.ShapeExpr(crop_end),
+            ),
+            out_sinfo=relax.TensorStructInfo(output_shape, output_dtype),
+        )
 
         return out
 
@@ -3389,10 +3406,28 @@ class OperatorConverter:
         input_tensor_idx = input_tensor.tensor_idx
         in_expr = self.get_expr(input_tensor_idx)
 
-        block_shape = list(self.get_tensor_value(input_tensors[1]))
-        paddings = self.get_tensor_value(input_tensors[2]).tolist()
+        block_shape = to_int_list(self.get_tensor_value(input_tensors[1]))
+        paddings = self.get_tensor_value(input_tensors[2])
+        pad_before = to_int_list(paddings[:, 0])
+        pad_after = to_int_list(paddings[:, 1])
 
-        out = relax.op.nn.space_to_batch_nd(in_expr, block_shape, paddings)
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1, "output tensors length should be 1"
+        output_tensor = output_tensors[0]
+        output_shape = to_int_list(self.get_tensor_shape(output_tensor))
+        output_dtype = self.get_tensor_type_str(output_tensor.tensor.Type())
+
+        out = relax.op.call_dps_packed(
+            "topi.nn.space_to_batch_nd",
+            (
+                in_expr,
+                relax.ShapeExpr(block_shape),
+                relax.ShapeExpr(pad_before),
+                relax.ShapeExpr(pad_after),
+                0.0,
+            ),
+            out_sinfo=relax.TensorStructInfo(output_shape, output_dtype),
+        )
 
         return out
 
