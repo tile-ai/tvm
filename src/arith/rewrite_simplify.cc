@@ -27,6 +27,7 @@
 #include <tvm/arith/analyzer.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/op.h>
+#include <tvm/tir/stmt_functor.h>
 
 #include <algorithm>
 #include <tuple>
@@ -44,7 +45,7 @@ namespace arith {
 
 using namespace tir;
 
-TVM_FFI_STATIC_INIT_BLOCK({ RewriteSimplifierStatsNode::RegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { RewriteSimplifierStatsNode::RegisterReflection(); }
 
 // Note: When using matches_one_of or PMatchesOneOf alongside these
 // macros, be careful which patterns are used in the ResExpr.  While
@@ -498,13 +499,13 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const AddNode* op) {
   return ret;
 }
 
-std::function<void()> RewriteSimplifier::Impl::EnterConstraint(const PrimExpr& constraint) {
+std::function<void()> RewriteSimplifier::Impl::EnterConstraint(const PrimExpr& constraint, bool is_assume) {
   size_t old_literal_size = literal_constraints_.size();
   // we will compare the already simplified result with the constraint,
   // so simplify the constraint as well
   PrimExpr new_constraint = operator()(constraint);
   for (const PrimExpr& subconstraint : ExtractConstraints(new_constraint, false)) {
-    if (SideEffect(subconstraint) <= CallEffectKind::kPure) {
+    if (is_assume || SideEffect(subconstraint) <= CallEffectKind::kPure) {
       literal_constraints_.push_back(subconstraint);
       PrimExpr negation;
       if (subconstraint.dtype().is_bool()) {
@@ -774,13 +775,6 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const DivNode* op) {
   // Pattern var for lanes in broadcast and ramp
   PVar<PrimExpr> lanes;
 
-  // x / 2.0 = x * 0.5
-  if (const FloatImmNode* ptr = op->b.as<FloatImmNode>()) {
-    ICHECK(op->dtype.is_float() || op->dtype.is_bfloat16() ||
-           datatype::Registry::Global()->GetTypeRegistered(op->dtype.code()));
-    return op->a * make_const(op->b.dtype(), 1.0 / ptr->value);
-  }
-
   // Vector rules
   if (op->dtype.is_scalable_or_fixed_length_vector()) {
     // NOTE: use div as the pattern also works for float.
@@ -820,6 +814,11 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const DivNode* op) {
       int64_t c2val = c2.Eval()->value;
       return make_const(op->dtype, truncdiv(c1val, c2val));
     }
+
+    // x % c1 // c2 => 0 if 0 < c1 < c2 && x >= 0
+    TVM_TRY_REWRITE_IF(truncdiv(truncmod(x, c1), c2), ZeroWithTypeLike(x),
+                       c1.Eval()->value > 0 && c2.Eval()->value > c1.Eval()->value &&
+                           CanProveGreaterEqual(x.Eval(), 0));
 
     // while it is always true for trunc div
     // restrict to common case(positive div)
@@ -1166,7 +1165,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const FloorModNode* op) {
   // Pattern var to match any expression
   PVar<PrimExpr> x, y, z, b1;
   // Pattern var match IntImm
-  PVar<IntImm> c1, c2;
+  PVar<IntImm> c1, c2, c3;
   // Pattern var for lanes in broadcast and ramp
   PVar<PrimExpr> lanes;
 
@@ -1221,8 +1220,14 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const FloorModNode* op) {
                            c2.Eval()->value % c1.Eval()->value == 0 &&
                            CanProveEqual(floordiv(y.Eval(), c1.Eval()), 0));
 
+    TVM_TRY_REWRITE_IF(floormod(x * c1 + y * c2 + z, c3), floormod(x * floordiv(c1, c2) + y, floordiv(c3, c2)) * c2 + z,
+                       c2.Eval()->value > 0 && c3.Eval()->value > 0 &&
+                           c3.Eval()->value % c2.Eval()->value == 0 &&
+                           c1.Eval()->value % c2.Eval()->value == 0 &&
+                           CanProveEqual(floordiv(z.Eval(), c2.Eval()), 0));
+
     TVM_TRY_REWRITE_IF(floormod(x * c1 + y, c2), floormod(x * floormod(c1, c2) + y, c2),
-                       c2.Eval()->value > 0);
+                       c2.Eval()->value > 0 && c1.Eval()->value % c2.Eval()->value == 0);
 
     // (x + 5) % 2 -> (x + 1) %2,  (x + 3) % 3 => x
     TVM_TRY_REWRITE_IF(
@@ -1652,7 +1657,8 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const MaxNode* op) {
   return ret;
 }
 
-Optional<PrimExpr> RewriteSimplifier::Impl::TryMatchLiteralConstraint(const PrimExpr& expr) const {
+ffi::Optional<PrimExpr> RewriteSimplifier::Impl::TryMatchLiteralConstraint(
+    const PrimExpr& expr) const {
   PrimExpr negation = Not(expr);
 
   ExprDeepEqual expr_equal;
@@ -1946,7 +1952,110 @@ PrimExpr RewriteSimplifier::Impl::ApplyRewriteRules(LT ret) {
     TVM_TRY_RECURSIVE_REWRITE(x < c1 + y, x - y < c1);
     TVM_TRY_RECURSIVE_REWRITE(c1 + y < x, c1 < x - y);
 
-    auto merge_constants = [&]() -> Optional<PrimExpr> {
+    // If (base + offset) is compared against a multiple of k, and `offset`
+    // is known to be in [0, k), then the comparison is equivalent to just
+    // comparing `base` against the multiple of k.
+    //
+    // Example:
+    //   tx * 4 + i < N  ==>  tx * 4 < N
+    // when 0 <= i < 4 and N % 4 == 0.
+    auto is_multiple_of = [&](PrimExpr expr, int64_t expr_gcd, int64_t factor) -> bool {
+      if (factor <= 1) return false;
+      if (expr_gcd % factor == 0) return true;
+
+      PrimExpr factor_expr = make_const(expr.dtype(), factor);
+      PrimExpr cond = floormod(expr, factor_expr) == make_zero(expr.dtype());
+      if (auto match = TryMatchLiteralConstraint(cond)) {
+        if (const int64_t* as_int = as_const_int(match.value())) {
+          return *as_int != 0;
+        }
+      }
+      return analyzer_->CanProve(cond);
+    };
+
+    auto eliminate_bounded_offset = [&](PrimExpr base, PrimExpr offset,
+                                        PrimExpr rhs) -> ffi::Optional<PrimExpr> {
+      ConstIntBound offset_bound = analyzer_->const_int_bound(offset);
+      if (!offset_bound.defined()) return std::nullopt;
+      if (offset_bound->min_value < 0) return std::nullopt;
+
+      auto base_mod = analyzer_->modular_set(base);
+      auto rhs_mod = analyzer_->modular_set(rhs);
+
+      int64_t base_gcd = ZeroAwareGCD(base_mod->base, base_mod->coeff);
+      int64_t rhs_gcd = ZeroAwareGCD(rhs_mod->base, rhs_mod->coeff);
+
+      // Prefer the largest factor known from modular analysis of both sides.
+      // If rhs modular information isn't available (e.g. constraints nested in
+      // `and` aren't propagated to ModularSetAnalyzer), fall back to the
+      // factor known from the base expression and use literal-constraint
+      // matching to prove rhs alignment.
+      int64_t common_factor = ZeroAwareGCD(base_gcd, rhs_gcd);
+      int64_t factor = common_factor > 1 ? common_factor : base_gcd;
+      if (factor <= 1) return std::nullopt;
+
+      if (offset_bound->max_value >= factor) return std::nullopt;
+      if (!is_multiple_of(rhs, rhs_gcd, factor)) return std::nullopt;
+
+      return RecursiveRewrite(base < rhs);
+    };
+
+    if (const auto* add = ret->a.as<AddNode>()) {
+      if (auto simplified =
+              eliminate_bounded_offset(add->a, add->b, ret->b)) {
+        return simplified.value();
+      }
+      if (auto simplified =
+              eliminate_bounded_offset(add->b, add->a, ret->b)) {
+        return simplified.value();
+      }
+    }
+
+    // If `lhs` and `base` are multiples of k, then the comparison
+    //   lhs < base + offset
+    // can sometimes be simplified depending on the bounds of `offset`.
+    //
+    // Example:
+    //   z < x * 4 + y  ==>  z <= x * 4
+    // when 1 <= y < 4 and z % 4 == 0.
+    auto eliminate_bounded_offset_rhs =
+        [&](PrimExpr lhs, PrimExpr base, PrimExpr offset) -> ffi::Optional<PrimExpr> {
+      ConstIntBound offset_bound = analyzer_->const_int_bound(offset);
+      if (!offset_bound.defined()) return std::nullopt;
+      if (offset_bound->min_value < 0) return std::nullopt;
+
+      auto base_mod = analyzer_->modular_set(base);
+      auto lhs_mod = analyzer_->modular_set(lhs);
+
+      int64_t base_gcd = ZeroAwareGCD(base_mod->base, base_mod->coeff);
+      int64_t lhs_gcd = ZeroAwareGCD(lhs_mod->base, lhs_mod->coeff);
+
+      int64_t common_factor = ZeroAwareGCD(base_gcd, lhs_gcd);
+      int64_t factor = common_factor > 1 ? common_factor : base_gcd;
+      if (factor <= 1) return std::nullopt;
+
+      if (offset_bound->max_value >= factor) return std::nullopt;
+      if (!is_multiple_of(lhs, lhs_gcd, factor)) return std::nullopt;
+
+      if (offset_bound->min_value > 0) {
+        return RecursiveRewrite(lhs <= base);
+      }
+      if (offset_bound->min_value == 0 && offset_bound->max_value == 0) {
+        return RecursiveRewrite(lhs < base);
+      }
+      return std::nullopt;
+    };
+
+    if (const auto* add = ret->b.as<AddNode>()) {
+      if (auto simplified = eliminate_bounded_offset_rhs(ret->a, add->a, add->b)) {
+        return simplified.value();
+      }
+      if (auto simplified = eliminate_bounded_offset_rhs(ret->a, add->b, add->a)) {
+        return simplified.value();
+      }
+    }
+
+    auto merge_constants = [&]() -> ffi::Optional<PrimExpr> {
       auto [lhs, lhs_offset] = ExtractConstantOffset(ret->a);
       auto [rhs, rhs_offset] = ExtractConstantOffset(ret->b);
       if (lhs_offset == 0 && rhs_offset == 0) {
@@ -1970,6 +2079,16 @@ PrimExpr RewriteSimplifier::Impl::ApplyRewriteRules(LT ret) {
       return RecursiveRewrite(merge_constants.value());
     }
 
+    auto contains_floordiv = [](const PrimExpr& expr) -> bool {
+      bool found = false;
+      PostOrderVisit(expr, [&found](const ObjectRef& obj) {
+        if (obj.as<FloorDivNode>()) {
+          found = true;
+        }
+      });
+      return found;
+    };
+
     auto common_factor = [&]() -> int64_t {
       auto modular_a = analyzer_->modular_set(ret->a);
       auto modular_b = analyzer_->modular_set(ret->b);
@@ -1978,7 +2097,15 @@ PrimExpr RewriteSimplifier::Impl::ApplyRewriteRules(LT ret) {
       return ZeroAwareGCD(gcd_lhs, gcd_rhs);
     }();
     if (common_factor > 1) {
-      return RecursiveRewrite(floordiv(ret->a, common_factor) < floordiv(ret->b, common_factor));
+      PrimExpr lhs = VisitExpr(floordiv(ret->a, common_factor));
+      PrimExpr rhs = VisitExpr(floordiv(ret->b, common_factor));
+
+      // Don't introduce floordiv in the comparison if it cannot be
+      // eliminated after simplification.  Keeping `x * k < N` can be
+      // preferable to rewriting to `x < N // k` even when `N % k == 0`.
+      if (!contains_floordiv(lhs) && !contains_floordiv(rhs)) {
+        return RecursiveRewrite(lhs < rhs);
+      }
     }
   }
   return ret;
@@ -2051,7 +2178,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const AndNode* op) {
     // Otherwise, follow ExprMutator's convention of returning the
     // original object.
     if (a.same_as(op->a) && b.same_as(op->b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return And(a, b);
     }
@@ -2160,7 +2287,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const AndNode* op) {
 }
 
 PrimExpr RewriteSimplifier::Impl::VisitExpr_(const OrNode* op) {
-  PrimExpr orig = GetRef<PrimExpr>(op);
+  PrimExpr orig = ffi::GetRef<PrimExpr>(op);
 
   PrimExpr ret = [&]() -> PrimExpr {
     // If this extension isn't enabled, just delegate out.
@@ -2200,7 +2327,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const OrNode* op) {
     // Otherwise, follow ExprMutator's convention of returning the
     // original object.
     if (a.same_as(op->a) && b.same_as(op->b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return Or(a, b);
     }
@@ -2350,7 +2477,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const CallNode* op) {
 }
 
 PrimExpr RewriteSimplifier::Impl::VisitExpr_(const VarNode* op) {
-  Var var = GetRef<Var>(op);
+  Var var = ffi::GetRef<Var>(op);
   if (op->dtype == DataType::Bool()) {
     if (auto match = TryMatchLiteralConstraint(var)) {
       return match.value();
@@ -2361,7 +2488,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const VarNode* op) {
   if (it != var_map_.end()) {
     return it->second;
   }
-  return GetRef<PrimExpr>(op);
+  return ffi::GetRef<PrimExpr>(op);
 }
 
 PrimExpr RewriteSimplifier::Impl::VisitExpr_(const CastNode* op) {
@@ -2388,7 +2515,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const LetNode* op) {
   }
   PrimExpr body = this->VisitExpr(op->body);
   if (value.same_as(op->value) && body.same_as(op->body)) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   } else {
     return Let(op->var, value, body);
   }
@@ -2410,8 +2537,8 @@ void RewriteSimplifier::Update(const Var& var, const PrimExpr& info, bool allow_
   impl_->Update(var, info, allow_override);
 }
 
-std::function<void()> RewriteSimplifier::EnterConstraint(const PrimExpr& constraint) {
-  return impl_->EnterConstraint(constraint);
+std::function<void()> RewriteSimplifier::EnterConstraint(const PrimExpr& constraint, bool is_assume) {
+  return impl_->EnterConstraint(constraint, is_assume);
 }
 
 void RewriteSimplifier::SetEnabledExtensions(Extension flags) {
@@ -2432,6 +2559,22 @@ void RewriteSimplifier::SetMaximumRewriteSteps(int64_t maximum) {
 RewriteSimplifier::RewriteSimplifier(Analyzer* parent) : impl_(new Impl(parent)) {}
 
 RewriteSimplifier::~RewriteSimplifier() { delete impl_; }
+
+// Impl state copy
+void RewriteSimplifier::Impl::CopyFromImpl(const RewriteSimplifier::Impl& other) {
+  this->var_map_ = other.var_map_;
+  this->literal_constraints_ = other.literal_constraints_;
+  this->enabled_extensions_ = other.enabled_extensions_;
+  this->maximum_rewrite_steps_ = other.maximum_rewrite_steps_;
+  this->stats_ = other.stats_;
+  this->recur_depth_ = 0;
+  this->recursively_visiting_boolean_ = false;
+}
+
+// Deep copy internal state from another analyzer
+void RewriteSimplifier::CopyFrom(const RewriteSimplifier& other) {
+  this->impl_->CopyFromImpl(*other.impl_);
+}
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
     .set_dispatch<RewriteSimplifierStatsNode>([](const ObjectRef& node, ReprPrinter* p) {

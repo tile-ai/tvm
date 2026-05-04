@@ -82,6 +82,9 @@ class TransitiveComparisonAnalyzer::Impl {
    */
   std::function<void()> EnterConstraint(const PrimExpr& expr);
 
+  // Copy internal state from another Impl (for Analyzer cloning)
+  void CopyFrom(const Impl& other);
+
  private:
   /* \brief Internal representation of a PrimExpr
    *
@@ -276,7 +279,7 @@ class TransitiveComparisonAnalyzer::Impl {
    * Tracked separatedly to handle the `allow_override` option used by
    * all sub-analyzers when binding variables.
    */
-  Map<Var, Range> prev_bindings_;
+  ffi::Map<Var, Range> prev_bindings_;
 
   /*! \brief Known comparisons based on definitionally-true statements
    *
@@ -600,6 +603,11 @@ std::function<void()> TransitiveComparisonAnalyzer::Impl::EnterConstraint(const 
   return frecover;
 }
 
+// Deep copy internal state from another analyzer
+void TransitiveComparisonAnalyzer::CopyFrom(const TransitiveComparisonAnalyzer& other) {
+  this->impl_->CopyFrom(*other.impl_);
+}
+
 CompareResult TransitiveComparisonAnalyzer::Impl::TryCompare(const PrimExpr& lhs_expr,
                                                              const PrimExpr& rhs_expr,
                                                              bool propagate_inequalities) const {
@@ -870,6 +878,14 @@ CompareResult TransitiveComparisonAnalyzer::Impl::MergeComparisons(
   }
 
   return result;
+}
+
+// Implementation of the CopyFrom helper
+void TransitiveComparisonAnalyzer::Impl::CopyFrom(const Impl& other) {
+  prev_bindings_ = other.prev_bindings_;
+  knowns_ = other.knowns_;
+  scoped_knowns_ = other.scoped_knowns_;
+  expr_to_key = other.expr_to_key;
 }
 
 }  // namespace arith

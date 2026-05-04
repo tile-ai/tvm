@@ -60,6 +60,7 @@ class DataType {
     kFloat = kDLFloat,
     kHandle = kDLOpaqueHandle,
     kBFloat = kDLBfloat,
+    kBool = kDLBool,
     kFloat8_e3m4 = kDLFloat8_e3m4,
     kFloat8_e4m3 = kDLFloat8_e4m3,
     kFloat8_e4m3b11fnuz = kDLFloat8_e4m3b11fnuz,
@@ -71,7 +72,8 @@ class DataType {
     kFloat6_e2m3fn = kDLFloat6_e2m3fn,
     kFloat6_e3m2fn = kDLFloat6_e3m2fn,
     kFloat4_e2m1fn = kDLFloat4_e2m1fn,
-    kCustomBegin = 129
+    kCustomBegin = 129,
+    kTensorFloat32 = 130
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
@@ -108,6 +110,9 @@ class DataType {
     if (code == kFloat4_e2m1fn) {
       ICHECK_EQ(bits, 4);
     }
+    if (code == kTensorFloat32) {
+      ICHECK_EQ(bits, 32);
+    }
   }
   /*! \return The type code. */
   int code() const { return static_cast<int>(data_.code); }
@@ -137,12 +142,16 @@ class DataType {
   }
   /*! \return whether type is a scalar type. */
   bool is_scalar() const { return !is_scalable_vector() && lanes() == 1; }
-  /*! \return whether type is a scalar type. */
-  bool is_bool() const { return code() == DataType::kUInt && bits() == 1; }
+  /*! \return whether type is a bool type. */
+  bool is_bool() const { return code() == DataType::kBool; }
+  /*! \return whether type can be used in a predicate expression. */
+  bool is_predicate_dtype() const { return is_bool() || (is_uint() && bits() == 1); }
   /*! \return whether type is a float type. */
   bool is_float() const { return code() == DataType::kFloat; }
   /*! \return whether type is a bfloat type. */
   bool is_bfloat() const { return code() == DataType::kBFloat; }
+  /*! \return whether type is a tfloat type. */
+  bool is_tfloat() const { return code() == DataType::kTensorFloat32; }
   /*! \return whether type is any 8-bit custom Float8 variant. */
   bool is_float8() const {
     return bits() == 8 &&
@@ -182,6 +191,8 @@ class DataType {
   bool is_float6_e3m2fn() const { return bits() == 6 && code() == DataType::kFloat6_e3m2fn; }
   /*! \return whether type is Float4E2M1FN. */
   bool is_float4_e2m1fn() const { return bits() == 4 && code() == DataType::kFloat4_e2m1fn; }
+  /*! \return whether type is a tfloat32 type. */
+  bool is_tfloat32() const { return bits() == 32 && code() == DataType::kTensorFloat32; }
   /*! \return whether type is a float16 type. */
   bool is_float16() const { return is_float() && bits() == 16; }
   /*! \return whether type is a bfloat16 type. */
@@ -204,9 +215,11 @@ class DataType {
   /*! \return whether type is a vector type. */
   bool is_vector() const { return lanes() > 1; }
   /*! \return whether type is a bool vector type. */
-  bool is_vector_bool() const { return is_scalable_or_fixed_length_vector() && bits() == 1; }
+  bool is_vector_bool() const { return is_scalable_or_fixed_length_vector() && is_bool(); }
   /*! \return whether type is a Void type. */
-  bool is_void() const { return code() == DataType::kHandle && bits() == 0 && lanes() == 0; }
+  bool is_void() const {
+    return code() == DataType::kHandle && bits() == 0 && static_cast<int16_t>(data_.lanes) == 0;
+  }
   /*!
    * \brief Create a new data type by change lanes to a specified value.
    * \param lanes The target number of lanes.
@@ -372,6 +385,14 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType Float4E2M1FN(int lanes = 1) { return DataType(kFloat4_e2m1fn, 4, lanes); }
+
+  /*!
+   * \brief Construct a tensorfloat32 datatype.
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType TensorFloat32(int lanes = 1) { return DataType(kTensorFloat32, 32, lanes); }
+
   /*!
    * \brief Construct a bool type.
    * \param lanes The number of lanes.
@@ -379,7 +400,7 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType Bool(int lanes = 1, bool is_scalable = false) {
-    return DataType::UInt(1, lanes, is_scalable);
+    return DataType(kDLBool, 8, lanes, is_scalable);
   }
   /*!
    * \brief Construct a handle type.
@@ -465,6 +486,7 @@ struct TypeTraits<runtime::DataType> : public TypeTraitsBase {
   TVM_FFI_INLINE static void CopyToAnyView(const runtime::DataType& src, TVMFFIAny* result) {
     // clear padding part to ensure the equality check can always check the v_uint64 part
     result->v_uint64 = 0;
+    result->zero_padding = 0;
     result->type_index = TypeIndex::kTVMFFIDataType;
     result->v_dtype = src;
   }
@@ -472,6 +494,7 @@ struct TypeTraits<runtime::DataType> : public TypeTraitsBase {
   TVM_FFI_INLINE static void MoveToAny(runtime::DataType src, TVMFFIAny* result) {
     // clear padding part to ensure the equality check can always check the v_uint64 part
     result->v_uint64 = 0;
+    result->zero_padding = 0;
     result->type_index = TypeIndex::kTVMFFIDataType;
     result->v_dtype = src;
   }
@@ -493,6 +516,10 @@ struct TypeTraits<runtime::DataType> : public TypeTraitsBase {
   }
 
   TVM_FFI_INLINE static std::string TypeStr() { return ffi::StaticTypeKey::kTVMFFIDataType; }
+
+  TVM_FFI_INLINE static std::string TypeSchema() {
+    return R"({"type":")" + std::string(ffi::StaticTypeKey::kTVMFFIDataType) + R"("})";
+  }
 };
 
 }  // namespace ffi

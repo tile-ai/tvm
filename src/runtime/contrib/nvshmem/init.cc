@@ -80,7 +80,7 @@ void InitNVSHMEM(ffi::Shape uid_64, int num_workers, int worker_id_start) {
            << ", npes=" << nvshmem_n_pes();
 }
 
-void InitNVSHMEMWrapper(String args) {
+void InitNVSHMEMWrapper(ffi::String args) {
   picojson::value v;
   std::string err = picojson::parse(v, args);
   if (!err.empty()) {
@@ -121,14 +121,14 @@ void NVSHMEMXCumoduleInit(void* cuModule) {
   }
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.disco.nvshmem.init_nvshmem_uid", InitNVSHMEMUID)
       .def("runtime.disco.nvshmem.init_nvshmem", InitNVSHMEM)
       .def("runtime.disco.nvshmem.init_nvshmem_wrapper", InitNVSHMEMWrapper)
       .def("runtime.nvshmem.cumodule_init", NVSHMEMXCumoduleInit);
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

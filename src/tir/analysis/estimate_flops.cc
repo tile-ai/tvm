@@ -37,7 +37,7 @@ int32_t DataType2Int(const tvm::DataType& dtype) {
   return converter.dst;
 }
 
-String Int2DataTypeStr(int32_t dtype) {
+ffi::String Int2DataTypeStr(int32_t dtype) {
   union {
     DLDataType dst;
     int32_t src;
@@ -193,10 +193,20 @@ class FlopEstimator : private ExprFunctor<TResult(const PrimExpr& n)>,
     return cond;
   }
 
+  TResult VisitStmt_(const AssertStmtNode* op) override {
+    TResult result = VisitExpr(op->condition);
+    if (op->message.defined()) {
+      result += VisitExpr(op->message);
+    }
+    result += VisitStmt(op->body);
+    return result;
+  }
+
   TResult VisitExpr_(const VarNode* op) override { return TResult(); }
   TResult VisitExpr_(const SizeVarNode* op) override { return TResult(); }
   TResult VisitExpr_(const IntImmNode* op) override { return TResult(); }
   TResult VisitExpr_(const FloatImmNode* op) override { return TResult(); }
+  TResult VisitExpr_(const StringImmNode* op) override { return TResult(); }
   TResult VisitExpr_(const CastNode* op) override { return VisitExpr(op->value); }
   TResult VisitStmt_(const AllocateConstNode* op) override { return VisitStmt(op->body); }
   TResult VisitStmt_(const AllocateNode* op) override { return VisitStmt(op->body); }
@@ -247,7 +257,7 @@ double EstimateTIRFlops(const IRModule& mod) {
   return PostprocessResults(result) + cached_result;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.analysis.EstimateTIRFlops", [](ObjectRef obj) -> double {
     if (auto mod = obj.as<IRModule>()) {
@@ -260,7 +270,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
       throw;
     }
   });
-});
+}
 
 }  // namespace tir
 }  // namespace tvm

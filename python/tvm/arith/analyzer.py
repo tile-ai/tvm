@@ -17,9 +17,9 @@
 # pylint: disable=invalid-name
 """Arithmetic data structure and utility"""
 import enum
-from typing import Union
+from typing import Union, Dict
 
-import tvm.ffi
+import tvm_ffi
 from tvm import ir, tir
 from tvm.arith import IntSet
 from tvm.runtime import Object
@@ -47,7 +47,7 @@ class Extension(enum.Flag):
     ComparisonOfProductAndSum = 1 << 3
 
 
-@tvm.ffi.register_object("arith.ModularSet")
+@tvm_ffi.register_object("arith.ModularSet")
 class ModularSet(Object):
     """Represent range of (coeff * x + base) for x in Z"""
 
@@ -55,7 +55,7 @@ class ModularSet(Object):
         self.__init_handle_by_constructor__(_ffi_api.ModularSet, coeff, base)
 
 
-@tvm.ffi.register_object("arith.ConstIntBound")
+@tvm_ffi.register_object("arith.ConstIntBound")
 class ConstIntBound(Object):
     """Represent constant integer bound
 
@@ -108,22 +108,80 @@ class Analyzer:
 
     def __init__(self):
         _mod = _ffi_api.CreateAnalyzer()
-        self._const_int_bound = _mod("const_int_bound")
-        self._const_int_bound_update = _mod("const_int_bound_update")
-        self._const_int_bound_is_bound = _mod("const_int_bound_is_bound")
-        self._bind = _mod("bind")
-        self._modular_set = _mod("modular_set")
-        self._simplify = _mod("Simplify")
-        self._rewrite_simplify = _mod("rewrite_simplify")
-        self._get_rewrite_simplify_stats = _mod("get_rewrite_simplify_stats")
-        self._reset_rewrite_simplify_stats = _mod("reset_rewrite_simplify_stats")
-        self._canonical_simplify = _mod("canonical_simplify")
-        self._int_set = _mod("int_set")
-        self._enter_constraint_context = _mod("enter_constraint_context")
-        self._can_prove_equal = _mod("can_prove_equal")
-        self._can_prove = _mod("can_prove")
-        self._get_enabled_extensions = _mod("get_enabled_extensions")
-        self._set_enabled_extensions = _mod("set_enabled_extensions")
+        self._assign_functions(_mod)
+
+    def _assign_functions(self, mod_factory):
+        # Save factory for later use (e.g., clone)
+        self._factory = mod_factory
+        self._const_int_bound = mod_factory("const_int_bound")
+        self._const_int_bound_update = mod_factory("const_int_bound_update")
+        self._const_int_bound_is_bound = mod_factory("const_int_bound_is_bound")
+        self._bind = mod_factory("bind")
+        self._modular_set = mod_factory("modular_set")
+        self._simplify = mod_factory("Simplify")
+        self._rewrite_simplify = mod_factory("rewrite_simplify")
+        self._get_rewrite_simplify_stats = mod_factory("get_rewrite_simplify_stats")
+        self._reset_rewrite_simplify_stats = mod_factory("reset_rewrite_simplify_stats")
+        self._canonical_simplify = mod_factory("canonical_simplify")
+        self._int_set = mod_factory("int_set")
+        self._enter_constraint_context = mod_factory("enter_constraint_context")
+        self._can_prove_equal = mod_factory("can_prove_equal")
+        self._can_prove = mod_factory("can_prove")
+        self._get_smtlib2 = mod_factory("get_smtlib2")
+        self._set_z3_timeout_ms = mod_factory("set_z3_timeout_ms")
+        self._set_z3_rlimit = mod_factory("set_z3_rlimit")
+        self._get_z3_stats = mod_factory("get_z3_stats")
+        self._get_enabled_extensions = mod_factory("get_enabled_extensions")
+        self._set_enabled_extensions = mod_factory("set_enabled_extensions")
+        # Clone factory returns another mod_factory when invoked
+        self._clone_factory = mod_factory("clone")
+
+    def get_smtlib2(self, expr: tir.PrimExpr = None) -> str:
+        return self._get_smtlib2(expr)
+
+    def set_z3_timeout_ms(self, timeout_ms: int) -> None:
+        """Set z3 timeout in milliseconds.
+
+        Parameters
+        ----------
+        timeout_ms : int
+            The timeout in milliseconds.
+        """
+        self._set_z3_timeout_ms(timeout_ms)
+
+    def set_z3_rlimit(self, max_step: int) -> None:
+        """Set z3 max step.
+
+        Parameters
+        ----------
+        max_step : int
+            The maximum number of steps.
+        """
+        self._set_z3_rlimit(max_step)
+    
+    def get_z3_stats(self) -> str:
+        """Get z3 statistics.
+
+        Returns
+        -------
+        stats : str
+            The z3 statistics.
+        """
+        return self._get_z3_stats()
+
+    def clone(self) -> "Analyzer":
+        """Create a deep copy of this Analyzer, including internal state.
+
+        Returns
+        -------
+        Analyzer
+            A new Analyzer instance with the same analysis state.
+        """
+        # _clone_factory() returns a new factory bound to the cloned C++ Analyzer
+        new_factory = self._clone_factory()
+        obj = Analyzer.__new__(Analyzer)
+        Analyzer._assign_functions(obj, new_factory)
+        return obj
 
     def const_int_bound(self, expr: tir.PrimExpr) -> ConstIntBound:
         """Find constant integer bound for expr.
@@ -227,7 +285,7 @@ class Analyzer:
         """
         return self._canonical_simplify(expr)
 
-    def int_set(self, expr: tir.PrimExpr, dom_map: dict[tir.Var, IntSet]) -> IntSet:
+    def int_set(self, expr: tir.PrimExpr, dom_map: Dict[tir.Var, IntSet]) -> IntSet:
         """Compute a symbolic IntSet that covers expr for all values in dom_map.
 
         Parameters

@@ -165,7 +165,7 @@ class WebGPUModuleNode final : public ffi::ModuleObj {
 
   const char* kind() const final { return "webgpu"; }
 
-  Optional<ffi::Function> GetFunction(const String& name) final {
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final {
     // special function
     if (name == "webgpu.get_fmap") {
       return ffi::Function([this](ffi::PackedArgs args, ffi::Any* rv) {
@@ -211,7 +211,7 @@ class WebGPUModuleNode final : public ffi::ModuleObj {
 
   ffi::Bytes SaveToBytes() const final { LOG(FATAL) << "Not implemented"; }
 
-  String InspectSource(const String& format) const final {
+  ffi::String InspectSource(const ffi::String& format) const final {
     // can only return source code.
     return source_;
   }
@@ -237,11 +237,11 @@ ffi::Module WebGPUModuleLoadFromBytes(const ffi::Bytes& bytes) {
 
   stream->Read(&fmap);
   stream->Read(&smap);
-  return ffi::Module(make_object<WebGPUModuleNode>(smap, fmap));
+  return ffi::Module(ffi::make_object<WebGPUModuleNode>(smap, fmap));
 }
 
 // for now webgpu is hosted via a vulkan module.
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("ffi.Module.load_from_bytes.webgpu", WebGPUModuleLoadFromBytes)
@@ -249,7 +249,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
         DeviceAPI* ptr = WebGPUDeviceAPI::Global();
         *rv = static_cast<void*>(ptr);
       });
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

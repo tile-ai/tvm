@@ -64,16 +64,16 @@ void EdgeTPURuntime::Init(const std::string& tflite_model_bytes, Device dev) {
 }
 
 ffi::Module EdgeTPURuntimeCreate(const std::string& tflite_model_bytes, Device dev) {
-  auto exec = make_object<EdgeTPURuntime>();
+  auto exec = ffi::make_object<EdgeTPURuntime>();
   exec->Init(tflite_model_bytes, dev);
   return ffi::Module(exec);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed(
       "tvm.edgetpu_runtime.create",
       [](ffi::PackedArgs args, ffi::Any* rv) { *rv = EdgeTPURuntimeCreate(args[0], args[1]); });
-});
+}
 }  // namespace runtime
 }  // namespace tvm

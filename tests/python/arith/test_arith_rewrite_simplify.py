@@ -93,7 +93,7 @@ class TestVector(BaseCompare):
     x, y, z = te.var("x"), te.var("y"), te.var("z")
     x64 = te.var("x", dtype="int64")
     vx = te.var("vx", dtype="int32x2")
-    vc = te.var("vc", dtype="uint1")
+    vc = te.var("vc", dtype="bool")
     test_case = tvm.testing.parameter(
         # Add rules
         TestCase(tvm.tir.Ramp(x, 1, 4) + tvm.tir.Ramp(y, 2, 4), tvm.tir.Ramp(x + y, 3, 4)),
@@ -285,22 +285,22 @@ class TestVector(BaseCompare):
             tvm.te.max(vx, tvm.te.max(y, x).astype("int32x2")),
         ),
         ## Logical rules
-        TestCase(y.astype("int32x2").equal(x.astype("int32x2")), (y.equal(x)).astype("uint1x2")),
+        TestCase(y.astype("int32x2").equal(x.astype("int32x2")), (y.equal(x)).astype("boolx2")),
         TestCase(
             tvm.tir.NE(y.astype("int32x2"), (x.astype("int32x2"))),
-            (tvm.tir.NE(y, x)).astype("uint1x2"),
+            (tvm.tir.NE(y, x)).astype("boolx2"),
         ),
-        TestCase(y.astype("int32x2") > x.astype("int32x2"), (x < y).astype("uint1x2")),
-        TestCase(y.astype("int32x2") >= x.astype("int32x2"), (x <= y).astype("uint1x2")),
-        TestCase(y.astype("int32x2") < x.astype("int32x2"), (y < x).astype("uint1x2")),
-        TestCase(y.astype("int32x2") <= x.astype("int32x2"), (y <= x).astype("uint1x2")),
+        TestCase(y.astype("int32x2") > x.astype("int32x2"), (x < y).astype("boolx2")),
+        TestCase(y.astype("int32x2") >= x.astype("int32x2"), (x <= y).astype("boolx2")),
+        TestCase(y.astype("int32x2") < x.astype("int32x2"), (y < x).astype("boolx2")),
+        TestCase(y.astype("int32x2") <= x.astype("int32x2"), (y <= x).astype("boolx2")),
         TestCase(
-            tvm.tir.And(y.astype("int32x2") <= x.astype("int32x2"), vc.astype("uint1x2")),
-            (tvm.tir.And(y <= x, vc)).astype("uint1x2"),
+            tvm.tir.And(y.astype("int32x2") <= x.astype("int32x2"), vc.astype("boolx2")),
+            (tvm.tir.And(y <= x, vc)).astype("boolx2"),
         ),
         TestCase(
-            tvm.tir.Or(y.astype("int32x2") <= x.astype("int32x2"), vc.astype("uint1x2")),
-            (tvm.tir.Or(y <= x, vc)).astype("uint1x2"),
+            tvm.tir.Or(y.astype("int32x2") <= x.astype("int32x2"), vc.astype("boolx2")),
+            (tvm.tir.Or(y <= x, vc)).astype("boolx2"),
         ),
     )
 
@@ -941,6 +941,10 @@ class TestComparisons(BaseCompare):
         TestCase(x * 3 < y * 3, x < y),
         TestCase(x * (-3) < y * (-3), y < x),
         TestCase(x * 3 >= y * 3, y <= x),
+        # Eliminate bounded offset when comparing aligned values.
+        TestCase(x * 4 + y < z, x * 4 < z, [y >= 0, y < 4, flm(z, 4) == 0]),
+        TestCase(x * 4 + y >= z, z <= x * 4, [y >= 0, y < 4, flm(z, 4) == 0]),
+        TestCase(z < x * 4 + y, z <= x * 4, [y >= 1, y < 4, flm(z, 4) == 0]),
         TestCase(x * 4 >= 2, tvm.tir.LE(1, x)),
         TestCase(x * 2 >= 50, tvm.tir.LE(25, x)),
         TestCase(x * 4 <= 2, x <= 0),

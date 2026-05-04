@@ -47,6 +47,7 @@ class TempDirectory(object):
     # In debug mode, each tempdir is named after the sequence
     _NUM_TEMPDIR_CREATED = 0
     _NUM_TEMPDIR_CREATED_LOCK = threading.Lock()
+    _DEBUG_PARENT_DIR_LOCK = threading.Lock()
 
     @classmethod
     def _increment_num_tempdir_created(cls):
@@ -61,12 +62,14 @@ class TempDirectory(object):
     @classmethod
     def _get_debug_parent_dir(cls):
         if cls._DEBUG_PARENT_DIR is None:
-            all_parents = f"{tempfile.gettempdir()}/tvm-debug-mode-tempdirs"
-            if not os.path.isdir(all_parents):
-                os.makedirs(all_parents)
-            cls._DEBUG_PARENT_DIR = tempfile.mkdtemp(
-                prefix=datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S___"), dir=all_parents
-            )
+            with cls._DEBUG_PARENT_DIR_LOCK:
+                if cls._DEBUG_PARENT_DIR is None:
+                    all_parents = f"{tempfile.gettempdir()}/tvm-debug-mode-tempdirs"
+                    os.makedirs(all_parents, exist_ok=True)
+                    cls._DEBUG_PARENT_DIR = tempfile.mkdtemp(
+                        prefix=datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S___"),
+                        dir=all_parents,
+                    )
         return cls._DEBUG_PARENT_DIR
 
     TEMPDIRS = set()
@@ -94,6 +97,8 @@ class TempDirectory(object):
             cls._KEEP_FOR_DEBUG = old_keep_for_debug
 
     def __init__(self, custom_path=None, keep_for_debug=None):
+        self.temp_dir = None
+        self._created_with_keep_for_debug = False
         if self.TEMPDIRS is None:
             raise DirectoryCreatedPastAtExit()
 
@@ -118,10 +123,13 @@ class TempDirectory(object):
 
     def remove(self):
         """Remove the tmp dir"""
-        if self.temp_dir:
-            if not self._created_with_keep_for_debug:
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
-                self.TEMPDIRS.remove(self.temp_dir)
+        temp_dir = getattr(self, "temp_dir", None)
+        if temp_dir:
+            if not getattr(self, "_created_with_keep_for_debug", False):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                temp_dirs = getattr(self, "TEMPDIRS", None)
+                if temp_dirs is not None:
+                    temp_dirs.discard(temp_dir)
             self.temp_dir = None
 
     @property

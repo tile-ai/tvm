@@ -17,14 +17,15 @@
 """Abstraction for array data structures."""
 from numbers import Integral
 
-import tvm.ffi
+import tvm_ffi
+import tvm
 from tvm.ir import PointerType, PrimExpr, PrimType, Range
 from tvm.runtime import Object, Scriptable, convert
 
 from . import _ffi_api
 
 
-@tvm.ffi.register_object("tir.Buffer")
+@tvm_ffi.register_object("tir.Buffer")
 class Buffer(Object, Scriptable):
     """Symbolic data buffer in TVM.
 
@@ -194,6 +195,8 @@ class Buffer(Object, Scriptable):
             indices = [indices]
         has_slice = any(isinstance(i, slice) for i in indices)
         has_step = any(isinstance(i, slice) and i.step is not None for i in indices)
+        if has_step:
+            raise RuntimeError("Buffer slicing with step is not supported.")
         analyzer = Analyzer()
         if has_slice and not has_step:
             region = []
@@ -349,6 +352,6 @@ def decl_buffer(
     )
 
 
-@tvm.ffi.register_object("tir.DataProducer")
+@tvm_ffi.register_object("tir.DataProducer")
 class DataProducer(Object):
     pass

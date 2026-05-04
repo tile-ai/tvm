@@ -114,14 +114,14 @@ Type GetTypeFromRuntimeDataType(const DataType& dtype) {
 PrimExpr LargeUIntImm(DataType t, int64_t low, int64_t high, Span span) {
   return tir::Call(
       t, tir::builtin::large_uint_imm(),
-      {make_const(DataType::UInt(32), low, span), make_const(DataType::UInt(32), high, span)},
+      {make_const(DataType::UInt(32), low, span), make_const(DataType::UInt(32), high, span)}, {},
       span);
 }
 
 // Q-multiplication
 PrimExpr q_multiply_shift(PrimExpr x, PrimExpr y, PrimExpr q, PrimExpr s, Span span) {
   return tir::Call(DataType::Int(32, x.dtype().lanes()), tir::builtin::q_multiply_shift(),
-                   {x, y, q, s}, span);
+                   {x, y, q, s}, {}, span);
 }
 
 void BroadcastToMatchLanes(PrimExpr& op_a, PrimExpr& op_b) {  // NOLINT(*)
@@ -214,6 +214,12 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, Span span) {  // NOLINT(*)
   } else if (ltype.is_float4() && !rtype.is_float4()) {
     // Cast int->float4 for rhs when lhs is a float4
     rhs = cast(ltype, rhs);
+  } else if (ltype.is_bool() && (rtype.is_int() || rtype.is_uint())) {
+    // Cast bool to int for lhs when rhs is a int or uint
+    lhs = cast(rtype, lhs);
+  } else if ((ltype.is_int() || ltype.is_uint()) && rtype.is_bool()) {
+    // Cast bool to int for rhs when lhs is a int or uint
+    rhs = cast(ltype, rhs);
   } else if ((ltype.is_int() && rtype.is_int()) || (ltype.is_uint() && rtype.is_uint())) {
     // Promote int to higher bits e.g. int8 + int16 --> int16 + int16
     if (ltype.bits() < rtype.bits()) {
@@ -243,22 +249,29 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, Span span) {  // NOLINT(*)
 
 PrimExpr ret(PrimExpr value, Span span) {
   CHECK(value.defined());
-  return tir::Call(value.dtype(), tir::builtin::ret(), {value}, span);
+  return tir::Call(value.dtype(), tir::builtin::ret(), {value}, {}, span);
 }
-
-TVM_FFI_STATIC_INIT_BLOCK({
-  namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tir.ret", ret);
-});
 
 PrimExpr thread_return(Span span) {
-  return tir::Call(DataType::Void(), tir::builtin::thread_return(), {}, span);
+  return tir::Call(DataType::Void(), tir::builtin::thread_return(), {}, {}, span);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+PrimExpr continue_loop(Span span) {
+  return tir::Call(DataType::Void(), tir::builtin::continue_loop(), {}, {}, span);
+}
+
+PrimExpr break_loop(Span span) {
+  return tir::Call(DataType::Void(), tir::builtin::break_loop(), {}, {}, span);
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tir.thread_return", thread_return);
-});
+  refl::GlobalDef()
+      .def("tir.ret", ret)
+      .def("tir.thread_return", thread_return)
+      .def("tir.continue_loop", continue_loop)
+      .def("tir.break_loop", break_loop);
+};
 
 // maximum and min limits
 PrimExpr max_value(const DataType& dtype, Span span) {
@@ -288,6 +301,8 @@ PrimExpr max_value(const DataType& dtype, Span span) {
     } else if (dtype.bits() == 16) {
       return FloatImm(dtype, 65504.0, span);
     }
+  } else if (dtype.is_tfloat32()) {
+    return FloatImm(dtype, std::numeric_limits<float>::max(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::max(), span);
   } else if (dtype.is_float8()) {
@@ -323,14 +338,7 @@ PrimExpr max_value(const DataType& dtype, Span span) {
 PrimExpr min_value(const DataType& dtype, Span span) {
   using namespace tir;
   ICHECK_EQ(dtype.lanes(), 1);
-  if (datatype::Registry::Global()->GetTypeRegistered(dtype.code())) {
-    // TODO(tkonolige): need to convert all registered min functions to use the span.
-    auto f = datatype::GetMinFunc(dtype.code());
-    ICHECK(f) << "No minimum function registered for custom dtype " << (unsigned int)dtype.code();
-    // TODO(@hypercubestart) Document this change (and others associated with the overflowing
-    // floatimm min bug)
-    return (*f)(dtype.bits()).cast<PrimExpr>();
-  } else if (dtype.is_int()) {
+  if (dtype.is_int()) {
     if (dtype.bits() == 64) {
       return IntImm(dtype, std::numeric_limits<int64_t>::lowest(), span);
     } else if (dtype.bits() < 64) {
@@ -348,6 +356,9 @@ PrimExpr min_value(const DataType& dtype, Span span) {
     } else if (dtype.bits() == 16) {
       return FloatImm(dtype, -65504.0, span);
     }
+  }
+  else if (dtype.is_tfloat32()) {
+    return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
   } else if (dtype.is_bfloat16()) {
     return FloatImm(dtype, std::numeric_limits<float>::lowest(), span);
   } else if (dtype.is_float8()) {
@@ -484,7 +495,7 @@ PrimExpr reinterpret(const DataType& t, PrimExpr value, Span span) {
             value.dtype().bytes() * value.dtype().lanes() == t.bytes() * t.lanes()))
         << "Reinterpret requires size match " << t << " vs " << value.dtype();
   }
-  return tir::Call(t, tir::builtin::reinterpret(), {value}, span);
+  return tir::Call(t, tir::builtin::reinterpret(), {value}, {}, span);
 }
 
 // operator+
@@ -614,7 +625,7 @@ PrimExpr max(PrimExpr a, PrimExpr b, Span span) {
 
 // if_then_else
 PrimExpr if_then_else(PrimExpr cond, PrimExpr true_value, PrimExpr false_value, Span span) {
-  ICHECK(cond.dtype() == DataType::Bool(1))
+  ICHECK(cond.dtype() == DataType::Bool())
       << "if_then_else only accept the condition to be boolean type.";
   BinaryOpMatchTypes(true_value, false_value, span);
   if (const IntImmNode* op = cond.as<IntImmNode>()) {
@@ -626,13 +637,13 @@ PrimExpr if_then_else(PrimExpr cond, PrimExpr true_value, PrimExpr false_value, 
   }
 
   return tir::Call(true_value.dtype(), tir::builtin::if_then_else(),
-                   {cond, true_value, false_value}, span);
+                   {cond, true_value, false_value}, {}, span);
 }
 
 // likely
 PrimExpr likely(PrimExpr cond, Span span) {
   if (is_const_int(cond)) return cond;
-  return tir::Call(cond.dtype(), tir::builtin::likely(), {cond}, span);
+  return tir::Call(cond.dtype(), tir::builtin::likely(), {cond}, {}, span);
 }
 
 // operator>
@@ -691,10 +702,10 @@ void type_check_boolean_args(const PrimExpr& lhs, const PrimExpr& rhs, const cha
                                 << rhs << " of type " << rhs.dtype();
 }
 
-void type_check_integer_args(const PrimExpr& arg, const char* op) {
-  ICHECK(arg.dtype().is_int() || arg.dtype().is_uint())
-      << "Expected integer argument for " << op << ", but received " << arg << " of type "
-      << arg.dtype();
+void type_check_int_or_bool_args(const PrimExpr& arg, const char* op) {
+  ICHECK(arg.dtype().is_int() || arg.dtype().is_uint() || arg.dtype().is_bool())
+      << "Expected integer or boolean argument for " << op << ", but received " << arg
+      << " of type " << arg.dtype();
 }
 
 void type_check_integer_args(const PrimExpr& lhs, const PrimExpr& rhs, const char* op) {
@@ -702,6 +713,15 @@ void type_check_integer_args(const PrimExpr& lhs, const PrimExpr& rhs, const cha
       << "Expected integer argument as LHS of " << op << ", but received " << lhs << " of type "
       << lhs.dtype();
   ICHECK(rhs.dtype().is_int() || rhs.dtype().is_uint())
+      << "Expected integer argument as RHS of " << op << ", but received " << rhs << " of type "
+      << rhs.dtype();
+}
+
+void type_check_int_or_bool_args(const PrimExpr& lhs, const PrimExpr& rhs, const char* op) {
+  ICHECK(lhs.dtype().is_int() || lhs.dtype().is_uint() || lhs.dtype().is_bool())
+      << "Expected integer argument as LHS of " << op << ", but received " << lhs << " of type "
+      << lhs.dtype();
+  ICHECK(rhs.dtype().is_int() || rhs.dtype().is_uint() || rhs.dtype().is_bool())
       << "Expected integer argument as RHS of " << op << ", but received " << rhs << " of type "
       << rhs.dtype();
 }
@@ -749,7 +769,7 @@ PrimExpr right_shift(PrimExpr a, PrimExpr b, Span span) {
     }
   });
 
-  return tir::Call(a.dtype(), tir::builtin::shift_right(), {a, b}, span);
+  return tir::Call(a.dtype(), tir::builtin::shift_right(), {a, b}, {}, span);
 }
 
 // shift left
@@ -768,58 +788,58 @@ PrimExpr left_shift(PrimExpr a, PrimExpr b, Span span) {
       if (pb->value == 0) return a;
     }
   });
-  return tir::Call(a.dtype(), tir::builtin::shift_left(), {a, b}, span);
+  return tir::Call(a.dtype(), tir::builtin::shift_left(), {a, b}, {}, span);
 }
 
 // bitwise and
 PrimExpr operator&(PrimExpr a, PrimExpr b) { return bitwise_and(a, b); }
 PrimExpr bitwise_and(PrimExpr a, PrimExpr b, Span span) {
-  type_check_integer_args(a, b, "& operator (bitwise AND)");
+  type_check_int_or_bool_args(a, b, "& operator (bitwise AND)");
   BinaryOpMatchTypes(a, b, span);
   TVM_INDEX_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pa && pb) return IntImm(rtype, (pa->value & pb->value), span);
   });
-  return tir::Call(a.dtype(), tir::builtin::bitwise_and(), {a, b}, span);
+  return tir::Call(a.dtype(), tir::builtin::bitwise_and(), {a, b}, {}, span);
 }
 
 // bitwise_or
 PrimExpr operator|(PrimExpr a, PrimExpr b) { return bitwise_or(a, b); }
 PrimExpr bitwise_or(PrimExpr a, PrimExpr b, Span span) {
-  type_check_integer_args(a, b, "| operator (bitwise OR)");
+  type_check_int_or_bool_args(a, b, "| operator (bitwise OR)");
   BinaryOpMatchTypes(a, b, span);
   TVM_INDEX_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pa && pb) return IntImm(rtype, (pa->value | pb->value), span);
   });
-  return tir::Call(a.dtype(), tir::builtin::bitwise_or(), {a, b}, span);
+  return tir::Call(a.dtype(), tir::builtin::bitwise_or(), {a, b}, {}, span);
 }
 
 // bitwise_xor
 PrimExpr operator^(PrimExpr a, PrimExpr b) { return bitwise_xor(a, b); }
 PrimExpr bitwise_xor(PrimExpr a, PrimExpr b, Span span) {
-  type_check_integer_args(a, b, "^ operator (bitwise XOR)");
+  type_check_int_or_bool_args(a, b, "^ operator (bitwise XOR)");
   BinaryOpMatchTypes(a, b, span);
   TVM_INDEX_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pa && pb) return IntImm(rtype, (pa->value ^ pb->value), span);
   });
-  return tir::Call(a.dtype(), tir::builtin::bitwise_xor(), {a, b}, span);
+  return tir::Call(a.dtype(), tir::builtin::bitwise_xor(), {a, b}, {}, span);
 }
 
 // bitwise_not
 PrimExpr operator~(PrimExpr a) { return bitwise_neg(a); }
 
 PrimExpr bitwise_neg(PrimExpr a, Span span) {
-  type_check_integer_args(a, "~ operator (bitwise NOT)");
-  return tir::Call(a.dtype(), tir::builtin::bitwise_not(), {a}, span);
+  type_check_int_or_bool_args(a, "~ operator (bitwise NOT)");
+  return tir::Call(a.dtype(), tir::builtin::bitwise_not(), {a}, {}, span);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.bitwise_not",
                         [](PrimExpr a, Span span) { return bitwise_neg(a, span); });
-});
+}
 
 // pow
 PrimExpr pow(PrimExpr x, PrimExpr y, Span span) {
@@ -852,7 +872,7 @@ PrimExpr pow(PrimExpr x, PrimExpr y, Span span) {
   }
 
   static auto op = Op::Get("tir.pow");
-  return tir::Call(x.dtype(), op, {x, y}, span);
+  return tir::Call(x.dtype(), op, {x, y}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_BINARY_OP("pow").set_attr<TVectorizable>("TVectorizable", true);
@@ -866,14 +886,14 @@ PrimExpr abs(PrimExpr x, Span span) {
       return IntImm(x.dtype(), std::abs(px->value), px->span);
     }
     return tir::Select(x >= make_zero(x.dtype()), x, -x, span);
-  } else if (x.dtype().is_float() || x.dtype().is_bfloat()) {
+  } else if (x.dtype().is_float() || x.dtype().is_bfloat() || x.dtype().is_tfloat()) {
     using tir::FloatImmNode;
     const FloatImmNode* fx = x.as<FloatImmNode>();
     if (fx) {
       return FloatImm(x.dtype(), std::fabs(fx->value), fx->span);
     }
     static auto op = Op::Get("tir.fabs");
-    return tir::Call(x.dtype(), op, {x}, span);
+    return tir::Call(x.dtype(), op, {x}, {}, span);
   } else if (x.dtype().is_uint()) {
     return x;
   } else {
@@ -898,9 +918,9 @@ PrimExpr isnan(PrimExpr x, Span span) {
     }
     static auto op = Op::Get("tir.isnan");
     if (x.dtype().bits() == 16) {
-      return tir::Call(t, op, {cast(DataType::Float(32, t.lanes()), std::move(x), span)}, span);
+      return tir::Call(t, op, {cast(DataType::Float(32, t.lanes()), std::move(x), span)}, {}, span);
     } else {
-      return tir::Call(t, op, {x}, span);
+      return tir::Call(t, op, {x}, {}, span);
     }
   } else {
     LOG(FATAL) << "Data type " << x.dtype() << " not supported for isnan op. Skipping isnan op...";
@@ -921,56 +941,73 @@ PrimExpr isinf(PrimExpr x, Span span) {
 }
 
 // isfinite
-PrimExpr isfinite(PrimExpr x, Span span) { return !isinf(x, span) && !isnan(x, span); }
+PrimExpr isfinite(PrimExpr x, Span span) {
+  DataType t = DataType::Bool(x.dtype().lanes());
+  if (x.dtype().is_int() || x.dtype().is_uint()) {
+    return make_const(t, true, span);
+  } else if (x.dtype().is_float()) {
+    using tir::FloatImmNode;
+    const FloatImmNode* fx = x.as<FloatImmNode>();
+    if (fx) {
+      return make_const(t, std::isfinite(fx->value), fx->span);
+    }
+    if (x.dtype().bits() == 32 || x.dtype().bits() == 64) {
+      return tir::Call(t, builtin::isfinite(), {x}, {}, span);
+    }
+    return !isinf(x, span) && !isnan(x, span);
+  } else {
+    LOG(FATAL) << "Data type " << x.dtype() << " not supported for finiteness ops. Skipping it...";
+  }
+}
 
-PrimExpr sum(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr sum(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
   PrimExpr result = tir::Add(x, y, span);
   PrimExpr identity_element = make_zero(source.dtype(), span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
-PrimExpr all(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr all(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   type_check_boolean_args(source, "tvm::all");
   Var x("x", source.dtype(), span), y("y", source.dtype());
   PrimExpr result = tir::And(x, y, span);
   PrimExpr identity_element = make_const(source.dtype(), true, span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
-PrimExpr any(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr any(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   type_check_boolean_args(source, "tvm::any");
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
   PrimExpr result = tir::Or(x, y, span);
   PrimExpr identity_element = make_const(source.dtype(), false, span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
-PrimExpr max(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr max(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
   PrimExpr result = tir::Max(x, y, span);
   PrimExpr identity_element = min_value(source.dtype(), span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
-PrimExpr min(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr min(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
   PrimExpr result = tir::Min(x, y, span);
   PrimExpr identity_element = max_value(source.dtype(), span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
-PrimExpr prod(PrimExpr source, Array<IterVar> rdom, Array<PrimExpr> init, Span span) {
+PrimExpr prod(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
   PrimExpr result = tir::Mul(x, y, span);
   PrimExpr identity_element = make_const(source.dtype(), 1, span);
   tir::CommReducer combiner = tir::CommReducer({x}, {y}, {result}, {identity_element}, span);
-  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(1), true), 0, init, span);
+  return tir::Reduce(combiner, {source}, rdom, make_const(DataType::Bool(), true), 0, init, span);
 }
 
 // fmod
@@ -978,70 +1015,70 @@ PrimExpr fmod(PrimExpr x, PrimExpr y, Span span) {
   BinaryOpMatchTypes(x, y, span);
   ICHECK(x.dtype().is_float()) << "fmod only applies to float";
   static auto op = Op::Get("tir.fmod");
-  return tir::Call(x.dtype(), op, {x, y}, span);
+  return tir::Call(x.dtype(), op, {x, y}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("fmod");
 
 // floor
 PrimExpr floor(PrimExpr x, Span span) {
-  if (x.dtype().is_int() || x.dtype().is_uint()) {
+  if (x.dtype().is_int() || x.dtype().is_uint() || x.dtype().is_bool()) {
     return x;
   }
   using tir::FloatImmNode;
   const FloatImmNode* fx = x.as<FloatImmNode>();
   if (fx) return FloatImm(x.dtype(), std::floor(fx->value), fx->span);
   static auto op = Op::Get("tir.floor");
-  return tir::Call(x.dtype(), op, {x}, span);
+  return tir::Call(x.dtype(), op, {x}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("floor").set_attr<TVectorizable>("TVectorizable", true);
 
 // ceil
 PrimExpr ceil(PrimExpr x, Span span) {
-  if (x.dtype().is_int() || x.dtype().is_uint()) {
+  if (x.dtype().is_int() || x.dtype().is_uint() || x.dtype().is_bool()) {
     return x;
   }
   using tir::FloatImmNode;
   const FloatImmNode* fx = x.as<FloatImmNode>();
   if (fx) return FloatImm(x.dtype(), std::ceil(fx->value), fx->span);
   static auto op = Op::Get("tir.ceil");
-  return tir::Call(x.dtype(), op, {x}, span);
+  return tir::Call(x.dtype(), op, {x}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("ceil").set_attr<TVectorizable>("TVectorizable", true);
 
 // round
 PrimExpr round(PrimExpr x, Span span) {
-  if (x.dtype().is_int() || x.dtype().is_uint()) {
+  if (x.dtype().is_int() || x.dtype().is_uint() || x.dtype().is_bool()) {
     return x;
   }
   using tir::FloatImmNode;
   const FloatImmNode* fx = x.as<FloatImmNode>();
   if (fx) return FloatImm(x.dtype(), std::nearbyint(fx->value), fx->span);
   static auto op = Op::Get("tir.round");
-  return tir::Call(x.dtype(), op, {x}, span);
+  return tir::Call(x.dtype(), op, {x}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("round").set_attr<TVectorizable>("TVectorizable", true);
 
 // nearbyint
 PrimExpr nearbyint(PrimExpr x, Span span) {
-  if (x.dtype().is_int() || x.dtype().is_uint()) {
+  if (x.dtype().is_int() || x.dtype().is_uint() || x.dtype().is_bool()) {
     return x;
   }
   using tir::FloatImmNode;
   const FloatImmNode* fx = x.as<FloatImmNode>();
   if (fx) return FloatImm(x.dtype(), std::nearbyint(fx->value), fx->span);
   static auto op = Op::Get("tir.nearbyint");
-  return tir::Call(x.dtype(), op, {x}, span);
+  return tir::Call(x.dtype(), op, {x}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("nearbyint");
 
 // trunc
 PrimExpr trunc(PrimExpr x, Span span) {
-  if (x.dtype().is_int() || x.dtype().is_uint()) {
+  if (x.dtype().is_int() || x.dtype().is_uint() || x.dtype().is_bool()) {
     return x;
   }
   using tir::FloatImmNode;
@@ -1051,7 +1088,7 @@ PrimExpr trunc(PrimExpr x, Span span) {
                     fx->span);
   }
   static auto op = Op::Get("tir.trunc");
-  return tir::Call(x.dtype(), op, {x}, span);
+  return tir::Call(x.dtype(), op, {x}, {}, span);
 }
 
 TVM_TIR_REGISTER_PURE_UNARY_OP("trunc").set_attr<TVectorizable>("TVectorizable", true);
@@ -1127,7 +1164,7 @@ TVM_TIR_REGISTER_OP("TVMBackendFreeWorkspace")
     .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
 
 // expose basic functions to node namespace
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed("node._const",
@@ -1158,7 +1195,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .def("tir.trunc", tvm::trunc)
       .def("tir._cast", tvm::cast)
       .def("tir.reinterpret", tvm::reinterpret);
-});
+}
 
 // operator overloading, smarter than make
 #define DEF_MAKE_BINARY_OP(Node, Func) \
@@ -1169,15 +1206,25 @@ TVM_FFI_STATIC_INIT_BLOCK({
     bool lhs_is_int = args[0].type_index() == ffi::TypeIndex::kTVMFFIInt;                      \
     bool rhs_is_int = args[1].type_index() == ffi::TypeIndex::kTVMFFIInt;                      \
     if (lhs_is_int) {                                                                          \
-      *ret = (Func(args[0].cast<int>(), args[1].cast<PrimExpr>(), args[2].cast<Span>()));      \
+      auto arg1 = args[1].cast<PrimExpr>();                                                    \
+      if(arg1.dtype().is_uint()) { \
+        *ret = Func(make_const(arg1.dtype(), args[0].cast<unsigned long long>()), arg1, args[2].cast<Span>()); \
+      } else { \
+        *ret = Func(make_const(arg1.dtype(), args[0].cast<long long>()), arg1, args[2].cast<Span>()); \
+      } \
     } else if (rhs_is_int) {                                                                   \
-      *ret = (Func(args[0].cast<PrimExpr>(), args[1].cast<int>(), args[2].cast<Span>()));      \
+      auto arg0 = args[0].cast<PrimExpr>(); \
+      if(arg0.dtype().is_uint()) { \
+        *ret = Func(arg0, make_const(arg0.dtype(), args[1].cast<unsigned long long>()), args[2].cast<Span>()); \
+      } else { \
+        *ret = Func(arg0, make_const(arg0.dtype(), args[1].cast<long long>()), args[2].cast<Span>()); \
+      } \
     } else {                                                                                   \
       *ret = (Func(args[0].cast<PrimExpr>(), args[1].cast<PrimExpr>(), args[2].cast<Span>())); \
     }                                                                                          \
   })
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("tir._OpIfThenElse",
@@ -1214,7 +1261,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .DEF_MAKE_BIT_OP(bitwise_xor, bitwise_xor)
       .DEF_MAKE_BIT_OP(left_shift, left_shift)  // NOLINT(*)
       .DEF_MAKE_BIT_OP(right_shift, right_shift);
-});
+}
 
 PrimExpr fast_erf_float_expr(PrimExpr arg, int bits) {
   auto plus_4 = make_const(DataType::Float(bits), 4.f);

@@ -50,6 +50,14 @@ TVM_DLL const Op& ret();
  */
 TVM_DLL const Op& thread_return();
 /*!
+ * \brief Loop continue.
+ */
+TVM_DLL const Op& continue_loop();
+/*!
+ * \brief Loop break.
+ */
+TVM_DLL const Op& break_loop();
+/*!
  * \brief Reinterpret the value using the target type.
  */
 TVM_DLL const Op& reinterpret();
@@ -144,6 +152,11 @@ TVM_DLL const Op& isnullptr();
  * \brief Check if value is nan
  */
 TVM_DLL const Op& isnan();
+
+/*!
+ * \brief Check if value is finite
+ */
+TVM_DLL const Op& isfinite();
 
 /*!
  * \brief Popcount
@@ -298,7 +311,7 @@ TVM_DLL const Op& tvm_struct_set();
 
 /*!
  * \brief See pseudo code
- * Type lookup_param(String param_name) {
+ * Type lookup_param(ffi::String param_name) {
  *     return __tvm_param__param_name;
  * }
  */
@@ -337,7 +350,7 @@ TVM_DLL const Op& tvm_stack_alloca();
 TVM_DLL const Op& tvm_stack_make_shape();
 
 /*!
- * \brief Allocate a NDArray(DLTensor) on stack, return the handle.
+ * \brief Allocate a Tensor(DLTensor) on stack, return the handle.
  *
  *  Type tvm_stack_make_array(Expr data,
  *                            Expr shape,

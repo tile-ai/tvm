@@ -31,6 +31,7 @@
 #define TVM_FFI_ALWAYS_LOG_BEFORE_THROW 1
 #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
 
+#include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
@@ -252,10 +253,10 @@ class AsyncLocalSession : public LocalSession {
   std::optional<ffi::Function> async_wait_;
 
   // time evaluator
-  ffi::Function GetTimeEvaluator(Optional<ffi::Module> opt_mod, std::string name, int device_type,
-                                 int device_id, int number, int repeat, int min_repeat_ms,
-                                 int limit_zero_time_iterations, int cooldown_interval_ms,
-                                 int repeats_to_cooldown) {
+  ffi::Function GetTimeEvaluator(ffi::Optional<ffi::Module> opt_mod, std::string name,
+                                 int device_type, int device_id, int number, int repeat,
+                                 int min_repeat_ms, int limit_zero_time_iterations,
+                                 int cooldown_interval_ms, int repeats_to_cooldown) {
     Device dev;
     dev.device_type = static_cast<DLDeviceType>(device_type);
     dev.device_id = device_id;
@@ -302,12 +303,12 @@ class AsyncLocalSession : public LocalSession {
   }
 };
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("wasm.LocalSession", []() {
     return CreateRPCSessionModule(std::make_shared<AsyncLocalSession>());
   });
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

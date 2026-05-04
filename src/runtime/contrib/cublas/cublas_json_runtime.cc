@@ -25,7 +25,7 @@
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include <cstddef>
 #include <string>
@@ -46,12 +46,12 @@ using namespace tvm::runtime::json;
 class CublasJSONRuntime : public JSONRuntimeBase {
  public:
   CublasJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
-                    const Array<String> const_names)
+                    const ffi::Array<ffi::String> const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
-  void Init(const Array<NDArray>& consts) override {}
+  void Init(const ffi::Array<Tensor>& consts) override {}
 
-  ffi::Optional<ffi::Function> GetFunction(const String& name) override {
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) override {
     // JSONRuntimeBase::SetInputOutputBuffers(...) is not thread safe. Since CublasJSONRuntime
     // can be used by multiple GPUs running on different threads, we avoid using that function
     // and directly call cuBLAS on the inputs from ffi::PackedArgs.
@@ -76,8 +76,8 @@ class CublasJSONRuntime : public JSONRuntimeBase {
                                            : EntryID(outputs_[i - input_var_eid_.size()]);
 
       const DLTensor* arg;
-      if (auto opt_nd = args[i].as<NDArray>()) {
-        NDArray arr = opt_nd.value();
+      if (auto opt_nd = args[i].as<Tensor>()) {
+        Tensor arr = opt_nd.value();
         arg = arr.operator->();
       } else {
         arg = args[i].cast<DLTensor*>();
@@ -91,7 +91,7 @@ class CublasJSONRuntime : public JSONRuntimeBase {
       CUDA_CALL(cudaGetDevice(&device_id));
     }
     auto* entry_ptr = tvm::contrib::CuBlasLtThreadEntry::ThreadLocal(DLDevice{kDLCUDA, device_id});
-    cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetCurrentStream(kDLCUDA, device_id));
+    cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(kDLCUDA, device_id));
 
     auto get_input = [this, &dl_tensors](const JSONGraphNode& node, int idx) {
       ICHECK_LT(idx, node.GetInputs().size());
@@ -153,19 +153,19 @@ class CublasJSONRuntime : public JSONRuntimeBase {
   void Run() override { LOG(FATAL) << "Unreachable"; }
 };
 
-ffi::Module CublasJSONRuntimeCreate(String symbol_name, String graph_json,
-                                    const Array<String>& const_names) {
-  auto n = make_object<CublasJSONRuntime>(symbol_name, graph_json, const_names);
+ffi::Module CublasJSONRuntimeCreate(ffi::String symbol_name, ffi::String graph_json,
+                                    const ffi::Array<ffi::String>& const_names) {
+  auto n = ffi::make_object<CublasJSONRuntime>(symbol_name, graph_json, const_names);
   return ffi::Module(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.CublasJSONRuntimeCreate", CublasJSONRuntimeCreate)
       .def("ffi.Module.load_from_bytes.cublas_json",
            JSONRuntimeBase::LoadFromBytes<CublasJSONRuntime>);
-});
+}
 
 }  // namespace contrib
 }  // namespace runtime

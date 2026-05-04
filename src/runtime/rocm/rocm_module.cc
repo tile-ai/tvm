@@ -69,9 +69,9 @@ class ROCMModuleNode : public ffi::ModuleObj {
   int GetPropertyMask() const final {
     return ffi::Module::kBinarySerializable | ffi::Module::kRunnable;
   }
-  Optional<ffi::Function> GetFunction(const String& name) final;
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final;
 
-  void WriteToFile(const String& file_name, const String& format) const final {
+  void WriteToFile(const ffi::String& file_name, const ffi::String& format) const final {
     std::string fmt = GetFileFormat(file_name, format);
     std::string meta_file = GetMetaFilePath(file_name);
     // note: llvm and asm formats are not laodable, so we don't save them
@@ -90,7 +90,7 @@ class ROCMModuleNode : public ffi::ModuleObj {
     return ffi::Bytes(buffer);
   }
 
-  String InspectSource(const String& format) const final {
+  ffi::String InspectSource(const ffi::String& format) const final {
     if (format == fmt_) {
       return data_;
     }
@@ -172,7 +172,7 @@ class ROCMWrappedFunc {
       fcache_[device_id] = m_->GetFunc(device_id, func_name_);
     }
 
-    hipStream_t strm = static_cast<hipStream_t>(TVMFFIEnvGetCurrentStream(kDLROCM, device_id));
+    hipStream_t strm = static_cast<hipStream_t>(TVMFFIEnvGetStream(kDLROCM, device_id));
 
     ThreadWorkLoad wl = launch_param_config_.Extract(args);
     void* config[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, packed_args, HIP_LAUNCH_PARAM_BUFFER_SIZE,
@@ -198,7 +198,7 @@ class ROCMWrappedFunc {
   LaunchParamConfig launch_param_config_;
 };
 
-Optional<ffi::Function> ROCMModuleNode::GetFunction(const String& name) {
+ffi::Optional<ffi::Function> ROCMModuleNode::GetFunction(const ffi::String& name) {
   ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
   ICHECK_EQ(sptr_to_self.get(), this);
   auto it = fmap_.find(name);
@@ -212,7 +212,7 @@ Optional<ffi::Function> ROCMModuleNode::GetFunction(const String& name) {
 ffi::Module ROCMModuleCreate(std::string data, std::string fmt,
                              std::unordered_map<std::string, FunctionInfo> fmap,
                              std::string hip_source, std::string assembly) {
-  auto n = make_object<ROCMModuleNode>(data, fmt, fmap, hip_source, assembly);
+  auto n = ffi::make_object<ROCMModuleNode>(data, fmt, fmap, hip_source, assembly);
   return ffi::Module(n);
 }
 
@@ -238,13 +238,13 @@ ffi::Module ROCMModuleLoadFromBytes(const ffi::Bytes& bytes) {
   return ROCMModuleCreate(data, fmt, fmap, std::string(), std::string());
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("ffi.Module.load_from_bytes.hsaco", ROCMModuleLoadFromBytes)
       .def("ffi.Module.load_from_bytes.hip", ROCMModuleLoadFromBytes)
       .def("ffi.Module.load_from_file.hsaco", ROCMModuleLoadFile)
       .def("ffi.Module.load_from_file.hip", ROCMModuleLoadFile);
-});
+}
 }  // namespace runtime
 }  // namespace tvm

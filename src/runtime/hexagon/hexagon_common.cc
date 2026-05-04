@@ -46,19 +46,18 @@ class HexagonTimerNode : public TimerNode {
   virtual void Stop() { end = HAP_perf_get_time_us(); }
   virtual int64_t SyncAndGetElapsedNanos() { return (end - start) * 1e3; }
   virtual ~HexagonTimerNode() {}
-
-  static constexpr const char* _type_key = "runtime.hexagon.HexagonTimerNode";
-  TVM_DECLARE_FINAL_OBJECT_INFO(HexagonTimerNode, TimerNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("runtime.hexagon.HexagonTimerNode", HexagonTimerNode,
+                                    TimerNode);
 
  private:
   uint64_t start, end;
 };
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("profiling.timer.hexagon",
-                        [](Device dev) { return Timer(make_object<HexagonTimerNode>()); });
-});
+                        [](Device dev) { return Timer(ffi::make_object<HexagonTimerNode>()); });
+}
 }  // namespace hexagon
 
 namespace {
@@ -89,14 +88,14 @@ void LogMessageImpl(const std::string& file, int lineno, int level, const std::s
 }
 }  // namespace detail
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed(
       "ffi.Module.load_from_file.hexagon", [](ffi::PackedArgs args, ffi::Any* rv) {
         auto floader = tvm::ffi::Function::GetGlobalRequired("ffi.Module.load_from_file.so");
-        *rv = floader(args[0].cast<String>(), "so");
+        *rv = floader(args[0].cast<ffi::String>(), "so");
       });
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

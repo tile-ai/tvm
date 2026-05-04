@@ -31,6 +31,7 @@ def default_tir_pipeline():
         pass_ctx = tvm.transform.PassContext.current()
         config = pass_ctx.config
         passes = [
+            tir.transform.CanonicalizeLoop(),
             tir.transform.LowerCrossThreadReduction(),
             tir.transform.LowerInitBlock(),
             tir.transform.PlanAndUpdateBufferAllocationLocation(),
@@ -43,6 +44,7 @@ def default_tir_pipeline():
             tir.transform.LowerMatchBuffer(),
             tir.transform.Simplify(),
             tir.transform.InjectPermutedLayout(),
+            tir.transform.AnnotateIrregularLoop(),
             tir.transform.InjectSoftwarePipeline(),
             tir.transform.TransformMmaBufferLayout(),
             tir.transform.LowerOpaqueBlock(),

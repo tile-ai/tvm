@@ -18,12 +18,12 @@
 """Runtime support infra of TVM."""
 
 import re
-from typing import TypeVar
+from typing import TypeVar, Type
 
-import tvm.ffi
+import tvm_ffi
 
 
-@tvm.ffi.register_func("tvm.runtime.regex_match")
+@tvm_ffi.register_global_func("tvm.runtime.regex_match")
 def _regex_match(regex_pattern: str, match_against: str) -> bool:
     """Check if a pattern matches a regular expression
 
@@ -73,7 +73,7 @@ def _regex_match(regex_pattern: str, match_against: str) -> bool:
 T = TypeVar("T")
 
 
-def derived_object(cls: type[T]) -> type[T]:
+def derived_object(cls: Type[T]) -> Type[T]:
     """A decorator to register derived subclasses for TVM objects.
 
     Parameters
@@ -147,10 +147,17 @@ def derived_object(cls: type[T]) -> type[T]:
     metadata = getattr(base, "_tvm_metadata")
     fields = metadata.get("fields", [])
     methods = metadata.get("methods", [])
+    base_cls = metadata["cls"]
+    derived_slots = (
+        ("_inst",)
+        if hasattr(base_cls, "__weakref__") or getattr(base_cls, "__weakrefoffset__", 0)
+        else ("_inst", "__weakref__")
+    )
 
-    class TVMDerivedObject(metadata["cls"]):  # type: ignore
+    class TVMDerivedObject(base_cls):  # type: ignore
         """The derived object to avoid cyclic dependency."""
 
+        __slots__ = derived_slots
         _cls = cls
         _type = "TVMDerivedObject"
 

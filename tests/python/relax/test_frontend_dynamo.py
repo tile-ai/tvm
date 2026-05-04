@@ -275,7 +275,7 @@ def verify_dynamo_model(torch_model, input_info, binding, expected):
         args.append(torch.zeros(*info[0], dtype=_convert_data_type(info[1])))
     graph_model = dynamo.export(torch_model)(*args)[0]
     mod = from_fx(graph_model, input_info, unwrap_unit_return_tuple=True)
-    binding = {k: tvm.nd.array(v) for k, v in binding.items()}
+    binding = {k: tvm.runtime.tensor(v) for k, v in binding.items()}
     expected = relax.transform.BindParams("main", binding)(expected)
     tvm.ir.assert_structural_equal(mod, expected)
 
@@ -285,14 +285,34 @@ def _convert_data_type(input_type):
     import torch  # type: ignore
 
     input_type = input_type.lower() if isinstance(input_type, str) else input_type
-    if input_type == "float32":
-        return torch.float32
-    elif input_type == "float16":
+    # Float types
+    if input_type == "float16":
         return torch.float16
-    elif input_type == "int64":
-        return torch.int64
+    elif input_type == "float32":
+        return torch.float32
+    elif input_type == "float64":
+        return torch.float64
+    elif input_type == "bfloat16":
+        return torch.bfloat16
+    # Signed integer types
+    elif input_type == "int8":
+        return torch.int8
+    elif input_type == "int16":
+        return torch.int16
     elif input_type == "int32":
         return torch.int32
+    elif input_type == "int64":
+        return torch.int64
+    # Unsigned integer types
+    elif input_type == "uint8":
+        return torch.uint8
+    elif input_type == "uint16":
+        return torch.uint16
+    elif input_type == "uint32":
+        return torch.uint32
+    elif input_type == "uint64":
+        return torch.uint64
+    # Boolean
     elif input_type == "bool":
         return torch.bool
     else:

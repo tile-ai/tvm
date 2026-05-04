@@ -264,12 +264,12 @@ TVM_REGISTER_OP("tir.clz").set_attr<FLegalize>("llvm.FLegalize", [](const PrimEx
   const tir::CallNode* call = e.as<tir::CallNode>();
   ICHECK(call != nullptr);
   ICHECK_EQ(call->args.size(), 1);
-  Array<PrimExpr> cargs;
+  ffi::Array<PrimExpr> cargs;
   cargs.push_back(IntImm(DataType::UInt(32), ::llvm::Intrinsic::ctlz));
   cargs.push_back(call->args[0]);
   cargs.push_back(IntImm(DataType::Int(1), 1));  // is_zero_undef
   // LLVM requires that the return type must match the first argument type
-  auto clz = tir::Call(call->args[0]->dtype, tir::builtin::call_llvm_intrin(), cargs);
+  auto clz = tir::Call(call->args[0]->dtype, tir::builtin::call_llvm_intrin(), cargs, call->annotations);
   return cast(call->dtype, clz);
 });
 

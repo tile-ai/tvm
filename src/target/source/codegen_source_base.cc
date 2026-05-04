@@ -47,7 +47,6 @@ std::string CodeGenSourceBase::SSAGetID(std::string src, DataType t) {
   e.vid = name_supply_->FreshName("v_");
   e.scope_id = static_cast<int>(scope_mark_.size() - 1);
   ssa_assign_map_[src] = e;
-  this->PrintIndent();
   PrintSSAAssign(e.vid, src, t);
   return e.vid;
 }
@@ -107,6 +106,11 @@ void CodeGenSourceBase::PrintType(DataType type, std::ostream& os) {  // NOLINT(
   }
   if (type.is_void()) {
     os << "void";
+    return;
+  }
+  // default c may be have bool type, can be handled in subclass
+  if (type.is_bool()) {
+    os << "int";
     return;
   }
   if (type.is_float()) {

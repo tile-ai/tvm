@@ -25,12 +25,12 @@ namespace tvm {
 namespace runtime {
 namespace vm {
 
-std::unique_ptr<PagedPrefillFunc> ConvertPagedPrefillFunc(Array<ffi::Any> args,
+std::unique_ptr<PagedPrefillFunc> ConvertPagedPrefillFunc(ffi::Array<ffi::Any> args,
                                                           AttnKind attn_kind) {
   if (args.empty()) {
     return nullptr;
   }
-  String backend_name = args[0].cast<String>();
+  ffi::String backend_name = args[0].cast<ffi::String>();
   if (backend_name == "tir") {
     CHECK_EQ(args.size(), 2);
     ffi::Function attn_func = args[1].cast<ffi::Function>();
@@ -47,33 +47,41 @@ std::unique_ptr<PagedPrefillFunc> ConvertPagedPrefillFunc(Array<ffi::Any> args,
   throw;
 }
 
-std::unique_ptr<RaggedPrefillFunc> ConvertRaggedPrefillFunc(Array<ffi::Any> args,
+std::unique_ptr<RaggedPrefillFunc> ConvertRaggedPrefillFunc(ffi::Array<ffi::Any> args,
                                                             AttnKind attn_kind) {
   if (args.empty()) {
     return nullptr;
   }
-  String backend_name = args[0].cast<String>();
+  ffi::String backend_name = args[0].cast<ffi::String>();
   if (backend_name == "tir") {
     CHECK_EQ(args.size(), 2);
     ffi::Function attn_func = args[1].cast<ffi::Function>();
     return std::make_unique<TIRRaggedPrefillFunc>(std::move(attn_func), attn_kind);
   }
   if (backend_name == "flashinfer") {
-    CHECK_EQ(args.size(), 3);
+    CHECK(args.size() == 3 || args.size() == 5);
     ffi::Function attn_func = args[1].cast<ffi::Function>();
     ffi::Function plan_func = args[2].cast<ffi::Function>();
+    int64_t qk_head_dim_override = -1;
+    int64_t v_head_dim_override = -1;
+    if (args.size() == 5) {
+      qk_head_dim_override = args[3].cast<int64_t>();
+      v_head_dim_override = args[4].cast<int64_t>();
+    }
     return std::make_unique<FlashInferRaggedPrefillFunc>(std::move(attn_func), std::move(plan_func),
-                                                         attn_kind);
+                                                         attn_kind, qk_head_dim_override,
+                                                         v_head_dim_override);
   }
   LOG(FATAL) << "Cannot reach here";
   throw;
 }
 
-std::unique_ptr<PagedDecodeFunc> ConvertPagedDecodeFunc(Array<ffi::Any> args, AttnKind attn_kind) {
+std::unique_ptr<PagedDecodeFunc> ConvertPagedDecodeFunc(ffi::Array<ffi::Any> args,
+                                                        AttnKind attn_kind) {
   if (args.empty()) {
     return nullptr;
   }
-  String backend_name = args[0].cast<String>();
+  ffi::String backend_name = args[0].cast<ffi::String>();
   if (backend_name == "tir") {
     CHECK_EQ(args.size(), 2);
     ffi::Function attn_func = args[1].cast<ffi::Function>();
@@ -90,12 +98,12 @@ std::unique_ptr<PagedDecodeFunc> ConvertPagedDecodeFunc(Array<ffi::Any> args, At
   throw;
 }
 
-std::unique_ptr<PagedPrefillTreeMaskFunc> ConvertPagedPrefillTreeMaskFunc(Array<ffi::Any> args,
+std::unique_ptr<PagedPrefillTreeMaskFunc> ConvertPagedPrefillTreeMaskFunc(ffi::Array<ffi::Any> args,
                                                                           AttnKind attn_kind) {
   if (args.empty()) {
     return nullptr;
   }
-  String backend_name = args[0].cast<String>();
+  ffi::String backend_name = args[0].cast<ffi::String>();
   if (backend_name == "tir") {
     CHECK_EQ(args.size(), 2);
     ffi::Function attn_func = args[1].cast<ffi::Function>();
@@ -105,12 +113,12 @@ std::unique_ptr<PagedPrefillTreeMaskFunc> ConvertPagedPrefillTreeMaskFunc(Array<
   throw;
 }
 
-std::unique_ptr<RaggedPrefillTreeMaskFunc> ConvertRaggedPrefillTreeMaskFunc(Array<ffi::Any> args,
-                                                                            AttnKind attn_kind) {
+std::unique_ptr<RaggedPrefillTreeMaskFunc> ConvertRaggedPrefillTreeMaskFunc(
+    ffi::Array<ffi::Any> args, AttnKind attn_kind) {
   if (args.empty()) {
     return nullptr;
   }
-  String backend_name = args[0].cast<String>();
+  ffi::String backend_name = args[0].cast<ffi::String>();
   if (backend_name == "tir") {
     CHECK_EQ(args.size(), 2);
     ffi::Function attn_func = args[1].cast<ffi::Function>();

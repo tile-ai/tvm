@@ -32,10 +32,15 @@
 #include <utility>
 #include <vector>
 
+// For escaping strings embedded into generated C sources
+#include "../../support/str_escape.h"
+
 namespace tvm {
 namespace codegen {
 
-CodeGenCHost::CodeGenCHost() { module_name_ = name_supply_->FreshName("__tvm_ffi_library_ctx"); }
+CodeGenCHost::CodeGenCHost() {
+  module_name_ = name_supply_->FreshName(ffi::symbol::tvm_ffi_library_ctx);
+}
 
 void CodeGenCHost::Init(bool output_ssa, bool emit_asserts, bool emit_fwd_func_decl,
                         std::string target_str, const std::unordered_set<std::string>& devices) {
@@ -48,6 +53,8 @@ void CodeGenCHost::Init(bool output_ssa, bool emit_asserts, bool emit_fwd_func_d
   decl_stream << "#include \"tvm/runtime/c_backend_api.h\"\n";
   decl_stream << "#include \"tvm/ffi/c_api.h\"\n";
   decl_stream << "#include <math.h>\n";
+  // snprintf for richer assert messages with actual values
+  decl_stream << "#include <stdio.h>\n";
   decl_stream << "#include <stdbool.h>\n";
   CodeGenCHost::InitGlobalContext();
   CodeGenC::Init(output_ssa);
@@ -65,14 +72,14 @@ void CodeGenCHost::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
 
 void CodeGenCHost::AddFunction(const GlobalVar& gvar, const PrimFunc& func,
                                bool emit_fwd_func_decl) {
-  auto global_symbol = func->GetAttr<String>(tvm::attr::kGlobalSymbol);
+  auto global_symbol = func->GetAttr<ffi::String>(tvm::attr::kGlobalSymbol);
   if (global_symbol) {
     function_names_.push_back(global_symbol.value());
   }
 
   emit_fwd_func_decl_ = emit_fwd_func_decl;
   CodeGenC::AddFunction(gvar, func);
-  if (func->HasNonzeroAttr(tir::attr::kIsEntryFunc)) {
+  if (func->HasNonzeroAttr(tir::attr::kIsEntryFunc) && !has_tvm_ffi_main_func_) {
     ICHECK(global_symbol.has_value())
         << "CodeGenCHost: The entry func must have the global_symbol attribute, "
         << "but function " << gvar << " only has attributes " << func->attrs;
@@ -88,8 +95,8 @@ void CodeGenCHost::AddFunction(const GlobalVar& gvar, const PrimFunc& func,
   }
 }
 
-void CodeGenCHost::GenerateForwardFunctionDeclarations(String global_symbol,
-                                                       const Array<Type>& arg_types,
+void CodeGenCHost::GenerateForwardFunctionDeclarations(ffi::String global_symbol,
+                                                       const ffi::Array<Type>& arg_types,
                                                        const Type& ret_type) {
   if (!emit_fwd_func_decl_) {
     return;
@@ -235,7 +242,7 @@ void CodeGenCHost::PrintCallPacked(const CallNode* op) {
   } else {
     // directly use the original symbol
     ICHECK(op->op.same_as(builtin::tvm_call_cpacked_lowered()));
-    packed_func_name = func_name->value;
+    packed_func_name = ffi::symbol::tvm_ffi_symbol_prefix + func_name->value;
   }
 
   std::string args_stack = PrintExpr(op->args[1]);
@@ -321,9 +328,33 @@ void CodeGenCHost::VisitStmt_(const AssertStmtNode* op) {  // NOLINT(*)
     PrintIndent();
     stream << "if (!(" << cond << ")) {\n";
     int assert_if_scope = this->BeginScope();
-    PrintIndent();
-    stream << "TVMFFIErrorSetRaisedFromCStr(\"RuntimeError\", \""
-           << op->message.as<StringImmNode>()->value << "\", NULL);\n";
+    {
+      // Prepare the base error message
+      const auto* msg_node = op->message.as<StringImmNode>();
+      ICHECK(msg_node != nullptr) << "Assert message expected to be StringImm";
+      const std::string& raw_msg = msg_node->value;
+      const std::string esc_msg =
+          tvm::support::StrEscape(raw_msg.c_str(), raw_msg.length(), /*use_octal_escape=*/true,
+                                  /*escape_whitespace_special_chars=*/true);
+
+      // If the assertion is an equality check, append the actual LHS/RHS values
+      if (const auto* eq = op->condition.as<EQNode>()) {
+        std::string lhs = PrintExpr(eq->a);
+        std::string rhs = PrintExpr(eq->b);
+        PrintIndent();
+        stream << "char __tvm_assert_msg_buf[512];\n";
+        PrintIndent();
+        stream << "snprintf(__tvm_assert_msg_buf, 512, \"%s; got: %lld, expected: %lld\", \""
+               << esc_msg << "\", (long long)(" << lhs << "), (long long)(" << rhs
+               << "));\n";
+        PrintIndent();
+        stream << "TVMFFIErrorSetRaisedFromCStr(\"RuntimeError\", __tvm_assert_msg_buf);\n";
+      } else {
+        PrintIndent();
+        stream << "TVMFFIErrorSetRaisedFromCStr(\"RuntimeError\", \"" << esc_msg
+               << "\");\n";
+      }
+    }
     PrintIndent();
     stream << "return -1;\n";
     this->EndScope(assert_if_scope);
@@ -357,13 +388,14 @@ inline void CodeGenCHost::PrintTernaryCondExpr(const T* op, const char* compare,
 
 ffi::Module BuildCHost(IRModule mod, Target target) {
   bool output_ssa = false;
-  bool emit_asserts = false;
+  // Enable emission of runtime asserts in generated C host code
+  bool emit_asserts = true;
   bool emit_fwd_func_decl = true;
 
   std::unordered_set<std::string> devices;
-  if (mod->GetAttr<Map<GlobalVar, String>>("device_contexts") != nullptr) {
-    Map<GlobalVar, String> device_contexts =
-        mod->GetAttr<Map<GlobalVar, String>>("device_contexts").value();
+  if (mod->GetAttr<ffi::Map<GlobalVar, ffi::String>>("device_contexts") != nullptr) {
+    ffi::Map<GlobalVar, ffi::String> device_contexts =
+        mod->GetAttr<ffi::Map<GlobalVar, ffi::String>>("device_contexts").value();
     for (auto const& context : device_contexts) {
       devices.insert(context.second.data());
     }
@@ -407,9 +439,9 @@ ffi::Module BuildCHost(IRModule mod, Target target) {
   return CSourceModuleCreate(code, "c", cg.GetFunctionNames());
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("target.build.c", BuildCHost);
-});
+}
 }  // namespace codegen
 }  // namespace tvm

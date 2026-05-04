@@ -49,11 +49,11 @@ inline PrimExpr DispatchPureExternLibDevice(const PrimExpr& e) {
   intrinsic_name << "__nv_" << name.substr(4);
   if (call->dtype.bits() == 32) intrinsic_name << "f";
 
-  Array<PrimExpr> new_args = {StringImm(intrinsic_name.str())};
+  ffi::Array<PrimExpr> new_args = {StringImm(intrinsic_name.str())};
   for (auto arg : call->args) {
     new_args.push_back(arg);
   }
-  return Call(call->dtype, builtin::call_pure_extern(), new_args);
+  return Call(call->dtype, builtin::call_pure_extern(), new_args, call->annotations);
 }
 
 namespace llvm {

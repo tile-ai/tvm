@@ -68,7 +68,7 @@ llvm::Value* CodeGenX86_64::VisitExpr_(const CastNode* op) {
           DTypeToLLVMType(DataType::Float(32, from.lanes())),
           {
               MakeValue(tir::Call(DataType::Int(16, from.lanes()), tir::builtin::reinterpret(),
-                                  {op->value})),
+                                  {op->value}, {})),
               MakeValue(tir::Broadcast(FloatImm(DataType::Float(32), 0), from.lanes())),
               /*mask=*/MakeValue(IntImm(DataType::Int(16), -1)),
               /*rounding-mode=*/MakeValue(IntImm(DataType::Int(32), 4)),
@@ -83,7 +83,7 @@ llvm::Value* CodeGenX86_64::VisitExpr_(const CastNode* op) {
       return CallVectorIntrin(llvm::Intrinsic::x86_vcvtph2ps_256, 8,
                               DTypeToLLVMType(DataType::Float(32, from.lanes())),
                               {MakeValue(tir::Call(DataType::Int(16, from.lanes()),
-                                                   tir::builtin::reinterpret(), {op->value}))});
+                                                   tir::builtin::reinterpret(), {op->value}, {}))});
     }
 #endif
   }
@@ -133,13 +133,13 @@ llvm::Value* CodeGenX86_64::CallVectorIntrin(llvm::Intrinsic::ID id, size_t intr
   return CreateVecSlice(CreateVecConcat(split_results), 0, num_elems);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed("tvm.codegen.llvm.target_x86-64",
                                [](const ffi::PackedArgs& targs, ffi::Any* rv) {
                                  *rv = static_cast<void*>(new CodeGenX86_64());
                                });
-});
+}
 
 }  // namespace codegen
 }  // namespace tvm

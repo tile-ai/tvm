@@ -33,16 +33,17 @@
 #include "int_operator.h"
 #include "pattern_match.h"
 #include "scalable_expression.h"
+#include "tvm/tir/op_attr_types.h"
 
 namespace tvm {
 namespace arith {
 
 using namespace tir;
 
-TVM_FFI_STATIC_INIT_BLOCK({ ConstIntBoundNode::RegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { ConstIntBoundNode::RegisterReflection(); }
 
 ConstIntBound::ConstIntBound(int64_t min_value, int64_t max_value) {
-  auto node = make_object<ConstIntBoundNode>();
+  auto node = ffi::make_object<ConstIntBoundNode>();
   node->min_value = min_value;
   node->max_value = max_value;
   data_ = std::move(node);
@@ -52,10 +53,10 @@ ConstIntBound MakeConstIntBound(int64_t min_value, int64_t max_value) {
   return ConstIntBound(min_value, max_value);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.ConstIntBound", MakeConstIntBound);
-});
+}
 
 inline void PrintBoundValue(std::ostream& os, int64_t val) {
   if (val == ConstIntBound::kPosInf) {
@@ -102,6 +103,12 @@ struct ConstIntBoundAnalyzer::Entry {
 class ConstIntBoundAnalyzer::Impl
     : public ExprFunctor<ConstIntBoundAnalyzer::Entry(const PrimExpr&)> {
  public:
+  explicit Impl(Analyzer* parent) : parent_(parent) {}
+  void CopyFrom(const Impl& other) {
+    this->var_map_ = other.var_map_;
+    this->additional_info_ = other.additional_info_;
+    this->bound_ = nullptr;
+  }
   /*! \brief additional bound info about expr in bound */
   struct BoundInfo {
     /*! \brief The expr */
@@ -224,8 +231,11 @@ class ConstIntBoundAnalyzer::Impl
    * \param divisor The input divsor entry
    * \return The processed entry
    */
-  Entry AssumeNoZeroDivisor(Entry divisor) {
-    ICHECK(!divisor.is_const(0)) << "Find divide by zero";
+  std::optional<Entry> AssumeNoZeroDivisor(Entry divisor) {
+    // If divisor is constant zero, return nullopt to signal fallback
+    if (divisor.is_const(0)) {
+      return std::nullopt;
+    }
     // NOTE: here we make the assumption that
     // divide by zero won't happen in a valid program
     // this is important for us to get a lot of symbolic shape bound right
@@ -268,16 +278,49 @@ class ConstIntBoundAnalyzer::Impl
 
   Entry VisitExpr_(const DivNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
-    return HandleDivision(a, b, op->dtype, InfAwareDiv);
+    auto b = AssumeNoZeroDivisor(VisitExpr(op->b));
+    if (!b.has_value()) {
+      return Everything(op->dtype);
+    }
+    return HandleDivision(a, b.value(), op->dtype, InfAwareDiv);
   }
 
   Entry VisitExpr_(const ModNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
+    auto b_opt = AssumeNoZeroDivisor(VisitExpr(op->b));
+    if (!b_opt.has_value()) {
+      return Everything(op->dtype);
+    }
+    Entry b = b_opt.value();
 
     if (b.min_value > 0) {
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
+
+      // Try to get tighter bounds using modular set information
+      if (parent_ && b.min_value == b.max_value) {
+        ModularSet mod_a = parent_->modular_set(op->a);
+        int64_t modulus = b.min_value;
+        int64_t gcd_coeff_mod = ZeroAwareGCD(mod_a->coeff, modulus);
+
+        // If gcd_coeff_mod > 1, we can get tighter bounds
+        // The result will be of the form gcd_coeff_mod * k + (base % modulus)
+        // where k ranges to cover [0, modulus - gcd_coeff_mod]
+        //
+        // Example: expr = (bx * 2048 + tx * 16) % 7168
+        //          where bx in [0, 3584), tx in [0, 128)
+        //          GCD(16, 7168) = 16
+        //          Result can only be {0, 16, 32, ..., 7152}
+        //          Without this optimization: bound = [0, 7167]
+        //          With this optimization: bound = [0, 7152]
+        if (gcd_coeff_mod > 1) {
+          int64_t base_mod = mod_a->base % modulus;
+          if (base_mod < 0) base_mod += modulus;
+          int64_t tight_max = modulus - gcd_coeff_mod + base_mod;
+          if (tight_max >= modulus) tight_max -= modulus;
+          return MakeBound(base_mod, tight_max);
+        }
+      }
+
       if (a.min_value >= 0) {
         // 0 <= [a_min, a_max] < b_min
         if (a.max_value < b.min_value) return a;
@@ -288,7 +331,6 @@ class ConstIntBoundAnalyzer::Impl
                          std::min(std::max(a.max_value, (int64_t)0), b_max_cap));
       }
     } else {
-      ICHECK(!b.is_const(0)) << "mod by zero";
       // mod by negative value is rare,
       // and we just use the simpliest rule.
       return Everything(op->dtype);
@@ -297,8 +339,11 @@ class ConstIntBoundAnalyzer::Impl
 
   Entry VisitExpr_(const FloorDivNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
-    return HandleDivision(a, b, op->dtype, InfAwareFloorDiv);
+    auto b = AssumeNoZeroDivisor(VisitExpr(op->b));
+    if (!b.has_value()) {
+      return Everything(op->dtype);
+    }
+    return HandleDivision(a, b.value(), op->dtype, InfAwareFloorDiv);
   }
 
   Entry VisitExpr_(const FloorModNode* op) final {
@@ -320,10 +365,40 @@ class ConstIntBoundAnalyzer::Impl
      * That is, min(0, b_min + 1) <= floormod(a, b) <= max(0, b_max - 1)
      */
     Entry a = VisitExpr(op->a);
-    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
+    auto b_opt = AssumeNoZeroDivisor(VisitExpr(op->b));
+    if (!b_opt.has_value()) {
+      return Everything(op->dtype);
+    }
+    Entry b = b_opt.value();
 
     if (b.min_value > 0) {
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
+      // Try to get tighter bounds using modular set information
+      if (parent_ && b.min_value == b.max_value) {
+        ModularSet mod_a = parent_->modular_set(op->a);
+        int64_t modulus = b.min_value;
+        int64_t gcd_coeff_mod = ZeroAwareGCD(mod_a->coeff, modulus);
+
+        // If gcd_coeff_mod > 1, we can get tighter bounds
+        // The result will be of the form gcd_coeff_mod * k + (base % modulus)
+        // where k ranges to cover [0, modulus - gcd_coeff_mod]
+        //
+        // Example: expr = (bx * 2048 + tx * 16) % 7168
+        //          where bx in [0, 3584), tx in [0, 128)
+        //          ModularSet(expr) = 16*k (coeff=16, base=0)
+        //          GCD(16, 7168) = 16
+        //          Result can only be {0, 16, 32, ..., 7152}
+        //          Without this optimization: bound = [0, 7167]
+        //          With this optimization: bound = [0, 7152]
+        if (gcd_coeff_mod > 1) {
+          int64_t base_mod = mod_a->base % modulus;
+          if (base_mod < 0) base_mod += modulus;
+          int64_t tight_max = modulus - gcd_coeff_mod + base_mod;
+          if (tight_max >= modulus) tight_max -= modulus;
+          return MakeBound(base_mod, tight_max);
+        }
+      }
+
       if (a.min_value >= 0) {
         // 0 <= [a_min, a_max] < b_min
         if (a.max_value < b.min_value) return a;
@@ -333,7 +408,6 @@ class ConstIntBoundAnalyzer::Impl
         return MakeBound(0, b_max_cap);
       }
     } else {
-      ICHECK(!b.is_const(0)) << "floormod by zero";
       int64_t b_min_cap = InfAwareAdd(b.min_value, 1);
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
       return Intersect(MakeBound(std::min(static_cast<int64_t>(0), b_min_cap),
@@ -377,6 +451,10 @@ class ConstIntBoundAnalyzer::Impl
       return VisitLeftShift(op);
     } else if (op->op.same_as(tir::builtin::bitwise_and())) {
       return VisitBitwiseAnd(op);
+    } else if (op->op.same_as(tir::builtin::bitwise_or())) {
+      return VisitBitwiseOr(op);
+    } else if (op->op.same_as(tir::builtin::bitwise_xor())) {
+      return VisitBitwiseXor(op);
     } else if (op->op.same_as(tir::builtin::vscale()) && TargetHasVLA(curr_target)) {
       auto kVScaleValues = GetVScaleValues(curr_target);
       unsigned int max_val = *std::max_element(kVScaleValues.begin(), kVScaleValues.end());
@@ -387,7 +465,7 @@ class ConstIntBoundAnalyzer::Impl
   }
 
   Entry VisitExpr_(const VarNode* op) final {
-    Var v = GetRef<Var>(op);
+    Var v = ffi::GetRef<Var>(op);
     auto it = var_map_.find(v);
     if (it != var_map_.end()) {
       return it->second;
@@ -397,7 +475,7 @@ class ConstIntBoundAnalyzer::Impl
   }
 
   Entry VisitExpr_(const SizeVarNode* op) final {
-    SizeVar v = GetRef<SizeVar>(op);
+    SizeVar v = ffi::GetRef<SizeVar>(op);
     auto it = var_map_.find(v);
     if (it != var_map_.end()) {
       return it->second;
@@ -443,21 +521,83 @@ class ConstIntBoundAnalyzer::Impl
     }
   }
 
+  Entry VisitBitwiseOr(const CallNode* op) {
+    Entry a = VisitExpr(op->args[0]);
+    Entry b = VisitExpr(op->args[1]);
+    // For non-negative operands, OR result is also non-negative and
+    // bounded by (1<<k)-1 where k is max bit-width needed by upper bounds.
+    if (a.min_value >= 0 && b.min_value >= 0) {
+      auto bit_width = [](int64_t v) {
+        if (v <= 0) return 0;
+        int bw = 0;
+        while (v) {
+          ++bw;
+          v >>= 1;
+        }
+        return bw;
+      };
+      int bw_a = bit_width(a.max_value);
+      int bw_b = bit_width(b.max_value);
+      int k = std::max(bw_a, bw_b);
+      if (k >= 63) {
+        return Everything(op->dtype);
+      }
+      int64_t ub = (static_cast<int64_t>(1) << k) - 1;
+      return MakeBound(0, ub);
+    }
+    return Everything(op->dtype);
+  }
+
+  Entry VisitBitwiseXor(const CallNode* op) {
+    Entry a = VisitExpr(op->args[0]);
+    Entry b = VisitExpr(op->args[1]);
+    // For non-negative operands (common for index math),
+    // the result is within [0, (1 << k) - 1], where k is the maximum
+    // number of bits required to represent either operand's upper bound.
+    // This is a conservative but safe bound and is sufficient for layout
+    // index computations.
+    if (a.min_value >= 0 && b.min_value >= 0) {
+      // Compute bit width of the larger upper bound; cap at 63 to avoid UB.
+      auto bit_width = [](int64_t v) {
+        if (v <= 0) return 0;
+        int bw = 0;
+        while (v) {
+          ++bw;
+          v >>= 1;
+        }
+        return bw;
+      };
+      int bw_a = bit_width(a.max_value);
+      int bw_b = bit_width(b.max_value);
+      int k = std::max(bw_a, bw_b);
+      if (k >= 63) {
+        // Too wide; fall back to dtype limits.
+        return Everything(op->dtype);
+      }
+      int64_t ub = (static_cast<int64_t>(1) << k) - 1;
+      return MakeBound(0, ub);
+    }
+    // If signs are unknown, avoid incorrect assumptions.
+    return Everything(op->dtype);
+  }
+
   std::function<void()> EnterConstraint(const PrimExpr& constraint) {
     std::vector<BoundInfo> info = DetectBoundInfo(constraint);
     if (info.size() == 0) return nullptr;
     size_t old_size = additional_info_.size();
     additional_info_.insert(additional_info_.end(), info.begin(), info.end());
-    size_t new_size = old_size + info.size();
-    auto frecover = [old_size, new_size, this]() {
-      ICHECK_EQ(additional_info_.size(), new_size);
-      additional_info_.resize(old_size);
+    auto frecover = [old_size, this]() {
+      if (additional_info_.size() > old_size) {
+        additional_info_.resize(old_size);
+      }
     };
     return frecover;
   }
 
  private:
   friend class ConstIntBoundAnalyzer;
+  // parent analyzer
+  Analyzer* parent_;
   // internal variable map
   std::unordered_map<Var, Entry> var_map_;
   // additional bound info
@@ -525,6 +665,7 @@ class ConstIntBoundAnalyzer::Impl
     // If the range of b does not have 0, use BinaryOpBoundary.
     return BinaryOpBoundary(a, b, op);
   }
+
   /*!
    * \brief Compute x + y, aware of inf.
    * \param x The left operand.
@@ -678,8 +819,11 @@ class ConstIntBoundAnalyzer::Impl
    * \return Bound that represent everything dtype can represent.
    */
   static Entry Everything(DataType dtype) {
-    if (!dtype.is_int() && !dtype.is_uint()) {
+    if (!dtype.is_int() && !dtype.is_uint() && !dtype.is_bool()) {
       return MakeBound(kNegInf, kPosInf);
+    }
+    if (dtype.is_bool()) {
+      return MakeBound(0, 1);
     }
     Entry ret;
     int64_t vbits = dtype.bits() - static_cast<int>(dtype.is_int());
@@ -719,6 +863,9 @@ class ConstIntBoundAnalyzer::Impl
     };
 
     for (const auto& subexpr : ExtractConstraints(cond)) {
+      if(SideEffect(subexpr) > tir::CallEffectKind::kPure) {
+        continue;
+      }
       // NOTE: The canonical form always uses <= or <, but a
       // user-supplied constraint from the python API might not be
       // canonicalized.
@@ -732,6 +879,31 @@ class ConstIntBoundAnalyzer::Impl
         add_info(x.Eval(), kNegInf, c.Eval()->value - 1);
       } else if ((x == c).Match(subexpr) || (c == x).Match(subexpr)) {
         add_info(x.Eval(), c.Eval()->value, c.Eval()->value);
+      } else if ((!x).Match(subexpr)) {
+        // Handle not operation: not(expr)
+        PrimExpr inner = x.Eval();
+        PVar<PrimExpr> inner_x;
+        PVar<IntImm> inner_c;
+
+        // Handle negated comparisons
+        if ((inner_c <= inner_x).Match(inner) || (inner_x >= inner_c).Match(inner)) {
+          // not(x >= c) -> x < c -> x <= c-1
+          add_info(inner_x.Eval(), kNegInf, inner_c.Eval()->value - 1);
+        } else if ((inner_c < inner_x).Match(inner) || (inner_x > inner_c).Match(inner)) {
+          // not(x > c) -> x <= c
+          add_info(inner_x.Eval(), kNegInf, inner_c.Eval()->value);
+        } else if ((inner_x <= inner_c).Match(inner) || (inner_x >= inner_c).Match(inner)) {
+          // not(x <= c) -> x > c -> x >= c+1
+          add_info(inner_x.Eval(), inner_c.Eval()->value + 1, kPosInf);
+        } else if ((inner_x < inner_c).Match(inner) || (inner_c > inner_x).Match(inner)) {
+          // not(x < c) -> x >= c
+          add_info(inner_x.Eval(), inner_c.Eval()->value, kPosInf);
+        } else if ((inner_x == inner_c).Match(inner) || (inner_c == inner_x).Match(inner)) {
+          // not(x == c) -> x != c
+          // This is more complex - we can't represent != with a single interval
+          // For now, we'll just skip this case
+        }
+        // Note: We don't recursively call DetectBoundInfo here to avoid infinite recursion
       }
     }
 
@@ -744,7 +916,7 @@ class ConstIntBoundAnalyzer::Impl
    * This expression is used as the implementation of
    * topi.math.ceil_log2, and can appear in iteration bounds.
    */
-  static Optional<PrimExpr> FindCeilLog2Arg(const CastNode* op) {
+  static ffi::Optional<PrimExpr> FindCeilLog2Arg(const CastNode* op) {
     if (op->dtype.is_int()) {
       if (auto as_call = op->value.as<CallNode>()) {
         if (as_call->op.same_as(Op::Get("tir.ceil"))) {
@@ -805,9 +977,14 @@ std::function<void()> ConstIntBoundAnalyzer::EnterConstraint(const PrimExpr& con
   return impl_->EnterConstraint(constraint);
 }
 
-ConstIntBoundAnalyzer::ConstIntBoundAnalyzer(Analyzer* parent) : impl_(new Impl()) {}
+ConstIntBoundAnalyzer::ConstIntBoundAnalyzer(Analyzer* parent) : impl_(new Impl(parent)) {}
 
 ConstIntBoundAnalyzer::~ConstIntBoundAnalyzer() { delete impl_; }
+
+// Deep copy internal state from another analyzer
+void ConstIntBoundAnalyzer::CopyFrom(const ConstIntBoundAnalyzer& other) {
+  this->impl_->CopyFrom(*other.impl_);
+}
 
 }  // namespace arith
 }  // namespace tvm

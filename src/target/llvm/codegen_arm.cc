@@ -75,10 +75,10 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
   int total_size = call->dtype.bits() * call->dtype.lanes();
   if (!call->dtype.is_fixed_length_vector() || call->dtype.bits() == 8 ||
       (total_size != 128 && total_size != 64)) {
-    Array<PrimExpr> vcnt_args;
+    ffi::Array<PrimExpr> vcnt_args;
     vcnt_args.push_back(IntImm(DataType::UInt(32), ctpop_id));
     vcnt_args.push_back(e);
-    return tir::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt_args);
+    return tir::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt_args, call->annotations);
   }
 
   // Popcount lowering rule:
@@ -98,43 +98,43 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
   // Popcount 8bit->8bit
   const CallNode* c0 = input8.as<CallNode>();
   ICHECK(c0 != nullptr);
-  Array<PrimExpr> vcnt8_args;
+  ffi::Array<PrimExpr> vcnt8_args;
   vcnt8_args.push_back(IntImm(DataType::UInt(32), ctpop_id));
   vcnt8_args.push_back(input8);
-  PrimExpr vcnt8 = tir::Call(uint8_type, builtin_call_llvm_pure_intrin_, vcnt8_args);
+  PrimExpr vcnt8 = tir::Call(uint8_type, builtin_call_llvm_pure_intrin_, vcnt8_args, call->annotations);
 
   // Accumulation 8->16bit
-  Array<PrimExpr> vcnt16_args;
+  ffi::Array<PrimExpr> vcnt16_args;
   vcnt16_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt16_args.push_back(vcnt8);
-  PrimExpr vcnt16 = tir::Call(uint16_type, builtin_call_llvm_pure_intrin_, vcnt16_args);
+  PrimExpr vcnt16 = tir::Call(uint16_type, builtin_call_llvm_pure_intrin_, vcnt16_args, call->annotations);
   if (call->dtype.bits() == 16) {
     return vcnt16;
   }
 
   // Accumulation 16->32bit
-  Array<PrimExpr> vcnt32_args;
+  ffi::Array<PrimExpr> vcnt32_args;
   vcnt32_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt32_args.push_back(vcnt16);
-  PrimExpr vcnt32 = tir::Call(uint32_type, builtin_call_llvm_pure_intrin_, vcnt32_args);
+  PrimExpr vcnt32 = tir::Call(uint32_type, builtin_call_llvm_pure_intrin_, vcnt32_args, call->annotations);
   if (call->dtype.bits() == 32) {
     return vcnt32;
   }
 
   // Accumulation 32->64bit
-  Array<PrimExpr> vcnt64_args;
+  ffi::Array<PrimExpr> vcnt64_args;
   vcnt64_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt64_args.push_back(vcnt32);
-  return tir::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt64_args);
+  return tir::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt64_args, call->annotations);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed("tvm.codegen.llvm.target_arm",
                                [](const ffi::PackedArgs& targs, ffi::Any* rv) {
                                  *rv = static_cast<void*>(new CodeGenARM());
                                });
-});
+}
 
 }  // namespace codegen
 }  // namespace tvm

@@ -24,7 +24,7 @@
 
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include <cstddef>
 #include <string>
@@ -51,7 +51,7 @@ using namespace tvm::runtime::json;
 class DNNLJSONRuntime : public JSONRuntimeBase {
  public:
   DNNLJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
-                  const Array<String> const_names)
+                  const ffi::Array<ffi::String> const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names),
         next_unique_eid_offset_(data_entry_.size()),
         run_arg_eid_(input_var_eid_) {
@@ -60,7 +60,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
 
   const char* kind() const override { return "dnnl_json"; }
 
-  void Init(const Array<NDArray>& consts) override {
+  void Init(const ffi::Array<Tensor>& consts) override {
     ICHECK_EQ(consts.size(), const_idx_.size())
         << "The number of input constants must match the number of required.";
 
@@ -100,7 +100,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   }
 
   /* Override GetFunction to reimplement Run method */
-  ffi::Optional<ffi::Function> GetFunction(const String& name) override {
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) override {
     ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
     if (this->symbol_name_ == name) {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
@@ -821,7 +821,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     TensorRequisite res;
     if (const_dl_tensor) {
       ICHECK(const_dl_tensor->data);
-      ICHECK(const_dl_tensor->strides == nullptr);
+      ICHECK(ffi::IsContiguous(*const_dl_tensor));
       auto mem = dnnl::memory(desc, engine_, const_dl_tensor->data);
       res = TensorRequisite::AsIs(mem, eid);
     } else {
@@ -923,18 +923,18 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   std::vector<uint32_t> run_arg_eid_;
 };
 
-ffi::Module DNNLJSONRuntimeCreate(String symbol_name, String graph_json,
-                                  const Array<String>& const_names) {
-  auto n = make_object<DNNLJSONRuntime>(symbol_name, graph_json, const_names);
+ffi::Module DNNLJSONRuntimeCreate(ffi::String symbol_name, ffi::String graph_json,
+                                  const ffi::Array<ffi::String>& const_names) {
+  auto n = ffi::make_object<DNNLJSONRuntime>(symbol_name, graph_json, const_names);
   return ffi::Module(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.DNNLJSONRuntimeCreate", DNNLJSONRuntimeCreate)
       .def("ffi.Module.load_from_bytes.dnnl_json", JSONRuntimeBase::LoadFromBytes<DNNLJSONRuntime>);
-});
+}
 
 }  // namespace contrib
 }  // namespace runtime

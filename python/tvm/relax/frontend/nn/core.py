@@ -42,9 +42,9 @@ import numpy as np  # type: ignore
 from tvm import tir
 from tvm.ir import IRModule
 from tvm.ir.transform import Pass
-from tvm.runtime import Device, NDArray
+import tvm.runtime
+from tvm.runtime import Device
 from tvm.runtime import device as as_device
-from tvm.runtime import ndarray
 from tvm.runtime.vm import VirtualMachine
 from tvm.target import Target
 
@@ -225,7 +225,7 @@ class Parameter(Tensor):
     it is called a bound parameter, otherwise it is called an unbound parameter.
     """
 
-    _data: Optional[NDArray]
+    _data: Optional[Tensor]
     attrs: Dict[str, Any]
 
     def __init__(
@@ -251,16 +251,16 @@ class Parameter(Tensor):
         self.attrs = OrderedDict()
 
     @property
-    def data(self) -> Optional[NDArray]:
+    def data(self) -> Optional[Tensor]:
         """Returns the concrete value of the parameter if it is bound to a concrete value,
-        otherwise returns None. The returned value is a tvm.runtime.NDArray."""
+        otherwise returns None. The returned value is a tvm.runtime.Tensor."""
         return self._data
 
     @data.setter
-    def data(self, data: Union[None, NDArray, np.ndarray, "torch.Tensor"]) -> None:
+    def data(self, data: Union[None, tvm.runtime.Tensor, np.ndarray, "torch.Tensor"]) -> None:
         """Set the concrete value of the parameter. The data should be one of the following:
         - None: unbind the parameter to concrete values
-        - tvm.runtime.NDArray
+        - tvm.runtime.Tensor
         - numpy.ndarray
         - torch.Tensor and any other DLPack-compliant tensors
         """
@@ -268,10 +268,10 @@ class Parameter(Tensor):
             self._data = data
             return
         # Try to do zero-copy if possible
-        if isinstance(data, NDArray):
+        if isinstance(data, tvm.runtime.Tensor):
             pass
         elif isinstance(data, np.ndarray):
-            data = ndarray.array(data)
+            data = tvm.runtime.tensor(data)
         elif hasattr(data, "__dlpack__"):
             data = _from_dlpack(data)
         else:
@@ -526,7 +526,7 @@ class Module(SubroutineMixin):
                 ),
                 device,
             )
-            params = _param_to_ndarray(params, device)
+            params = _param_to_tensor(params, device)
             return spec, vm, params
 
         device = as_device(device)
@@ -538,6 +538,56 @@ class Module(SubroutineMixin):
             return torch.TorchModule(spec=spec, params=params, vm=vm)
 
         raise ValueError(f"Unknown out_format: {out_format}")
+
+
+class ModuleDict(Module):
+    """Holds submodules in a dict."""
+
+    def __init__(self, modules: Optional[OrderedDict[str, Module]] = None):
+        if modules is None:
+            self.modules = OrderedDict()
+        else:
+            self.modules = OrderedDict(modules)
+
+    def __iter__(self):
+        return iter(self.modules.values())
+
+    def __getitem__(self, key: str) -> Module:
+        return self.modules[key]
+
+    def __setitem__(self, key: str, module: Module) -> None:
+        self.modules[key] = module
+
+    def __len__(self) -> int:
+        return len(self.modules)
+
+    def keys(self) -> Iterator[str]:
+        return self.modules.keys()
+
+    def values(self) -> Iterator[Module]:
+        return self.modules.values()
+
+    def items(self) -> Iterator[Tuple[str, Module]]:
+        return self.modules.items()
+
+    def get(self, key: str, default: Optional[Module] = None) -> Optional[Module]:
+        return self.modules.get(key, default)
+
+    def update(self, modules: Dict[str, Module]) -> None:
+        self.modules.update(modules)
+
+    def clear(self) -> None:
+        self.modules.clear()
+
+    def pop(self, key: str) -> Module:
+        return self.modules.pop(key)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.modules
+
+    def to(self, dtype: Optional[str] = None) -> None:  # pylint: disable=invalid-name
+        for module in self.modules.values():
+            module.to(dtype=dtype)
 
 
 class ModuleList(Module):
@@ -611,6 +661,10 @@ def _attribute_finder(root: Module, prefix: str, condition_yield: Callable[[Any]
         for i, subitem in enumerate(root):
             yield from _attribute_finder(subitem, prefix + f"{i}.", condition_yield)
         return
+    elif isinstance(root, ModuleDict):
+        for name, subitem in root.items():
+            yield from _attribute_finder(subitem, prefix + f"{name}.", condition_yield)
+        return
     for name, item in root.__dict__.items():
         if condition_yield(item):
             yield prefix + name, item
@@ -620,6 +674,13 @@ def _attribute_finder(root: Module, prefix: str, condition_yield: Callable[[Any]
                 prefix + name + ".",
                 condition_yield,
             )
+        elif isinstance(item, ModuleDict):
+            for sub_name, sub_item in item.items():
+                yield from _attribute_finder(
+                    sub_item,
+                    prefix + name + f".{sub_name}.",
+                    condition_yield,
+                )
         elif isinstance(item, Module):
             yield from _attribute_finder(
                 item,
@@ -628,24 +689,26 @@ def _attribute_finder(root: Module, prefix: str, condition_yield: Callable[[Any]
             )
 
 
-def _from_dlpack(tensor) -> NDArray:
+def _from_dlpack(tensor) -> tvm.runtime.Tensor:
     try:
-        return ndarray.from_dlpack(tensor)
+        return tvm.runtime.from_dlpack(tensor)
     except RuntimeError:
         pass
     # special logic for PyTorch
     device_type = tensor.device.type
     device_id = tensor.device.index or 0
-    return ndarray.array(
+    return tvm.runtime.tensor(
         tensor.numpy(),
         device=Device(
-            Device.DEVICE_NAME_TO_TYPE[device_type],
+            Device._DEVICE_NAME_TO_TYPE[device_type],
             device_id,
         ),
     )
 
 
-def _param_to_ndarray(params: List[Tuple[str, Parameter]], device: Device) -> List[NDArray]:
+def _param_to_tensor(
+    params: List[Tuple[str, Parameter]], device: Device
+) -> List[tvm.runtime.Tensor]:
     results = []
     missing = []
     for name, param in params:

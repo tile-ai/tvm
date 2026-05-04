@@ -20,9 +20,9 @@ import numpy as np
 import pytest
 import tvm
 import tvm.testing
+import tvm.runtime
 from tvm import tir
 from tvm.ir.base import assert_structural_equal
-from tvm.runtime import ndarray
 from tvm.script.ir_builder import IRBuilder
 from tvm.script.ir_builder import tir as T
 
@@ -366,7 +366,7 @@ def test_ir_builder_tir_allocate():
     # the expected allocate
     buffer_var = tir.Var("v", tvm.ir.PointerType(tvm.ir.PrimType("float32"), "local"))
     ir_expected = tir.Allocate(
-        buffer_var, "float32", [10], tvm.tir.const(1, "uint1"), tir.Evaluate(1)
+        buffer_var, "float32", [10], tvm.tir.const(1, "bool"), tir.Evaluate(1)
     )
 
     # Check if the generated ir is expected
@@ -388,7 +388,7 @@ def test_ir_builder_tir_allocate_const():
         buffer_var,
         "int32",
         [10],
-        ndarray.array(np.asarray(data, "int32")),
+        tvm.runtime.tensor(np.asarray(data, "int32")),
         tir.Evaluate(1),
         annotations={},
     )

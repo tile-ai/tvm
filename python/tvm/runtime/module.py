@@ -22,16 +22,17 @@ import struct
 from typing import Sequence
 
 import numpy as np
-from tvm.base import _RUNTIME_ONLY
-from tvm.libinfo import find_include_path
-
-from . import _ffi_api
-from ..ffi import (
+from tvm_ffi import (
     Module as _Module,
     load_module as _load_module,
     register_object as _register_object,
     system_lib,
 )
+
+from tvm.base import _RUNTIME_ONLY
+from tvm.libinfo import find_include_path
+
+from . import _ffi_api
 
 
 class BenchmarkResult:
@@ -376,8 +377,8 @@ class Module(_Module):
             feval = _ffi_api.RPCTimeEvaluator(
                 self,
                 func_name,
-                dev.device_type,
-                dev.device_id,
+                dev.dlpack_device_type(),
+                dev.index,
                 number,
                 repeat,
                 min_repeat_ms,

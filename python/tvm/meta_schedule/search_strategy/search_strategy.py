@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Union
 from typing_extensions import Literal
 
 # isort: on
-from tvm.ffi import register_object
+from tvm_ffi import register_object
 from tvm.runtime import Object
 from tvm.tir.schedule import Schedule
 
@@ -86,6 +86,21 @@ class SearchStrategy(Object):
             "evolutionary",
         ],
     ]
+
+    def __new__(cls, *args, **kwargs):  # pylint: disable=unused-argument
+        """Prevent direct instantiation of abstract SearchStrategy class.
+
+        SearchStrategy is an abstract class and cannot be directly instantiated.
+        Use SearchStrategy.create() or a concrete subclass instead.
+        """
+        if cls is SearchStrategy:
+            raise TypeError(
+                "Cannot instantiate abstract class SearchStrategy. "
+                "Use SearchStrategy.create() with a valid strategy type "
+                "(e.g., 'evolutionary', 'replay-trace', 'replay-func') "
+                "or use a concrete subclass instead."
+            )
+        return super().__new__(cls)  # pylint: disable=no-value-for-parameter
 
     def _initialize_with_tune_context(self, context: "TuneContext") -> None:
         """Initialize the search strategy with tuning context.

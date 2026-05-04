@@ -248,20 +248,25 @@ class UndefinedVarVerifier : public Verifier<UndefinedVarVerifier> {
     bool redefine_is_allowed = redefine_allowed_within_function_.count(var);
     {
       auto it = currently_defined_.find(var);
-      Verify(it == currently_defined_.end() || redefine_is_allowed)
-          << "ValueError: "
-          << "TIR is ill-formed, "
-          << "due to multiple nested definitions of variable " << var
-          << ".  It was first defined at " << it->second << ", and was re-defined at " << path;
+      auto verify = Verify(it == currently_defined_.end() || redefine_is_allowed);
+      verify << "ValueError: "
+             << "TIR is ill-formed, "
+             << "due to multiple nested definitions of variable " << var << ".";
+      if (it != currently_defined_.end()) {
+        verify << " It was first defined at " << it->second << ", and was re-defined at " << path;
+      }
     }
 
     {
       auto it = previously_defined_.find(var);
-      Verify(it == previously_defined_.end() || redefine_is_allowed)
-          << "ValueError: "
-          << "TIR is ill-formed, "
-          << "due to multiple definitions of variable " << var << ".  It was first defined at "
-          << it->second << ", and was later re-defined at " << path;
+      auto verify = Verify(it == previously_defined_.end() || redefine_is_allowed);
+      verify << "ValueError: "
+             << "TIR is ill-formed, "
+             << "due to multiple definitions of variable " << var << ".";
+      if (it != previously_defined_.end()) {
+        verify << " It was first defined at " << it->second << ", and was later re-defined at "
+               << path;
+      }
     }
 
     currently_defined_.insert({var, path});
@@ -275,7 +280,7 @@ class UndefinedVarVerifier : public Verifier<UndefinedVarVerifier> {
   }
 
   void VisitExpr_(const VarNode* op, AccessPath path) override {
-    auto var = GetRef<Var>(op);
+    auto var = ffi::GetRef<Var>(op);
 
     auto active_def = currently_defined_.find(var);
     auto verify = Verify(active_def != currently_defined_.end());
@@ -342,7 +347,7 @@ class SingleEnvThreadVerifier : public Verifier<SingleEnvThreadVerifier> {
     }
   }
 
-  std::unordered_map<String, std::tuple<Var, AccessPath>> env_thread_vars_;
+  std::unordered_map<ffi::String, std::tuple<Var, AccessPath>> env_thread_vars_;
 };
 
 bool VerifyWellFormed(const PrimFunc& func, bool assert_mode) {
@@ -371,7 +376,7 @@ bool VerifyWellFormed(const IRModule& mod, bool assert_mode) {
   return true;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.analysis.VerifyWellFormed", [](const ObjectRef& obj,
                                                             bool assert_mode) {
@@ -384,7 +389,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
                  << obj->GetTypeKey();
     }
   });
-});
+}
 
 }  // namespace tir
 }  // namespace tvm

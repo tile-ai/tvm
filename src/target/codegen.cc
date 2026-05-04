@@ -341,18 +341,18 @@ ffi::Module PackImportsToLLVM(const ffi::Module& mod, bool system_lib,
       .cast<ffi::Module>();
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("target.Build", Build);
-});
+}
 
 // Export a few auxiliary function to the runtime namespace.
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.ModuleImportsBlobName",
            []() -> std::string { return ffi::symbol::tvm_ffi_library_bin; })
-      .def("runtime.ModulePackImportsToNDArray",
+      .def("runtime.ModulePackImportsToTensor",
            [](const ffi::Module& mod) {
              std::string buffer = PackImportsToBytes(mod);
              ffi::Shape::index_type size = buffer.size();
@@ -363,13 +363,13 @@ TVM_FFI_STATIC_INIT_BLOCK({
              DLDevice dev;
              dev.device_type = kDLCPU;
              dev.device_id = 0;
-             auto array = runtime::NDArray::Empty({size}, uchar, dev);
+             auto array = runtime::Tensor::Empty({size}, uchar, dev);
              array.CopyFromBytes(buffer.data(), size);
              return array;
            })
       .def("runtime.ModulePackImportsToC", PackImportsToC)
       .def("runtime.ModulePackImportsToLLVM", PackImportsToLLVM);
-});
+}
 
 }  // namespace codegen
 }  // namespace tvm

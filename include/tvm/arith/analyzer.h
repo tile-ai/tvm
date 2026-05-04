@@ -33,6 +33,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include "tvm/ffi/object.h"
 
 namespace tvm {
 /*! \brief namespace of arithmetic analysis. */
@@ -103,8 +104,7 @@ class ConstIntBoundNode : public Object {
   static const constexpr int64_t kNegInf = -kPosInf;
 
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
-  static constexpr const char* _type_key = "arith.ConstIntBound";
-  TVM_DECLARE_FINAL_OBJECT_INFO(ConstIntBoundNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("arith.ConstIntBound", ConstIntBoundNode, Object);
 };
 
 /*!
@@ -122,7 +122,7 @@ class ConstIntBound : public ObjectRef {
 
   static const constexpr int64_t kPosInf = ConstIntBoundNode::kPosInf;
   static const constexpr int64_t kNegInf = ConstIntBoundNode::kNegInf;
-  TVM_DEFINE_OBJECT_REF_METHODS(ConstIntBound, ObjectRef, ConstIntBoundNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(ConstIntBound, ObjectRef, ConstIntBoundNode);
 };
 
 /*!
@@ -176,6 +176,8 @@ class ConstIntBoundAnalyzer {
   friend class ConstraintContext;
   explicit ConstIntBoundAnalyzer(Analyzer* parent);
   TVM_DLL ~ConstIntBoundAnalyzer();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const ConstIntBoundAnalyzer& other);
   /*!
    * \brief Update the internal state to enter constraint.
    * \param constraint A constraint expression.
@@ -216,8 +218,7 @@ class ModularSetNode : public Object {
   }
 
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
-  static constexpr const char* _type_key = "arith.ModularSet";
-  TVM_DECLARE_FINAL_OBJECT_INFO(ModularSetNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("arith.ModularSet", ModularSetNode, Object);
 };
 
 /*!
@@ -228,7 +229,7 @@ class ModularSet : public ObjectRef {
  public:
   TVM_DLL ModularSet(int64_t coeff, int64_t base);
 
-  TVM_DEFINE_OBJECT_REF_METHODS(ModularSet, ObjectRef, ModularSetNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(ModularSet, ObjectRef, ModularSetNode);
 };
 
 /*!
@@ -256,6 +257,8 @@ class ModularSetAnalyzer {
   friend class ConstraintContext;
   explicit ModularSetAnalyzer(Analyzer* parent);
   TVM_DLL ~ModularSetAnalyzer();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const ModularSetAnalyzer& other);
   /*!
    * \brief Update the internal state to enter constraint.
    * \param constraint A constraint expression.
@@ -296,7 +299,7 @@ class RewriteSimplifier {
    *
    * \return an exit function that must be called to cleanup the constraint can be nullptr.
    */
-  TVM_DLL std::function<void()> EnterConstraint(const PrimExpr& constraint);
+  TVM_DLL std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false);
 
   /*! \brief Flags to enable more computationally-intensive simplifications
    *
@@ -409,6 +412,8 @@ class RewriteSimplifier {
   friend class CanonicalSimplifier;
   explicit RewriteSimplifier(Analyzer* parent);
   TVM_DLL ~RewriteSimplifier();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const RewriteSimplifier& other);
   class Impl;
   /*! \brief Internal impl */
   Impl* impl_;
@@ -440,6 +445,8 @@ class CanonicalSimplifier {
   friend class ConstraintContext;
   explicit CanonicalSimplifier(Analyzer* parent);
   TVM_DLL ~CanonicalSimplifier();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const CanonicalSimplifier& other);
   class Impl;
   /*! \brief Internal impl */
   Impl* impl_;
@@ -525,6 +532,8 @@ class TransitiveComparisonAnalyzer {
   friend class ConstraintContext;
   TransitiveComparisonAnalyzer();
   TVM_DLL ~TransitiveComparisonAnalyzer();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const TransitiveComparisonAnalyzer& other);
   class Impl;
   /*! \brief Internal impl */
   std::unique_ptr<Impl> impl_;
@@ -555,8 +564,8 @@ class ConstraintContext {
    * \param analyzer The analyzer.
    * \param constraint The constraint to be applied.
    */
-  ConstraintContext(Analyzer* analyzer, PrimExpr constraint)
-      : analyzer_(analyzer), constraint_(constraint) {}
+  ConstraintContext(Analyzer* analyzer, PrimExpr constraint, bool is_assume=false)
+      : analyzer_(analyzer), constraint_(constraint), is_assume_(is_assume) {}
   // enter the scope.
   void EnterWithScope();
   // exit the scope.
@@ -567,6 +576,7 @@ class ConstraintContext {
   PrimExpr constraint_;
   /*! \brief function to be called in recovery */
   std::vector<std::function<void()>> recovery_functions_;
+  bool is_assume_;
 };
 
 /*!
@@ -582,7 +592,7 @@ class IntSetAnalyzer {
    * \param dom_map The domain map to indicate which variable to relax.
    * \return the result of the analysis.
    */
-  TVM_DLL IntSet operator()(const PrimExpr& expr, const Map<Var, IntSet>& dom_map);
+  TVM_DLL IntSet operator()(const PrimExpr& expr, const ffi::Map<Var, IntSet>& dom_map);
 
   /*!
    * \brief Find a symbolic integer set that contains all possible
@@ -618,8 +628,113 @@ class IntSetAnalyzer {
   friend class Analyzer;
   explicit IntSetAnalyzer(Analyzer* parent);
   TVM_DLL ~IntSetAnalyzer();
+  // Deep-copy internal state from another instance (for Analyzer::Clone)
+  void CopyFrom(const IntSetAnalyzer& other);
   class Impl;
   /*! \brief Internal impl */
+  Impl* impl_;
+};
+
+class Z3Prover {
+ public:
+  /*!
+   * \brief Update binding of var to a new expression.
+   *
+   * \param var The variable of interest.
+   * \param new_range The range of allowed values for this var.
+   * \param allow_override whether we allow override of existing information.
+   */
+  TVM_DLL void Bind(const Var& var, const Range& new_range, bool allow_override = false);
+
+  /*!
+    * \brief Update binding of var to a new expression.
+    *
+    * \param var The variable of interest.
+    * \param expr The bound expression
+    * \param allow_override whether we allow override of existing information.
+    */
+  TVM_DLL void Bind(const Var& var, const PrimExpr& expr, bool allow_override = false);
+
+  /*!
+   * \brief Whether can we prove expr is always true.
+   *
+   * \param expr The expression.
+   * \return Whether we can prove it.
+   *
+   * \note Analyzer will call into sub-analyzers to get the result.
+   */
+  TVM_DLL bool CanProve(const PrimExpr & expr);
+
+  /*!
+   * \brief Update the internal state to enter constraint.
+   * \param constraint A constraint expression.
+   *
+   * \return an exit function that must be called to cleanup the constraint can be nullptr.
+   */
+  std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false);
+
+  /*!
+   * \brief Get the SMTLIB2 representation of the current context
+   * \param expr The optional expression to check
+   * \return The SMTLIB2 string
+   */
+  ffi::String GetSMTLIB2(const ffi::Optional<PrimExpr> expr);
+
+  /*!
+   * \brief Get statistics about Z3 prover
+   * \return The statistics string
+   */
+  ffi::String GetStats();
+
+  /*!
+   * \brief Set timeout in milliseconds for Z3 prover
+   * \param timeout_ms The timeout in milliseconds
+   */
+  void SetTimeoutMs(unsigned timeout_ms);
+
+  /*!
+   * \brief Set resource limitation for Z3 prover
+   * \param rlimit the resource limitation (like maxinum step or sth.)
+   */
+  void SetRLimit(unsigned rlimit);
+
+  /*!
+   * \brief Get the Z3 model for the given expression if satisfiable
+   * \param expr The expression to get the model for
+   * \return The model as a string
+   */
+  ffi::String GetModel(const PrimExpr & expr);
+
+  /*!
+   * \brief Count the number of integer values that satisfy the current constraints.
+   *
+   * This method uses Z3's model enumeration (AllSAT) to count how many distinct
+   * values of the given variable satisfy all current constraints. This is useful
+   * for determining the exact number of threads that will reach a synchronization
+   * point when the condition involves non-range constraints like modulo operations.
+   *
+   * For example, if the constraint is `threadIdx.x % 4 == 0` with `threadIdx.x in [0, 128)`,
+   * this method will return 32 (the values 0, 4, 8, ..., 124).
+   *
+   * \param var The variable to count satisfying values for.
+   * \param max_count Maximum number of solutions to enumerate (for safety).
+   *                  If more solutions exist, returns max_count.
+   * \param min_consecutive Minimum consecutive count requirement (default 1).
+   *                        Values must form groups of at least this many
+   *                        consecutive integers. E.g., with min_consecutive=4:
+   *                        {0,1,2,3,16,17,18,19} is valid, {0,1,4,5} is invalid.
+   * \return The number of distinct values that satisfy the constraints,
+   *         -1 if the problem is unsatisfiable or an error occurred,
+   *         -2 if the min_consecutive constraint is not satisfied.
+   */
+  TVM_DLL int64_t CountSatisfyingValues(const Var& var, int64_t max_count = 2048, int64_t min_consecutive = 1);
+
+ private:
+  friend class Analyzer;
+  explicit Z3Prover(Analyzer* parent);
+  TVM_DLL ~Z3Prover();
+  void CopyFrom(const Z3Prover & other);
+  class Impl;
   Impl* impl_;
 };
 
@@ -652,8 +767,15 @@ class TVM_DLL Analyzer {
   IntSetAnalyzer int_set;
   /*! \brief sub-analyzer transitive comparisons */
   TransitiveComparisonAnalyzer transitive_comparisons;
+  /*! \brief analyzer using z3 */
+  Z3Prover z3_prover;
   /*! \brief constructor */
   Analyzer();
+  /*!
+   * \brief Create a deep copy of this Analyzer, including all sub-analyzer states.
+   * \return A new Analyzer with copied internal state.
+   */
+  std::unique_ptr<Analyzer> Clone() const;
   /*!
    * \brief Mark the value as non-negative value globally in analyzer.
    *
@@ -704,7 +826,7 @@ class TVM_DLL Analyzer {
    *        expression. This option should not be used if there is any dependency
    *        between variables.
    */
-  void Bind(const Map<Var, Range>& variables, bool allow_override = false);
+  void Bind(const ffi::Map<Var, Range>& variables, bool allow_override = false);
   /*!
    * \brief Whether can we prove expr >= val.
 
@@ -786,6 +908,8 @@ class TVM_DLL Analyzer {
    * \note Analyzer will call into sub-analyzers to get the result.
    */
   PrimExpr Simplify(const PrimExpr& expr, int steps = 2);
+
+  std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false);
 };
 
 }  // namespace arith
