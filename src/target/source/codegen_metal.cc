@@ -163,6 +163,51 @@ void CodeGenMetal::PrintFP8Prelude(std::ostream& os) {
       "}\n\n";
 }
 
+// Vector FP8 cast helpers (lanes = 2, 3, 4). Storage rules:
+//   lanes 2-4 -> ucharN (matches PrintType output)
+// Each helper just calls the scalar variant per lane. Keeping the vector type
+// at the IR level lets subsequent passes preserve their vector loads/stores.
+void CodeGenMetal::PrintFP8VectorPrelude(std::ostream& os) {
+  os <<
+      "// Vector FP8 helpers (lanes 2/3/4 use ucharN packed storage).\n"
+      "inline half2 __tvm_fp8_e4m3_to_half_v2(uchar2 x) {\n"
+      "  return half2(__tvm_fp8_e4m3_to_half(x.x), __tvm_fp8_e4m3_to_half(x.y));\n"
+      "}\n"
+      "inline half3 __tvm_fp8_e4m3_to_half_v3(uchar3 x) {\n"
+      "  return half3(__tvm_fp8_e4m3_to_half(x.x), __tvm_fp8_e4m3_to_half(x.y), __tvm_fp8_e4m3_to_half(x.z));\n"
+      "}\n"
+      "inline half4 __tvm_fp8_e4m3_to_half_v4(uchar4 x) {\n"
+      "  return half4(__tvm_fp8_e4m3_to_half(x.x), __tvm_fp8_e4m3_to_half(x.y), __tvm_fp8_e4m3_to_half(x.z), __tvm_fp8_e4m3_to_half(x.w));\n"
+      "}\n"
+      "inline half2 __tvm_fp8_e5m2_to_half_v2(uchar2 x) {\n"
+      "  return half2(__tvm_fp8_e5m2_to_half(x.x), __tvm_fp8_e5m2_to_half(x.y));\n"
+      "}\n"
+      "inline half3 __tvm_fp8_e5m2_to_half_v3(uchar3 x) {\n"
+      "  return half3(__tvm_fp8_e5m2_to_half(x.x), __tvm_fp8_e5m2_to_half(x.y), __tvm_fp8_e5m2_to_half(x.z));\n"
+      "}\n"
+      "inline half4 __tvm_fp8_e5m2_to_half_v4(uchar4 x) {\n"
+      "  return half4(__tvm_fp8_e5m2_to_half(x.x), __tvm_fp8_e5m2_to_half(x.y), __tvm_fp8_e5m2_to_half(x.z), __tvm_fp8_e5m2_to_half(x.w));\n"
+      "}\n"
+      "inline uchar2 __tvm_half_to_fp8_e4m3_v2(half2 v) {\n"
+      "  return uchar2(__tvm_half_to_fp8_e4m3(v.x), __tvm_half_to_fp8_e4m3(v.y));\n"
+      "}\n"
+      "inline uchar3 __tvm_half_to_fp8_e4m3_v3(half3 v) {\n"
+      "  return uchar3(__tvm_half_to_fp8_e4m3(v.x), __tvm_half_to_fp8_e4m3(v.y), __tvm_half_to_fp8_e4m3(v.z));\n"
+      "}\n"
+      "inline uchar4 __tvm_half_to_fp8_e4m3_v4(half4 v) {\n"
+      "  return uchar4(__tvm_half_to_fp8_e4m3(v.x), __tvm_half_to_fp8_e4m3(v.y), __tvm_half_to_fp8_e4m3(v.z), __tvm_half_to_fp8_e4m3(v.w));\n"
+      "}\n"
+      "inline uchar2 __tvm_half_to_fp8_e5m2_v2(half2 v) {\n"
+      "  return uchar2(__tvm_half_to_fp8_e5m2(v.x), __tvm_half_to_fp8_e5m2(v.y));\n"
+      "}\n"
+      "inline uchar3 __tvm_half_to_fp8_e5m2_v3(half3 v) {\n"
+      "  return uchar3(__tvm_half_to_fp8_e5m2(v.x), __tvm_half_to_fp8_e5m2(v.y), __tvm_half_to_fp8_e5m2(v.z));\n"
+      "}\n"
+      "inline uchar4 __tvm_half_to_fp8_e5m2_v4(half4 v) {\n"
+      "  return uchar4(__tvm_half_to_fp8_e5m2(v.x), __tvm_half_to_fp8_e5m2(v.y), __tvm_half_to_fp8_e5m2(v.z), __tvm_half_to_fp8_e5m2(v.w));\n"
+      "}\n\n";
+}
+
 void CodeGenMetal::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
   // NOTE: There is no inter-function calls among Metal kernels.
   // For now we keep the metal codegen without inter-function call
@@ -584,13 +629,53 @@ void CodeGenMetal::VisitExpr_(const CastNode* op, std::ostream& os) {  // NOLINT
       }
       return;
     }
-    // Vector path: not supported by this storage-only patch; defer to scalarised
-    // emulation by emitting per-lane casts via CodeGenC's lane-by-lane fallback.
-    // Falling through to CodeGenC will produce raw uchar<->float casts which
-    // are wrong for FP8 semantics; warn loudly so callers know to scalarise.
-    LOG(FATAL) << "Vector FP8 casts (lanes=" << target_ty.lanes()
-               << ") are not yet supported by Metal storage-only FP8 emulation;"
-               << " scalarise the cast or extend codegen_metal.cc.";
+    // Vector path (lanes 2/3/4): route through the vector helpers which
+    // wrap the scalar helpers per-lane while preserving the vector type at
+    // the IR level. Wider widths are not yet wired up — wider FP8 vectors
+    // should be lowered through alloc_local + scalar casts upstream.
+    int lanes = target_ty.lanes();
+    if (lanes == 2 || lanes == 3 || lanes == 4) {
+      enable_fp8_vector_ = true;
+      auto fp8_to_half_vec = [&](DataType ft) {
+        const char* base = ft.code() == DataType::kFloat8_e5m2
+                               ? "__tvm_fp8_e5m2_to_half"
+                               : "__tvm_fp8_e4m3_to_half";
+        return std::string(base) + "_v" + std::to_string(lanes);
+      };
+      auto half_to_fp8_vec = [&](DataType tt) {
+        const char* base = tt.code() == DataType::kFloat8_e5m2
+                               ? "__tvm_half_to_fp8_e5m2"
+                               : "__tvm_half_to_fp8_e4m3";
+        return std::string(base) + "_v" + std::to_string(lanes);
+      };
+      std::string val = PrintExpr(op->value);
+      if (from_ty.is_float8() && !target_ty.is_float8()) {
+        std::string h = fp8_to_half_vec(from_ty) + "(" + val + ")";
+        if (target_ty == DataType::Float(16, lanes)) {
+          os << h;
+        } else {
+          os << "((";
+          PrintType(target_ty, os);
+          os << ")(" << h << "))";
+        }
+        return;
+      } else if (!from_ty.is_float8() && target_ty.is_float8()) {
+        std::string h_val = val;
+        if (from_ty != DataType::Float(16, lanes)) {
+          h_val = "((half" + std::to_string(lanes) + ")(" + val + "))";
+        }
+        os << half_to_fp8_vec(target_ty) << "(" << h_val << ")";
+        return;
+      } else {
+        std::string h = fp8_to_half_vec(from_ty) + "(" + val + ")";
+        os << half_to_fp8_vec(target_ty) << "(" << h << ")";
+        return;
+      }
+    }
+    LOG(FATAL) << "Vector FP8 casts (lanes=" << lanes
+               << ") not supported by Metal storage-only FP8 emulation."
+               << " Currently only lanes 2/3/4 are wired through inline"
+               << " helpers; wider widths must be lowered to scalar casts.";
   }
   CodeGenC::VisitExpr_(op, os);
 }
@@ -602,6 +687,9 @@ std::string CodeGenMetal::Finish() {
   std::ostringstream prelude;
   if (enable_fp8_) {
     PrintFP8Prelude(prelude);
+  }
+  if (enable_fp8_vector_) {
+    PrintFP8VectorPrelude(prelude);
   }
   std::string base = CodeGenC::Finish();
   if (prelude.str().empty()) return base;
