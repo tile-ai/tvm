@@ -146,8 +146,15 @@ void CodeGenMetal::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
     decl_stream << "};\n\n";
   }
   // Setup the thread group info.
+  // Reserve the CUDA-style alias names so user code or downstream passes
+  // cannot accidentally collide with them, even though the kernel itself
+  // emits Metal builtin names directly (no `blockIdx`/`threadIdx` aliases).
   ICHECK_EQ(name_supply_->FreshName("threadIdx"), "threadIdx");
   ICHECK_EQ(name_supply_->FreshName("blockIdx"), "blockIdx");
+  ICHECK_EQ(name_supply_->FreshName("threadgroup_position_in_grid"),
+            "threadgroup_position_in_grid");
+  ICHECK_EQ(name_supply_->FreshName("thread_position_in_threadgroup"),
+            "thread_position_in_threadgroup");
   int work_dim = 0;
   auto launch_params =
       func->GetAttr<ffi::Array<ffi::String>>(tir::attr::kKernelLaunchParams).value();
@@ -159,13 +166,16 @@ void CodeGenMetal::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
   }
 
   if (work_dim != 0) {
-    // use ushort by default for now
+    // Emit Metal builtin names directly as the kernel parameter identifiers
+    // rather than using CUDA-style `blockIdx`/`threadIdx` aliases. This keeps
+    // body references aligned with Apple's MSL convention and avoids forcing
+    // downstream passes to canonicalize the alias back to the Metal builtin.
     stream << "  ";
     PrintType(DataType::UInt(thread_index_bits_, work_dim), stream);
-    stream << " blockIdx [[threadgroup_position_in_grid]],\n";
+    stream << " threadgroup_position_in_grid [[threadgroup_position_in_grid]],\n";
     stream << "  ";
     PrintType(DataType::UInt(thread_index_bits_, work_dim), stream);
-    stream << " threadIdx [[thread_position_in_threadgroup]]\n";
+    stream << " thread_position_in_threadgroup [[thread_position_in_threadgroup]]\n";
   }
   thread_work_dim_ = work_dim;
 
@@ -180,11 +190,24 @@ void CodeGenMetal::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
 
 void CodeGenMetal::BindThreadIndex(const IterVar& iv) {
   ICHECK(!var_idmap_.count(iv->var.get()));
-  // if we only have threadIdx.x
-  // metal will directly print as threadIdx
+  // The thread_tag is the CUDA-style name (e.g. "threadIdx.x", "blockIdx.y").
+  // Translate to the Metal builtin reference so emitted body references
+  // resolve directly against the kernel parameters declared in AddFunction
+  // (which now use the Metal builtin names verbatim instead of the
+  // blockIdx/threadIdx aliases). The .x/.y/.z suffix is preserved.
   std::string vname = iv->thread_tag;
-  if (thread_work_dim_ <= 1) {
-    vname = vname.substr(0, iv->thread_tag.length() - 2);
+  std::string axis;
+  if (vname.length() >= 2 && vname[vname.length() - 2] == '.') {
+    axis = vname.substr(vname.length() - 2);  // ".x" / ".y" / ".z"
+    vname = vname.substr(0, vname.length() - 2);
+  }
+  if (vname == "threadIdx") {
+    vname = "thread_position_in_threadgroup";
+  } else if (vname == "blockIdx") {
+    vname = "threadgroup_position_in_grid";
+  }
+  if (thread_work_dim_ > 1) {
+    vname += axis;
   }
   var_idmap_[iv->var.get()] =
       CastFromTo(vname, DataType::UInt(thread_index_bits_), iv->var.dtype());
