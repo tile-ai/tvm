@@ -39,10 +39,10 @@ namespace arith {
 
 using namespace tir;
 
-TVM_FFI_STATIC_INIT_BLOCK({ ModularSetNode::RegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { ModularSetNode::RegisterReflection(); }
 
 ModularSet::ModularSet(int64_t coeff, int64_t base) {
-  auto node = make_object<ModularSetNode>();
+  auto node = ffi::make_object<ModularSetNode>();
   node->coeff = coeff;
   node->base = base;
   // finish construction.
@@ -58,10 +58,10 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
 
 ModularSet MakeModularSet(int64_t coeff, int64_t base) { return ModularSet(coeff, base); }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.ModularSet", MakeModularSet);
-});
+}
 
 // internal entry for const int bound
 struct ModularSetAnalyzer::Entry {
@@ -103,6 +103,8 @@ struct ModularSetAnalyzer::Entry {
 class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(const PrimExpr&)> {
  public:
   explicit Impl(Analyzer* parent) : parent_(parent) {}
+
+  void CopyFrom(const Impl& other) { var_map_ = other.var_map_; }
 
   void Update(const Var& var, const ModularSet& info, bool allow_override) {
     if (!allow_override) {
@@ -273,7 +275,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
   }
 
   Entry VisitExpr_(const VarNode* op) final {
-    Var v = GetRef<Var>(op);
+    Var v = ffi::GetRef<Var>(op);
     auto it = var_map_.find(v);
     if (it != var_map_.end()) {
       return it->second;
@@ -398,6 +400,9 @@ std::function<void()> ModularSetAnalyzer::EnterConstraint(const PrimExpr& constr
 ModularSetAnalyzer::ModularSetAnalyzer(Analyzer* parent) : impl_(new Impl(parent)) {}
 
 ModularSetAnalyzer::~ModularSetAnalyzer() { delete impl_; }
+
+// Deep copy internal state from another analyzer
+void ModularSetAnalyzer::CopyFrom(const ModularSetAnalyzer& other) { this->impl_->CopyFrom(*other.impl_); }
 
 }  // namespace arith
 }  // namespace tvm

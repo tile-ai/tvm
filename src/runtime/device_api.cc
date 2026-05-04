@@ -21,7 +21,7 @@
  * \file device_api.cc
  * \brief Device specific implementations
  */
-#include <tvm/ffi/container/ndarray.h>
+#include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/optional.h>
@@ -107,7 +107,7 @@ static size_t GetDataAlignment(const DLDataType dtype) {
   return align;
 }
 
-size_t DeviceAPI::GetDataSize(const DLTensor& arr, Optional<String> mem_scope) {
+size_t DeviceAPI::GetDataSize(const DLTensor& arr, ffi::Optional<ffi::String> mem_scope) {
   if (!mem_scope.has_value() || mem_scope.value().empty() || mem_scope.value() == "global") {
     size_t size = 1;
     for (int i = 0; i < arr.ndim; ++i) {
@@ -121,7 +121,7 @@ size_t DeviceAPI::GetDataSize(const DLTensor& arr, Optional<String> mem_scope) {
 }
 
 void* DeviceAPI::AllocDataSpace(Device dev, int ndim, const int64_t* shape, DLDataType dtype,
-                                Optional<String> mem_scope) {
+                                ffi::Optional<ffi::String> mem_scope) {
   if (!mem_scope.has_value() || mem_scope.value().empty() || mem_scope.value() == "global") {
     // by default, we can always redirect to the flat memory allocations
     DLTensor temp;
@@ -169,13 +169,13 @@ void DeviceAPI::SetStream(Device dev, TVMStreamHandle stream) {
 }
 
 TVMStreamHandle DeviceAPI::GetCurrentStream(Device dev) {
-  return TVMFFIEnvGetCurrentStream(dev.device_type, dev.device_id);
+  return TVMFFIEnvGetStream(dev.device_type, dev.device_id);
 }
 
 void DeviceAPI::SyncStreamFromTo(Device dev, TVMStreamHandle event_src, TVMStreamHandle event_dst) {
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.Device_StreamCreate",
@@ -198,10 +198,10 @@ TVM_FFI_STATIC_INIT_BLOCK({
         DeviceAPIManager::Get(dev)->SyncStreamFromTo(dev, reinterpret_cast<TVMStreamHandle>(src),
                                                      reinterpret_cast<TVMStreamHandle>(dst));
       });
-});
+}
 
 // set device api
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed(tvm::runtime::symbol::tvm_set_device,
@@ -235,7 +235,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
         dev.device_id = device_id;
         DeviceAPIManager::Get(dev)->SetStream(dev, stream);
       });
-});
+}
 }  // namespace runtime
 }  // namespace tvm
 

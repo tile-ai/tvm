@@ -22,7 +22,7 @@
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include "../cublas/cublas_utils.h"
 #include "gemm_runner.cuh"
@@ -39,12 +39,10 @@ namespace tvm {
 namespace runtime {
 
 template <typename ElementA, typename ElementB, typename ElementC>
-void tvm_cutlass_fp8_gemm(NDArray x, NDArray weight, NDArray workspace, NDArray alpha,
-                          NDArray out) {
+void tvm_cutlass_fp8_gemm(Tensor x, Tensor weight, Tensor workspace, Tensor alpha, Tensor out) {
   // Workspace is used for storing device-side gemm arguments and cutlass internal workspace.
   // Recommened size is 4MB.
-  cudaStream_t stream =
-      static_cast<cudaStream_t>(TVMFFIEnvGetCurrentStream(kDLCUDA, x->device.device_id));
+  cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(kDLCUDA, x->device.device_id));
 
   CHECK_GE(x->ndim, 2);
   CHECK_EQ(weight->ndim, 2);
@@ -78,7 +76,7 @@ void tvm_cutlass_fp8_gemm(NDArray x, NDArray weight, NDArray workspace, NDArray 
   }
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("cutlass.gemm_e5m2_e5m2_fp16",
@@ -87,7 +85,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
            tvm_cutlass_fp8_gemm<cutlass::float_e5m2_t, cutlass::float_e4m3_t, cutlass::half_t>)
       .def("cutlass.gemm_e4m3_e4m3_fp16",
            tvm_cutlass_fp8_gemm<cutlass::float_e4m3_t, cutlass::float_e4m3_t, cutlass::half_t>);
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

@@ -52,6 +52,10 @@ struct CUDAMath {
         default:
           return "";
       }
+    } else if (t.is_tfloat32()) {
+      if (name == "fabs") {
+        return "abs";
+      }
     } else if (t.is_bfloat16()) {
       if (name == "fabs") {
         return "__habs";
@@ -136,7 +140,7 @@ struct CUDAWarpIntrinsic {
 
 static PrimExpr DispatchCUDAWarpActiveMask(const PrimExpr& e) {
   const CallNode* call = e.as<CallNode>();
-  return Call(call->dtype, Op::Get("tir.cuda.__activemask"), call->args);
+  return Call(call->dtype, Op::Get("tir.cuda.__activemask"), call->args, call->annotations);
 }
 
 template <typename T>
@@ -144,8 +148,8 @@ static PrimExpr DispatchCUDAShuffle(const PrimExpr& e) {
   const CallNode* call = e.as<CallNode>();
   ICHECK(call != nullptr);
   ICHECK_EQ(call->args.size(), 5);  // mask, value, warp_id, width, warp_size
-  Array<PrimExpr> cuda_args{{call->args[0], call->args[1], call->args[2], call->args[3]}};
-  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), cuda_args);
+  ffi::Array<PrimExpr> cuda_args{{call->args[0], call->args[1], call->args[2], call->args[3]}};
+  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), cuda_args, call->annotations);
 }
 
 TVM_REGISTER_OP("tir.clz").set_attr<FLowerIntrinsic>(
@@ -170,37 +174,37 @@ TVM_REGISTER_OP("tir.nearbyint")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.exp").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
-                                                     DispatchPureExtern<CUDAFastMath>);
+                                                     DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.exp2")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.exp10")
-    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>);
+    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.erf").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
                                                      DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.log").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
-                                                     DispatchPureExtern<CUDAFastMath>);
+                                                     DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.log2")
-    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>);
+    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.log10")
-    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>);
+    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.tan").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
-                                                     DispatchPureExtern<CUDAFastMathTan>);
+                                                     DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.cos").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
-                                                     DispatchPureExtern<CUDAFastMath>);
+                                                     DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.cosh")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.sin").set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic",
-                                                     DispatchPureExtern<CUDAFastMath>);
+                                                     DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tir.sinh")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);

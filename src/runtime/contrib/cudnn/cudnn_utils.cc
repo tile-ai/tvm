@@ -129,8 +129,8 @@ CuDNNThreadEntry* CuDNNThreadEntry::ThreadLocal(Device curr_device, bool check_e
     ICHECK(res->exists()) << "CUDNN_STATUS_NOT_INITIALIZED";
   }
 
-  cudaStream_t stream = static_cast<cudaStream_t>(
-      TVMFFIEnvGetCurrentStream(curr_device.device_type, curr_device.device_id));
+  cudaStream_t stream =
+      static_cast<cudaStream_t>(TVMFFIEnvGetStream(curr_device.device_type, curr_device.device_id));
   CUDNN_CALL(cudnnSetStream(res->handle, stream));
   return res;
 }
@@ -267,14 +267,14 @@ SoftmaxEntry::SoftmaxEntry() { CUDNN_CALL(cudnnCreateTensorDescriptor(&shape_des
 
 SoftmaxEntry::~SoftmaxEntry() { CUDNN_CALL(cudnnDestroyTensorDescriptor(shape_desc)); }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tvm.contrib.cudnn.exists", []() -> bool {
     int device_id;
     CUDA_CALL(cudaGetDevice(&device_id));
     return CuDNNThreadEntry::ThreadLocal(DLDevice{kDLCUDA, device_id}, false)->exists();
   });
-});
+}
 
 }  // namespace contrib
 }  // namespace tvm

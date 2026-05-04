@@ -26,8 +26,8 @@ from . import libinfo
 # ----------------------------
 # Python3 version.
 # ----------------------------
-if not (sys.version_info[0] >= 3 and sys.version_info[1] >= 9):
-    PY3STATEMENT = "The minimal Python requirement is Python 3.9"
+if not (sys.version_info[0] >= 3 and sys.version_info[1] >= 8):
+    PY3STATEMENT = "The minimal Python requirement is Python 3.8"
     raise Exception(PY3STATEMENT)
 
 # ----------------------------
@@ -42,7 +42,7 @@ def _load_lib():
     if sys.platform.startswith("win32"):
         for path in libinfo.get_dll_directories():
             os.add_dll_directory(path)
-    lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+    lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL | os.RTLD_LAZY)
     return lib, os.path.basename(lib_path[0])
 
 
@@ -62,7 +62,7 @@ _RUNTIME_ONLY = "runtime" in _LIB_NAME
 
 
 if _RUNTIME_ONLY:
-    from .ffi import registry as _tvm_ffi_registry
+    from tvm_ffi import registry as _tvm_ffi_registry
 
     _tvm_ffi_registry._SKIP_UNKNOWN_OBJECTS = True
 

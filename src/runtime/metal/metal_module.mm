@@ -33,6 +33,7 @@
 #include "../pack_args.h"
 #include "../thread_storage_scope.h"
 #include "metal_common.h"
+#include "tvm/runtime/device_api.h"
 
 namespace tvm {
 namespace runtime {
@@ -58,9 +59,9 @@ class MetalModuleNode final : public ffi::ModuleObj {
     return ffi::Module::kBinarySerializable | ffi::Module::kRunnable;
   }
 
-  Optional<ffi::Function> GetFunction(const String& name) final;
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final;
 
-  void WriteToFile(const String& file_name, const String& format) const final {
+  void WriteToFile(const ffi::String& file_name, const ffi::String& format) const final {
     LOG(FATAL) << "Do not support save to file, use save to binary and export instead";
   }
 
@@ -75,7 +76,7 @@ class MetalModuleNode final : public ffi::ModuleObj {
     stream->Write(fmt_);
     return ffi::Bytes(buffer);
   }
-  String InspectSource(const String& format) const final {
+  ffi::String InspectSource(const ffi::String& format) const final {
     // return text source if available.
     return source_;
   }
@@ -200,6 +201,12 @@ class MetalWrappedFunc {
       auto stream =
           metal::MetalWorkspace::Global()->CastStreamOrGetDefault(t->stream[device_id], device_id);
 
+      if (!(stream = dynamic_cast<metal::MetalRawStream*>(metal::MetalWorkspace::Global()->CastStreamOrGetDefault(t->stream[device_id], device_id)))) {
+        // stream is not MetalRawStream
+        stream->SetError("Internal error: stream not from torch.");
+        return;
+      }
+
       // skip launching so the error can be printed during sync
       if (stream->HasErrorHappened()) return;
 
@@ -239,7 +246,8 @@ class MetalWrappedFunc {
           stream->SetError(os.str());
         }
       }];
-      [cb commit];
+      // When we reuse torch's command buffer, torch will sync
+      // [cb commit];
     };
   }
 
@@ -263,14 +271,14 @@ class MetalWrappedFunc {
   LaunchParamConfig launch_param_config_;
 };
 
-Optional<ffi::Function> MetalModuleNode::GetFunction(const String& name) {
+ffi::Optional<ffi::Function> MetalModuleNode::GetFunction(const ffi::String& name) {
   ffi::Function ret;
   AUTORELEASEPOOL {
     ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
     ICHECK_EQ(sptr_to_self.get(), this);
     auto it = fmap_.find(name);
     if (it == fmap_.end()) {
-      return std::nullopt;
+      return;
     }
     const FunctionInfo& info = it->second;
     MetalWrappedFunc f;
@@ -285,26 +293,26 @@ Optional<ffi::Function> MetalModuleNode::GetFunction(const String& name) {
 ffi::Module MetalModuleCreate(std::unordered_map<std::string, std::string> smap,
                               std::unordered_map<std::string, FunctionInfo> fmap, std::string fmt,
                               std::string source) {
-  ObjectPtr<Object> n;
-  AUTORELEASEPOOL { n = make_object<MetalModuleNode>(smap, fmap, fmt, source); };
+  ObjectPtr<MetalModuleNode> n;
+  AUTORELEASEPOOL { n = ffi::make_object<MetalModuleNode>(smap, fmap, fmt, source); };
   return ffi::Module(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def(
-      "runtime.module.create_metal_module",
-      [](Map<String, String> smap, std::string fmap_json, std::string fmt, std::string source) {
-        std::istringstream stream(fmap_json);
-        std::unordered_map<std::string, FunctionInfo> fmap;
-        dmlc::JSONReader reader(&stream);
-        reader.Read(&fmap);
+  refl::GlobalDef().def("runtime.module.create_metal_module",
+                        [](ffi::Map<ffi::String, ffi::String> smap, std::string fmap_json,
+                           std::string fmt, std::string source) {
+                          std::istringstream stream(fmap_json);
+                          std::unordered_map<std::string, FunctionInfo> fmap;
+                          dmlc::JSONReader reader(&stream);
+                          reader.Read(&fmap);
 
-        return MetalModuleCreate(
-            std::unordered_map<std::string, std::string>(smap.begin(), smap.end()), fmap, fmt,
-            source);
-      });
-});
+                          return MetalModuleCreate(std::unordered_map<std::string, std::string>(
+                                                       smap.begin(), smap.end()),
+                                                   fmap, fmt, source);
+                        });
+}
 
 ffi::Module MetalModuleLoadFromBytes(const ffi::Bytes& bytes) {
   dmlc::MemoryFixedSizeStream ms(const_cast<char*>(bytes.data()), bytes.size());
@@ -324,9 +332,19 @@ ffi::Module MetalModuleLoadFromBytes(const ffi::Bytes& bytes) {
   return MetalModuleCreate(smap, fmap, fmt, "");
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+void SetMetalStream(TVMStreamHandle stream) {
+  metal::MetalThreadEntry* t = metal::MetalThreadEntry::ThreadLocal();
+  auto s = new metal::MetalRawStream(static_cast<id<MTLCommandBuffer>>(stream));
+  if (t->stream.size() <= t->device.device_id) {
+    t->stream.resize(t->device.device_id);
+  }
+  t->stream[t->device.device_id] = static_cast<TVMStreamHandle>(s);
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("ffi.Module.load_from_bytes.metal", MetalModuleLoadFromBytes);
-});
+  refl::GlobalDef().def("ffi.Module.load_from_bytes.metal", MetalModuleLoadFromBytes)
+                   .def("metal.SetStream", SetMetalStream);
+}
 }  // namespace runtime
 }  // namespace tvm

@@ -87,7 +87,6 @@ import tvm
 import tvm.arith
 import tvm.tir
 import tvm.te
-import tvm.ffi
 
 from tvm.target import codegen
 from tvm.contrib import nvcc, cudnn, rocm
@@ -105,7 +104,7 @@ skip_if_wheel_test = pytest.mark.skipif(
 )
 
 
-def assert_allclose(actual, desired, rtol=1e-7, atol=1e-7):
+def assert_allclose(actual, desired, rtol=1e-7, atol=1e-7, verbose=True):
     """Version of np.testing.assert_allclose with `atol` and `rtol` fields set
     in reasonable defaults.
 
@@ -116,7 +115,7 @@ def assert_allclose(actual, desired, rtol=1e-7, atol=1e-7):
     actual = np.asanyarray(actual)
     desired = np.asanyarray(desired)
     np.testing.assert_allclose(actual.shape, desired.shape)
-    np.testing.assert_allclose(actual, desired, rtol=rtol, atol=atol, verbose=True)
+    np.testing.assert_allclose(actual, desired, rtol=rtol, atol=atol, verbose=verbose)
 
 
 def check_numerical_grads(
@@ -325,7 +324,7 @@ def check_bool_expr_is_true(bool_expr, vranges, cond=None):
             return tvm.tir.stmt_functor.substitute(expr, vmap)
 
         A = tvm.te.compute([r.extent.value for v, r in vranges.items()], _compute_body)
-        args = [tvm.nd.empty(A.shape, A.dtype)]
+        args = [tvm.runtime.empty(A.shape, A.dtype)]
         mod = tvm.compile(tvm.IRModule.from_expr(tvm.te.create_prim_func([A])))
         mod(*args)
         return args[0].numpy()

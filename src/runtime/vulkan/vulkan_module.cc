@@ -33,11 +33,11 @@ namespace vulkan {
 ffi::Module VulkanModuleCreate(std::unordered_map<std::string, SPIRVShader> smap,
                                std::unordered_map<std::string, FunctionInfo> fmap,
                                std::string source) {
-  auto n = make_object<VulkanModuleNode>(smap, fmap, source);
+  auto n = ffi::make_object<VulkanModuleNode>(smap, fmap, source);
   return ffi::Module(n);
 }
 
-ffi::Module VulkanModuleLoadFile(const std::string& file_name, const String& format) {
+ffi::Module VulkanModuleLoadFile(const std::string& file_name, const ffi::String& format) {
   std::string data;
   std::unordered_map<std::string, SPIRVShader> smap;
   std::unordered_map<std::string, FunctionInfo> fmap;
@@ -67,12 +67,12 @@ ffi::Module VulkanModuleLoadFromBytes(const ffi::Bytes& bytes) {
   return VulkanModuleCreate(smap, fmap, "");
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("ffi.Module.load_from_file.vulkan", VulkanModuleLoadFile)
       .def("ffi.Module.load_from_bytes.vulkan", VulkanModuleLoadFromBytes);
-});
+}
 
 }  // namespace vulkan
 }  // namespace runtime

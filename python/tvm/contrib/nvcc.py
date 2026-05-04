@@ -20,14 +20,30 @@ from __future__ import absolute_import as _abs
 
 import os
 import subprocess
+import tempfile
 import warnings
 from typing import Tuple
 
-import tvm.ffi
+import tvm_ffi
+import tvm
 from tvm.target import Target
 
 from ..base import py_str
 from . import utils
+
+
+def _resolve_artifact_paths(temp, file_name, target_format, kernels_output_dir=None):
+    if kernels_output_dir is None:
+        return temp.relpath(f"{file_name}.cu"), temp.relpath(f"{file_name}.{target_format}")
+
+    os.makedirs(kernels_output_dir, exist_ok=True)
+    source_fd, temp_code = tempfile.mkstemp(
+        prefix=f"{file_name}_", suffix=".cu", dir=kernels_output_dir
+    )
+    os.close(source_fd)
+    file_stem, _ = os.path.splitext(os.path.basename(temp_code))
+    temp_target = os.path.join(kernels_output_dir, f"{file_stem}.{target_format}")
+    return temp_code, temp_target
 
 
 def compile_cuda(code, target_format=None, arch=None, options=None, path_target=None):
@@ -85,20 +101,16 @@ def compile_cuda(code, target_format=None, arch=None, options=None, path_target=
         target_format = "ptx"
     if target_format not in ["cubin", "ptx", "fatbin"]:
         raise ValueError("target_format must be in cubin, ptx, fatbin")
-    temp_code = temp.relpath(f"{file_name}.cu")
-    temp_target = temp.relpath(f"{file_name}.{target_format}")
 
-    pass_context = tvm.get_global_func("transform.GetCurrentPassContext")()
+    pass_context = tvm_ffi.get_global_func("transform.GetCurrentPassContext")()
     kernels_output_dir = (
         pass_context.config["cuda.kernels_output_dir"]
         if "cuda.kernels_output_dir" in pass_context.config
         else None
     )
-    if kernels_output_dir is not None:
-        if not os.path.isdir(kernels_output_dir):
-            os.makedirs(kernels_output_dir)
-        temp_code = os.path.join(kernels_output_dir, f"{file_name}.cu")
-        temp_target = os.path.join(kernels_output_dir, f"{file_name}.{target_format}")
+    temp_code, temp_target = _resolve_artifact_paths(
+        temp, file_name, target_format, kernels_output_dir=kernels_output_dir
+    )
 
     with open(temp_code, "w") as out_file:
         out_file.write(code)
@@ -250,9 +262,10 @@ def get_cuda_version(cuda_path=None):
 def find_nvshmem_paths() -> Tuple[str, str]:
     """
     Searches for the NVSHMEM include and library directories.
-    Returns:
-        A tuple containing the path to the include directory and the library directory.
-        (include_path, lib_path)
+
+    Returns
+    -------
+    A tuple containing the path to the include directory and the library directory.
     """
     candidate_roots = []
 
@@ -311,14 +324,14 @@ def find_nvshmem_paths() -> Tuple[str, str]:
     raise RuntimeError("\n".join(error_message))
 
 
-@tvm.ffi.register_func
+@tvm_ffi.register_global_func
 def tvm_callback_cuda_compile(code, target):  # pylint: disable=unused-argument
     """use nvcc to generate fatbin code for better optimization"""
     ptx = compile_cuda(code, target_format="fatbin")
     return ptx
 
 
-@tvm.ffi.register_func("tvm_callback_libdevice_path")
+@tvm_ffi.register_global_func("tvm_callback_libdevice_path")
 def find_libdevice_path(arch):
     """Utility function to find libdevice
 
@@ -383,7 +396,7 @@ def callback_libdevice_path(arch):
         return ""
 
 
-@tvm.ffi.register_func("tvm.contrib.nvcc.get_compute_version")
+@tvm_ffi.register_global_func("tvm.contrib.nvcc.get_compute_version")
 def get_target_compute_version(target=None):
     """Utility function to get compute capability of compilation target.
 
@@ -528,7 +541,7 @@ def have_cudagraph():
         return False
 
 
-@tvm.ffi.register_func("tvm.contrib.nvcc.supports_bf16")
+@tvm_ffi.register_global_func("tvm.contrib.nvcc.supports_bf16")
 def have_bf16(compute_version):
     """Either bf16 support is provided in the compute capability or not
 
@@ -544,7 +557,7 @@ def have_bf16(compute_version):
     return False
 
 
-@tvm.ffi.register_func("tvm.contrib.nvcc.supports_fp8")
+@tvm_ffi.register_global_func("tvm.contrib.nvcc.supports_fp8")
 def have_fp8(compute_version):
     """Whether fp8 support is provided in the specified compute capability or not
 
@@ -562,7 +575,7 @@ def have_fp8(compute_version):
     return False
 
 
-@tvm.ffi.register_func("tvm.contrib.nvcc.supports_fp4")
+@tvm_ffi.register_global_func("tvm.contrib.nvcc.supports_fp4")
 def have_fp4(compute_version):
     """Whether fp4 support is provided in the specified compute capability or not
 

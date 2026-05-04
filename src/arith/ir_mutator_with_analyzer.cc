@@ -25,6 +25,7 @@
 #include <tvm/arith/iter_affine_map.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/op.h>
+#include "tvm/arith/analyzer.h"
 
 namespace tvm {
 namespace arith {
@@ -40,14 +41,14 @@ void IRMutatorWithAnalyzer::MarkBufferMapShapes(const tir::PrimFunc& func) {
   }
 }
 
-Array<PrimExpr> IRMutatorWithAnalyzer::IterMapSimplifyWithContext(const Array<PrimExpr>& indices,
-                                                                  bool non_trivial_only) {
+ffi::Array<PrimExpr> IRMutatorWithAnalyzer::IterMapSimplifyWithContext(
+    const ffi::Array<PrimExpr>& indices, bool non_trivial_only) {
   PrimExpr pred = const_true();
   for (PrimExpr val : iter_predicates_) {
     pred = pred && val;
   }
   int n = indices.size();
-  Array<PrimExpr> simplified = arith::IterMapSimplify(
+  ffi::Array<PrimExpr> simplified = arith::IterMapSimplify(
       indices, this->iter_vars_, pred, arith::IterMapLevel::Surjective, this->analyzer_);
   if (non_trivial_only) {
     for (int i = 0; i < n; ++i) {
@@ -64,6 +65,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const ForNode* op) {
   Range dom = Range::FromMinExtent(op->min, op->extent);
   analyzer_->Bind(op->loop_var, dom);
   iter_vars_.Set(op->loop_var, dom);
+  With<ConstraintContext> ctx(analyzer_, op->extent > 0);
   return StmtExprMutator::VisitStmt_(op);
 }
 
@@ -84,7 +86,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const LetStmtNode* op) {
   // as sub-class may or maynot choose to replace it.
   Stmt body = this->VisitStmt(op->body);
   if (value.same_as(op->value) && body.same_as(op->body)) {
-    return GetRef<Stmt>(op);
+    return ffi::GetRef<Stmt>(op);
   } else {
     auto n = this->CopyOnWrite(op);
     n->value = std::move(value);
@@ -105,7 +107,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const IfThenElseNode* op) {
   }
 
   Stmt then_case;
-  Optional<Stmt> else_case;
+  ffi::Optional<Stmt> else_case;
   {
     With<ConstraintContext> ctx(analyzer_, real_condition);
     WithRecordIterPredicate(real_condition, [&] { then_case = this->VisitStmt(op->then_case); });
@@ -121,7 +123,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const IfThenElseNode* op) {
 
   if (condition.same_as(op->condition) && then_case.same_as(op->then_case) &&
       else_case.same_as(op->else_case)) {
-    return GetRef<Stmt>(op);
+    return ffi::GetRef<Stmt>(op);
   } else {
     auto n = this->CopyOnWrite(op);
     n->condition = std::move(condition);
@@ -140,9 +142,15 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
     iter_vars_.Set(iv->var, dom);
     Stmt stmt = StmtExprMutator::VisitStmt_(op);
     return stmt;
-  } else {
+  } 
+  else if(op->attr_key == tir::attr::tilelang_assume) {
+    auto condition = Downcast<PrimExpr>(op->node);
+    With<ConstraintContext> constraint(analyzer_, condition, true);
     return StmtExprMutator::VisitStmt_(op);
   }
+  else {
+    return StmtExprMutator::VisitStmt_(op);
+  } 
 }
 
 Stmt IRMutatorWithAnalyzer::VisitStmt_(const AssertStmtNode* op) {
@@ -152,7 +160,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const AssertStmtNode* op) {
   Stmt body = this->VisitStmt(op->body);
 
   if (condition.same_as(op->condition) && message.same_as(op->message) && body.same_as(op->body)) {
-    return GetRef<Stmt>(op);
+    return ffi::GetRef<Stmt>(op);
   } else {
     auto n = this->CopyOnWrite(op);
     n->condition = std::move(condition);
@@ -185,9 +193,9 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const CallNode* op) {
     }
     if (cond.same_as(op->args[0]) && true_value.same_as(op->args[1]) &&
         false_value.same_as(op->args[2])) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
-      return Call(op->dtype, op->op, {cond, true_value, false_value});
+      return Call(op->dtype, op->op, {cond, true_value, false_value}, op->annotations);
     }
   }
   return StmtExprMutator::VisitExpr_(op);
@@ -202,7 +210,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const LetNode* op) {
   // as sub-class may or maynot choose to replace it.
   PrimExpr body = this->VisitExpr(op->body);
   if (value.same_as(op->value) && body.same_as(op->body)) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   } else {
     return Let(op->var, value, body);
   }
@@ -228,7 +236,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const SelectNode* op) {
   // normal path
   if (cond.same_as(op->condition) && true_value.same_as(op->true_value) &&
       false_value.same_as(op->false_value)) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   } else {
     return Select(cond, true_value, false_value);
   }

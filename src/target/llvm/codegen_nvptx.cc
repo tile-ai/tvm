@@ -316,7 +316,7 @@ llvm::Value* CodeGenNVPTX::CreateIntrinsic(const CallNode* op) {
 }
 
 int GetCUDAComputeVersion(const Target& target) {
-  Optional<String> mcpu = target->GetAttr<String>("mcpu");
+  ffi::Optional<ffi::String> mcpu = target->GetAttr<ffi::String>("mcpu");
   ICHECK(mcpu.has_value()) << "InternalError: \"-mcpu\" is undefined in the NVPTX target";
   std::string sm_version = mcpu.value();
   return std::stoi(sm_version.substr(3));
@@ -377,14 +377,14 @@ ffi::Module BuildNVPTX(IRModule mod, Target target) {
   return CUDAModuleCreate(ptx, "ptx", ExtractFuncInfo(mod), ll);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("target.build.nvptx", BuildNVPTX)
       .def_packed("tvm.codegen.llvm.target_nvptx", [](const ffi::PackedArgs& targs, ffi::Any* rv) {
         *rv = static_cast<void*>(new CodeGenNVPTX());
       });
-});
+}
 
 }  // namespace codegen
 }  // namespace tvm

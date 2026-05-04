@@ -26,7 +26,7 @@
 #include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include <cstddef>
 #include <string>
@@ -212,7 +212,7 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
    * \param sptr_to_self The pointer to the module node.
    * \return The packed function.
    */
-  virtual Optional<ffi::Function> GetFunction(const String& name) {
+  virtual ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) {
     ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
     if (name == "get_symbol") {
       return ffi::Function(
@@ -226,8 +226,9 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
         use_dpdk_cb = true;
       });
     } else if (name == "get_const_vars") {
-      return ffi::Function(
-          [sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) { *rv = Array<String>{}; });
+      return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
+        *rv = ffi::Array<ffi::String>{};
+      });
     } else if (this->symbol_name_ == name) {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
         RunInference(args);
@@ -274,8 +275,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
     ICHECK(stream->Read(&num_inputs)) << "Loading num_inputs failed";
     ICHECK(stream->Read(&num_outputs)) << "Loading num_outputs failed";
     ICHECK(stream->Read(&batch_size)) << "Loading batch_size failed";
-    auto n = make_object<MarvellHardwareModuleNode>(symbol_name, nodes_json, bin_code, num_inputs,
-                                                    num_outputs, batch_size);
+    auto n = ffi::make_object<MarvellHardwareModuleNode>(symbol_name, nodes_json, bin_code,
+                                                         num_inputs, num_outputs, batch_size);
     return ffi::Module(n);
   }
 
@@ -285,7 +286,7 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
    * \param format the format to return.
    * \return A string of JSON.
    */
-  String InspectSource(const String& format) const override { return nodes_json_; }
+  ffi::String InspectSource(const ffi::String& format) const override { return nodes_json_; }
 
  protected:
   std::string symbol_name_;
@@ -309,8 +310,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
 
     i_d_buf_float = reinterpret_cast<float*>(i_d_buf);
     for (int in = 0; in < num_inputs_; in++) {
-      if (args[in].IsObjectRef<NDArray>()) {
-        NDArray arr = args[in];
+      if (args[in].IsObjectRef<Tensor>()) {
+        Tensor arr = args[in];
         tensor = arr.operator->();
       } else {
         tensor = args[in].operator DLTensor*();
@@ -345,8 +346,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
     int out = num_inputs_;
 
     if (num_outputs_ == 1) {
-      if (args[out].IsObjectRef<NDArray>()) {
-        NDArray arr = args[out];
+      if (args[out].IsObjectRef<Tensor>()) {
+        Tensor arr = args[out];
         outTensor = arr.operator->();
       } else {
         outTensor = args[out].operator DLTensor*();
@@ -361,8 +362,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
 
       for (out = num_inputs_; out < args.size(); out++) {
         int out_tot_dim = 1;
-        if (args[out].IsObjectRef<NDArray>()) {
-          NDArray arr = args[out];
+        if (args[out].IsObjectRef<Tensor>()) {
+          Tensor arr = args[out];
           outTensor = arr.operator->();
         } else {
           outTensor = args[out].operator DLTensor*();
@@ -382,8 +383,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
     const DLTensor* tensor[64];
 
     for (int in = 0; in < num_inputs_; in++) {
-      if (args[in].IsObjectRef<NDArray>()) {
-        NDArray arr = args[in];
+      if (args[in].IsObjectRef<Tensor>()) {
+        Tensor arr = args[in];
         tensor[in] = arr.operator->();
       } else {
         tensor[in] = args[in].operator DLTensor*();
@@ -398,8 +399,8 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
 
     int i = 0;
     for (int out = num_inputs_; out < args.size(); out++) {
-      if (args[out].IsObjectRef<NDArray>()) {
-        NDArray arr = args[out];
+      if (args[out].IsObjectRef<Tensor>()) {
+        Tensor arr = args[out];
         tensor[i] = arr.operator->();
       } else {
         tensor[i] = args[out].operator DLTensor*();
@@ -469,11 +470,12 @@ class MarvellHardwareModuleNode : public ffi::ModuleObj {
   }
 };
 
-ffi::Module MarvellHardwareModuleRuntimeCreate(const String& symbol_name, const String& nodes_json,
-                                               const String& bin_code, int num_input,
+ffi::Module MarvellHardwareModuleRuntimeCreate(const ffi::String& symbol_name,
+                                               const ffi::String& nodes_json,
+                                               const ffi::String& bin_code, int num_input,
                                                int num_output, int batch_size) {
-  auto n = make_object<MarvellHardwareModuleNode>(symbol_name, nodes_json, bin_code, num_input,
-                                                  num_output, batch_size);
+  auto n = ffi::make_object<MarvellHardwareModuleNode>(symbol_name, nodes_json, bin_code, num_input,
+                                                       num_output, batch_size);
   return ffi::Module(n);
 }
 
@@ -483,12 +485,12 @@ bool MarvellHardwareModuleNode::use_dpdk_cb = false;
 ml_tvmc_cb MarvellHardwareModuleNode::tvmc_cb_ = {};
 ml_dpdk_cb MarvellHardwareModuleNode::dpdk_cb_ = {};
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.mrvl_hw_runtime_create", MarvellHardwareModuleRuntimeCreate)
       .def("ffi.Module.load_from_bytes.mrvl_hw", MarvellHardwareModuleNode::LoadFromBytes);
-});
+}
 }  // namespace contrib
 }  // namespace runtime
 }  // namespace tvm

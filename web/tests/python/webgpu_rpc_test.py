@@ -64,14 +64,14 @@ def test_rpc():
         # basic function checks.
         dev = remote.webgpu(0)
         adata = np.random.uniform(size=size).astype(A.dtype)
-        a = tvm.nd.array(adata, dev)
-        b = tvm.nd.array(np.zeros(size, dtype=A.dtype), dev)
+        a = tvm.runtime.tensor(adata, dev)
+        b = tvm.runtime.tensor(np.zeros(size, dtype=A.dtype), dev)
 
         np.testing.assert_equal(a.numpy(), adata)
         f1 = remote.system_lib()
         addone = f1.get_function("main")
         addone(a, b)
-        np.testing.assert_allclose(b.numpy(), np.log(np.abs(a.numpy()) + 1), atol=1e-5, rtol=1e-5)
+        tvm.testing.assert_allclose(b.numpy(), np.log(np.abs(a.numpy()) + 1), atol=1e-5, rtol=1e-5)
         print("Test pass..")
 
     check(remote, 71821 * 32)

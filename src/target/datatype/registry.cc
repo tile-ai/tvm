@@ -28,7 +28,7 @@ namespace datatype {
 using ffi::Any;
 using ffi::PackedArgs;
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed("dtype.register_custom_type",
@@ -47,7 +47,9 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .def_packed("runtime._datatype_get_type_registered", [](ffi::PackedArgs args, ffi::Any* ret) {
         *ret = Registry::Global()->GetTypeRegistered(args[0].cast<int>());
       });
-});
+  // Register tfloat32 as a custom datatype with type code 130
+  Registry::Global()->Register("tfloat32", 130);
+}
 
 Registry* Registry::Global() {
   static Registry inst;

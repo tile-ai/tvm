@@ -40,7 +40,7 @@ namespace tvm {
 namespace relax {
 
 namespace {
-std::tuple<DFPattern, ffi::TypedFunction<Expr(Expr, Map<DFPattern, Expr>)>> CreatePatterns(
+std::tuple<DFPattern, ffi::TypedFunction<Expr(Expr, ffi::Map<DFPattern, Expr>)>> CreatePatterns(
     const Function& func) {
   auto compile_time_arr = ComputableAtCompileTime(func);
   std::unordered_set<Var> compile_time_lookup(compile_time_arr.begin(), compile_time_arr.end());
@@ -73,24 +73,42 @@ std::tuple<DFPattern, ffi::TypedFunction<Expr(Expr, Map<DFPattern, Expr>)>> Crea
              pat_permuted_matmul_on_rhs;
 
   PrimExpr symbolic_var_constraints = Bool(true);
-  if (auto upper_bounds = func->GetAttr<Map<String, Any>>("tir_var_upper_bound")) {
-    Map<String, tir::Var> name_lookup;
+  auto upper_bounds = func->GetAttr<ffi::Map<ffi::String, Any>>("tir_var_upper_bound");
+  auto lower_bounds = func->GetAttr<ffi::Map<ffi::String, Any>>("tir_var_lower_bound");
+
+  if (upper_bounds || lower_bounds) {
+    ffi::Map<ffi::String, tir::Var> name_lookup;
     for (const auto& tir_var : TIRVarsInStructInfo(GetStructInfo(func))) {
       name_lookup.Set(tir_var->name_hint, tir_var);
       symbolic_var_constraints = symbolic_var_constraints && (0 <= tir_var);
     }
 
-    for (const auto& [key, obj_bound] : upper_bounds.value()) {
-      auto tir_var_name = Downcast<String>(key);
-      if (auto opt_var = name_lookup.Get(tir_var_name)) {
-        auto var = opt_var.value();
-        auto expr_bound = Downcast<PrimExpr>(obj_bound);
-        symbolic_var_constraints = symbolic_var_constraints && (var < expr_bound);
+    // Add lower bound constraints
+    if (lower_bounds) {
+      for (const auto& [key, obj_bound] : lower_bounds.value()) {
+        auto tir_var_name = Downcast<ffi::String>(key);
+        if (auto opt_var = name_lookup.Get(tir_var_name)) {
+          auto var = opt_var.value();
+          auto expr_bound = Downcast<PrimExpr>(obj_bound);
+          symbolic_var_constraints = symbolic_var_constraints && (expr_bound <= var);
+        }
+      }
+    }
+
+    // Add upper bound constraints
+    if (upper_bounds) {
+      for (const auto& [key, obj_bound] : upper_bounds.value()) {
+        auto tir_var_name = Downcast<ffi::String>(key);
+        if (auto opt_var = name_lookup.Get(tir_var_name)) {
+          auto var = opt_var.value();
+          auto expr_bound = Downcast<PrimExpr>(obj_bound);
+          symbolic_var_constraints = symbolic_var_constraints && (var < expr_bound);
+        }
       }
     }
   }
 
-  auto rewriter = [=](Expr expr, Map<DFPattern, Expr> matches) -> Expr {
+  auto rewriter = [=](Expr expr, ffi::Map<DFPattern, Expr> matches) -> Expr {
     auto expr_a = matches[pat_a];
     auto expr_b = matches[pat_b];
     auto expr_c = matches[pat_c];
@@ -102,7 +120,7 @@ std::tuple<DFPattern, ffi::TypedFunction<Expr(Expr, Map<DFPattern, Expr>)>> Crea
       return expr;
     }
 
-    auto get_shape = [](Expr expr) -> Optional<Array<PrimExpr>> {
+    auto get_shape = [](Expr expr) -> ffi::Optional<ffi::Array<PrimExpr>> {
       auto sinfo = expr->struct_info_.as<TensorStructInfoNode>();
       if (sinfo) {
         return sinfo->GetShape();
@@ -214,10 +232,10 @@ Pass AdjustMatmulOrder() {
   return CreateFunctionPass(pass_func, 1, "AdjustMatmulOrder", {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.transform.AdjustMatmulOrder", AdjustMatmulOrder);
-});
+}
 
 }  // namespace transform
 }  // namespace relax

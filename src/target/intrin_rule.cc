@@ -34,6 +34,9 @@ using tir::FLowerIntrinsic;
 TVM_REGISTER_OP("tir.exp").set_attr<FLowerIntrinsic>("default.FLowerIntrinsic",
                                                      DispatchPureExtern<FloatSuffix>);
 
+TVM_REGISTER_OP("tir.exp2")
+    .set_attr<FLowerIntrinsic>("default.FLowerIntrinsic", DispatchPureExtern<FloatSuffix>);
+
 TVM_REGISTER_OP("tir.erf").set_attr<FLowerIntrinsic>("default.FLowerIntrinsic",
                                                      DispatchPureExtern<FloatSuffix>);
 
@@ -181,7 +184,8 @@ TVM_REGISTER_OP("tir.isfinite")
     .set_attr<FLegalize>("default.FLegalize", [](const PrimExpr& e) -> PrimExpr {
       const CallNode* call = e.as<CallNode>();
       ICHECK(call != nullptr);
-      return isfinite(call->args[0]);
+      PrimExpr x = call->args[0];
+      return !isinf(x) && !isnan(x);
     });
 
 TVM_REGISTER_OP("tir.isinf")

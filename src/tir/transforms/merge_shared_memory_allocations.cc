@@ -125,7 +125,7 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
     auto it = alloc_info_.find(buf);
     if (it != alloc_info_.end() && it->second.alloc) {
       ICHECK_LT(it->second.level, scope_.size());
-      if (IsAppropriateSharedMemory(GetRef<Var>(buf))) {
+      if (IsAppropriateSharedMemory(ffi::GetRef<Var>(buf))) {
         scope_[it->second.level].touched.push_back(buf);
       }
     }
@@ -156,7 +156,7 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
     auto it = alloc_info_.find(buf);
     if (it != alloc_info_.end() && it->second.alloc) {
       ICHECK_LT(it->second.level, scope_.size()) << "Load memory in places other than store.";
-      if (IsAppropriateSharedMemory(GetRef<Var>(buf))) {
+      if (IsAppropriateSharedMemory(ffi::GetRef<Var>(buf))) {
         scope_[it->second.level].touched.push_back(buf);
       }
     }
@@ -168,9 +168,8 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
       for (const auto& index : load->indices) {
         this->VisitExpr(index);
       }
-    } else {
-      StmtExprVisitor::VisitExpr_(op);
     }
+    StmtExprVisitor::VisitExpr_(op);
   }
 
   void VisitExpr_(const VarNode* buf) final {
@@ -178,7 +177,7 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
     auto it = alloc_info_.find(buf);
     if (it != alloc_info_.end() && it->second.alloc) {
       ICHECK_LT(it->second.level, scope_.size());
-      if (IsAppropriateSharedMemory(GetRef<Var>(buf))) {
+      if (IsAppropriateSharedMemory(ffi::GetRef<Var>(buf))) {
         scope_[it->second.level].touched.push_back(buf);
       }
     }
@@ -215,6 +214,10 @@ class SharedMemLinearAccessPatternFinder final : public StmtExprVisitor {
       VisitNewScope(op);
     } else if (op->attr_key == attr::virtual_thread) {
       VisitNewScope(op);
+    } else if (op->attr_key == "kWarpSpecializationScope") {
+      IfThenElse body = Downcast<IfThenElse>(op->body);
+      this->VisitStmt(body->then_case);
+      this->VisitStmt(body->else_case.value());
     } else {
       StmtExprVisitor::VisitStmt_(op);
     }
@@ -352,8 +355,8 @@ class SharedMemoryRewriter : public StmtExprMutator {
           << "MergeSharedMemoryAllocations expects flat memory buffers, "
           << "and is to be run after "
           << "FlattenBuffer";
-      Array<PrimExpr> indices = {node->indices[0] +
-                                 this->GetBufferOffset(node->buffer->data, node->buffer->dtype)};
+      ffi::Array<PrimExpr> indices = {
+          node->indices[0] + this->GetBufferOffset(node->buffer->data, node->buffer->dtype)};
 
       auto writer = node.CopyOnWrite();
       writer->buffer = GetUpdatedBuffer(node->buffer);
@@ -397,7 +400,7 @@ class SharedMemoryRewriter : public StmtExprMutator {
       PrimExpr offset = this->VisitExpr(op->args[2]);
       PrimExpr extent = this->VisitExpr(op->args[3]);
       return Call(op->dtype, op->op,
-                  {op->args[0], merged_buf_var_, extra_offset + offset, extent, op->args[4]});
+                  {op->args[0], merged_buf_var_, extra_offset + offset, extent, op->args[4]}, op->annotations);
     } else if (op->op.same_as(builtin::ptx_cp_async())) {
       ICHECK((op->args.size() == 5U) || (op->args.size() == 6U));
       DataType dtype = op->dtype;
@@ -414,11 +417,11 @@ class SharedMemoryRewriter : public StmtExprMutator {
       if (op->args.size() == 5)
         return Call(dtype, op->op,
                     {merged_buf_var_, mul(extra_offset + offset, PrimExpr(index_factor)),
-                     op->args[2], op->args[3], op->args[4]});
+                     op->args[2], op->args[3], op->args[4]}, op->annotations);
       else
         return Call(dtype, op->op,
                     {merged_buf_var_, mul(extra_offset + offset, PrimExpr(index_factor)),
-                     op->args[2], op->args[3], op->args[4], op->args[5]});
+                     op->args[2], op->args[3], op->args[4], op->args[5]}, op->annotations);
     } else {
       return StmtExprMutator::VisitExpr_(op);
     }
@@ -696,10 +699,10 @@ Pass MergeSharedMemoryAllocations() {
   return CreatePrimFuncPass(pass_func, 0, "tir.MergeSharedMemoryAllocations", {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.transform.MergeSharedMemoryAllocations", MergeSharedMemoryAllocations);
-});
+}
 
 }  // namespace transform
 }  // namespace tir

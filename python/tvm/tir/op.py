@@ -18,7 +18,8 @@
 """Operators used in TIR expression."""
 from typing import Any, Optional, Union
 
-import tvm.ffi
+import tvm_ffi
+import tvm
 from tvm import tir
 from tvm.ir import Array, Op, PrimExpr
 from tvm.ir.base import Span
@@ -41,7 +42,7 @@ def _pack_buffer(buf, span=None):
         const(0, dtype=buf.dtype),
         buf.elem_offset,
     ]
-    return Call("handle", Op.get("tir.tvm_stack_make_array"), pack_args, span)
+    return Call("handle", Op.get("tir.tvm_stack_make_array"), pack_args, span=span)
 
 
 def call_packed_lowered(*args, span=None):
@@ -50,7 +51,7 @@ def call_packed_lowered(*args, span=None):
     The argument is the corresponding POD type when Expr is presented.
     When the argument is Buffer, the corresponding PackedFunc
     will recieve an TVMArrayHandle whose content is valid during the callback period.
-    If the PackedFunc is a python callback, then the corresponding argument is NDArray.
+    If the PackedFunc is a python callback, then the corresponding argument is Tensor.
 
     Parameters
     ----------
@@ -70,7 +71,7 @@ def call_packed_lowered(*args, span=None):
     te.extern : Create tensor with extern function call.
     """
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
-    return Call("int32", Op.get("tir.tvm_call_packed_lowered"), call_args, span)
+    return Call("int32", Op.get("tir.tvm_call_packed_lowered"), call_args, span=span)
 
 
 def call_cpacked_lowered(*args, span=None):
@@ -96,7 +97,7 @@ def call_cpacked_lowered(*args, span=None):
     te.extern : Create tensor with extern function call.
     """
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
-    return Call("int32", Op.get("tir.tvm_call_cpacked_lowered"), call_args, span)
+    return Call("int32", Op.get("tir.tvm_call_cpacked_lowered"), call_args, span=span)
 
 
 def call_packed(*args, span=None):
@@ -107,7 +108,7 @@ def call_packed(*args, span=None):
 
     When the argument is Buffer, the corresponding PackedFunc
     will receive an TVMArrayHandle whose content is valid during the callback period.
-    If the PackedFunc is a python callback, then the corresponding argument is NDArray.
+    If the PackedFunc is a python callback, then the corresponding argument is Tensor.
 
     Parameters
     ----------
@@ -127,7 +128,7 @@ def call_packed(*args, span=None):
     te.extern : Create tensor with extern function call.
     """
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
-    return Call("int32", Op.get("tir.tvm_call_packed"), call_args, span)
+    return Call("int32", Op.get("tir.tvm_call_packed"), call_args, span=span)
 
 
 def call_cpacked(*args, span=None):
@@ -154,10 +155,10 @@ def call_cpacked(*args, span=None):
     te.extern : Create tensor with extern function call.
     """
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
-    return Call("int32", Op.get("tir.tvm_call_cpacked"), call_args, span)
+    return Call("int32", Op.get("tir.tvm_call_cpacked"), call_args, span=span)
 
 
-def call_intrin(dtype, func_name, *args, span=None):
+def call_intrin(dtype, func_name, *args, annotations=None, span=None):
     """Build expression by calling an intrinsic function.
 
     Intrinsics can be overloaded with multiple data types via
@@ -174,6 +175,9 @@ def call_intrin(dtype, func_name, *args, span=None):
     args : list
         Positional arguments.
 
+    annotations : Optional[Dict[str, Object]]
+        Additional annotations about the call.
+
     span : Optional[Span]
         The location of this operator in the source code.
 
@@ -182,7 +186,11 @@ def call_intrin(dtype, func_name, *args, span=None):
     call : PrimExpr
         The call expression.
     """
-    return Call(dtype, func_name, args, span)
+    
+    # Convert to TVM Map
+    if annotations is not None:
+        annotations = {k: tir.const(v) if isinstance(v, (int, bool)) else v for k, v in annotations.items()}
+    return Call(dtype, func_name, args, annotations=annotations, span=span)
 
 
 def call_pure_extern(dtype, func_name, *args, span=None):
@@ -207,7 +215,7 @@ def call_pure_extern(dtype, func_name, *args, span=None):
     call : PrimExpr
         The call expression.
     """
-    return Call(dtype, Op.get("tir.call_pure_extern"), [func_name, *args], span)
+    return Call(dtype, Op.get("tir.call_pure_extern"), [func_name, *args], span=span)
 
 
 def call_extern(dtype, func_name, *args, span=None):
@@ -355,7 +363,7 @@ def tvm_stack_make_shape(*args):
 
 
 def tvm_stack_make_array(data, shape, strides, ndim, arr_dtype, elem_offset):
-    """Allocate a NDArray(DLTensor) on stack, return the handle
+    """Allocate a Tensor(DLTensor) on stack, return the handle
 
     Parameters
     ----------
@@ -570,11 +578,10 @@ def address_of(obj: Union[Buffer, BufferLoad], span: Optional[Span] = None) -> P
         The call expression.
     """
     if isinstance(obj, Buffer):
-
         n_dim = len(obj.shape)
         buffer_load = BufferLoad(obj, [0] * n_dim)
         return call_intrin("handle", "tir.address_of", buffer_load, span=span)
-    elif isinstance(obj, BufferLoad):
+    elif isinstance(obj, (BufferLoad, Var)):
         return call_intrin("handle", "tir.address_of", obj, span=span)
     else:
         raise ValueError(f"Invalid object type: {type(obj)}")
@@ -1883,7 +1890,7 @@ def ret(val, span=None):
 
 
 def thread_return(span=None):
-    """Return from a GPU thread.
+    """Return from a GPU thread
 
     Parameters
     ----------
@@ -1897,6 +1904,40 @@ def thread_return(span=None):
     """
 
     return _ffi_api.thread_return(span)
+
+
+def continue_loop(span=None):
+    """Create a tir intrinsic call to represent continue expression
+
+    Parameters
+    ----------
+    span : Optional[Span]
+        The location of this operator in the source code.
+
+    Returns
+    -------
+    ret : PrimExpr
+        The continue expression
+    """
+
+    return _ffi_api.continue_loop(span)
+
+
+def break_loop(span=None):
+    """Create a tir intrinsic call to represent break expression
+
+    Parameters
+    ----------
+    span : Optional[Span]
+        The location of this operator in the source code.
+
+    Returns
+    -------
+    ret : PrimExpr
+        The break expression
+    """
+
+    return _ffi_api.break_loop(span)
 
 
 def any(*args, span=None):
@@ -1952,7 +1993,7 @@ def all(*args, span=None):
     return val
 
 
-@tvm.ffi.register_func("tvm.default_trace_action")
+@tvm_ffi.register_global_func("tvm.default_trace_action")
 def _tvm_default_trace_action(*args):
     print(list(args))
 
@@ -2082,6 +2123,8 @@ def exp(x):
         The result.
     """
     x = tir.convert(x)
+    if "int" in x.dtype:
+        x = tir.Cast("float32", x)
     return call_intrin(x.dtype, "tir.exp", x)
 
 
@@ -3634,7 +3677,7 @@ def get_active_lane_mask(dtype, base, limit):
     return call_intrin(dtype, "tir.get_active_lane_mask", base, limit)
 
 
-def get_vscale_expr(dtype: Union[str, tvm.ffi.dtype], min_size: int = 128) -> PrimExpr:
+def get_vscale_expr(dtype: Union[str, tvm_ffi.dtype], min_size: int = 128) -> PrimExpr:
     """
     Create a datatype dependent scalable expression.
 
@@ -3646,7 +3689,7 @@ def get_vscale_expr(dtype: Union[str, tvm.ffi.dtype], min_size: int = 128) -> Pr
         The minimum size of the scalable vector in bits.
     """
     if isinstance(dtype, str):
-        dtype = tvm.ffi.dtype(dtype)
+        dtype = tvm_ffi.dtype(dtype)
     return min_size // dtype.bits * vscale()
 
 

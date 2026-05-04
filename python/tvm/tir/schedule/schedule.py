@@ -18,7 +18,7 @@
 import inspect
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
-from tvm.ffi import register_object as _register_object
+from tvm_ffi import register_object as _register_object
 from tvm.error import TVMError, register_error
 from tvm.ir import GlobalVar, IRModule, PrimExpr
 from tvm.runtime import Object
@@ -1910,7 +1910,8 @@ class Schedule(Object):
 
     @type_checked
     def reindex(
-        self, block: Union[BlockRV, str], buffer: Union[Tuple[str, int], str, Buffer]
+        self, block: Union[BlockRV, str], buffer: Union[Tuple[str, int], str, Buffer],
+        skip_simplify: bool = False,
     ) -> BlockRV:
         """Create a block that read/write a buffer region into a read/write cache with reindexing.
         The layout of the cache will be the same as by the iterators of the block that reads/writes
@@ -1941,6 +1942,9 @@ class Schedule(Object):
 
             If `buffer` is a Buffer object, it must exist within the
             reads/writes of the block.
+
+        skip_simplify: bool
+            Whether to skip the simplification of the indices.
 
         Returns
         -------
@@ -1997,7 +2001,7 @@ class Schedule(Object):
         assert buffer_index_type in ["read", "write"], "Invalid buffer_index_type"
         buffer_index_type_enum = 0 if buffer_index_type == "read" else 1
         return _ffi_api.ScheduleReIndex(  # type: ignore # pylint: disable=no-member
-            self, block, buffer_index, buffer_index_type_enum
+            self, block, buffer_index, buffer_index_type_enum, skip_simplify
         )
 
     ########## Schedule: Data movement ##########
@@ -2345,6 +2349,33 @@ class Schedule(Object):
         # pylint: disable-next=no-member
         _ffi_api.ScheduleReverseComputeInline(self, block)  # type: ignore
 
+    @type_checked
+    def fuse_reduction_epilogue(
+        self,
+        reduction_block: Union[BlockRV, str],
+        epilogue_block: Union[BlockRV, str],
+    ) -> None:
+        """Fuse an epilogue block into a reduction block.
+
+        It requires:
+        1) The reduction block is a complete reduction block
+        2) The epilogue block only reads from the reduction block's output
+        3) The epilogue performs a simple addition: output = reduction_result + bias
+
+        Parameters
+        ----------
+        reduction_block : Union[BlockRV, str]
+            The reduction block (e.g., matmul)
+        epilogue_block : Union[BlockRV, str]
+            The epilogue block to be fused (e.g., bias add)
+        """
+        reduction_block = self._normalize_block_arg(reduction_block)
+        epilogue_block = self._normalize_block_arg(epilogue_block)
+        # pylint: disable-next=no-member
+        _ffi_api.ScheduleFuseReductionEpilogue(
+            self, reduction_block, epilogue_block
+        )  # type: ignore
+
     ########## Schedule: Reduction ##########
 
     @type_checked
@@ -2384,7 +2415,7 @@ class Schedule(Object):
         .. code-block:: python
 
             @T.prim_func
-            def before_decompose(a: ty.handle, c: ty.handle) -> None:
+            def before_decompose(a: ty.handle, b: ty.handle, c: ty.handle) -> None:
                 A = tir.match_buffer(a, [128, 128])
                 B = tir.match_buffer(b, [128, 128])
                 C = tir.match_buffer(c, [128, 128])
@@ -2409,7 +2440,7 @@ class Schedule(Object):
         .. code-block:: python
 
             @T.prim_func
-            def after_decompose(a: ty.handle, c: ty.handle) -> None:
+            def after_decompose(a: ty.handle, b: ty.handle, c: ty.handle) -> None:
                 A = tir.match_buffer(a, [128, 128])
                 B = tir.match_buffer(b, [128, 128])
                 C = tir.match_buffer(c, [128, 128])

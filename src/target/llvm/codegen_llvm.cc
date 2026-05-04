@@ -138,7 +138,7 @@ std::unique_ptr<CodeGenLLVM> CodeGenLLVM::Create(LLVMTarget* llvm_target) {
 }
 
 void CodeGenLLVM::Init(const std::string& module_name, LLVMTarget* llvm_target,
-                       Optional<String> system_lib_prefix, bool dynamic_lookup,
+                       ffi::Optional<ffi::String> system_lib_prefix, bool dynamic_lookup,
                        bool target_c_runtime) {
   llvm_target_ = llvm_target;
   llvm::LLVMContext* ctx = llvm_target_->GetContext();
@@ -148,6 +148,7 @@ void CodeGenLLVM::Init(const std::string& module_name, LLVMTarget* llvm_target,
   // types
   t_void_ = llvm::Type::getVoidTy(*ctx);
   t_void_p_ = llvmGetPointerTo(llvm::Type::getInt8Ty(*ctx), GetGlobalAddressSpace());
+  t_int1_ = llvm::Type::getInt1Ty(*ctx);
   t_int_ = llvm::Type::getInt32Ty(*ctx);
   t_char_ = llvm::Type::getInt8Ty(*ctx);
   t_int8_ = llvm::Type::getInt8Ty(*ctx);
@@ -240,7 +241,7 @@ void CodeGenLLVM::InitFuncState() {
 
 std::tuple<std::string, llvm::Function::LinkageTypes> CodeGenLLVM::GetLinkage(
     const GlobalVar& gvar, const PrimFunc& func) {
-  if (auto global_symbol = func->GetAttr<String>(tvm::attr::kGlobalSymbol)) {
+  if (auto global_symbol = func->GetAttr<ffi::String>(tvm::attr::kGlobalSymbol)) {
     return {global_symbol.value(), llvm::Function::ExternalLinkage};
   }
 
@@ -576,6 +577,8 @@ llvm::Type* CodeGenLLVM::DTypeToLLVMType(const DataType& dtype) const {
   llvm::LLVMContext* ctx = llvm_target_->GetContext();
   if (dtype.is_int() || dtype.is_uint()) {
     etype = llvm::Type::getIntNTy(*ctx, dtype.bits());
+  } else if (dtype.is_bool()) {
+    etype = t_int1_;
   } else if (dtype.is_float()) {
     switch (dtype.bits()) {
       case 16:
@@ -717,8 +720,8 @@ void CodeGenLLVM::GetAlignment(DataType t, const VarNode* buf_var, const PrimExp
   auto it = alloc_storage_info_.find(buf_var);
   if (it != alloc_storage_info_.end()) {
     const StorageInfo& info = it->second;
-    *p_native_bits =
-        NativeVectorBits(runtime::StorageScope::Create(GetPtrStorageScope(GetRef<Var>(buf_var))));
+    *p_native_bits = NativeVectorBits(
+        runtime::StorageScope::Create(GetPtrStorageScope(ffi::GetRef<Var>(buf_var))));
     max_align_bits = info.alignment * 8;
   } else {
     *p_native_bits = native_vector_bits_;
@@ -774,6 +777,12 @@ std::unique_ptr<CodeGenLLVM::DebugInfo> CodeGenLLVM::CreateDebugInfo(llvm::Modul
       compiler_flags, runtime_version);
   return debug_info;
 }
+
+void CodeGenLLVM::PushLoopFrame(llvm::BasicBlock* backedge_tgt, llvm::BasicBlock* exit_tgt) {
+  loop_frame_jump_tgts_.emplace_back(backedge_tgt, exit_tgt);
+}
+
+void CodeGenLLVM::PopLoopFrame() { loop_frame_jump_tgts_.pop_back(); }
 
 llvm::Value* CodeGenLLVM::CreateVecSlice(llvm::Value* vec, int begin, int extent) {
   int num_elems = GetVectorNumElements(vec);
@@ -878,6 +887,7 @@ void CodeGenLLVM::CreateSerialFor(llvm::Value* begin, llvm::Value* end, llvm::Va
   auto* for_begin = llvm::BasicBlock::Create(*ctx, "for_begin_" + loop_var_name, function_);
   auto* for_body = llvm::BasicBlock::Create(*ctx, "for_body_" + loop_var_name, function_);
   auto* for_end = llvm::BasicBlock::Create(*ctx, "for_end_" + loop_var_name, function_);
+  auto* for_next = llvm::BasicBlock::Create(*ctx, "for_next_" + loop_var_name, function_);
   builder_->CreateBr(for_begin);
   builder_->SetInsertPoint(for_begin);
 
@@ -892,8 +902,13 @@ void CodeGenLLVM::CreateSerialFor(llvm::Value* begin, llvm::Value* end, llvm::Va
   builder_->SetInsertPoint(for_body);
   EmitDebugLocation(body->span);
 
+  PushLoopFrame(for_next, for_end);
   this->VisitStmt(body);
+  PopLoopFrame();
   var_map_.erase(loop_var.get());
+
+  builder_->CreateBr(for_next);
+  builder_->SetInsertPoint(for_next);
   llvm::Value* loop_next = CreateAdd(loop_var.dtype(), loop_value, stride);
   loop_value->addIncoming(loop_next, builder_->GetInsertBlock());
   builder_->CreateBr(for_begin);
@@ -910,7 +925,7 @@ llvm::Value* CodeGenLLVM::CreateCast(DataType from, DataType to, llvm::Value* va
 
   if (to.is_handle()) {
     return builder_->CreateBitCast(value, target);
-  } else if (to.is_uint() && to.bits() == 1) {
+  } else if (to.is_bool()) {
     if (from.is_float()) {
       llvm::Constant* zero = llvm::ConstantFP::get(DTypeToLLVMType(from), 0.);
       return builder_->CreateFCmpONE(value, zero);
@@ -931,7 +946,7 @@ llvm::Value* CodeGenLLVM::CreateCast(DataType from, DataType to, llvm::Value* va
     }
   } else if (from.is_int() && to.is_float()) {
     return builder_->CreateSIToFP(value, target);
-  } else if (from.is_uint() && to.is_float()) {
+  } else if ((from.is_uint() || from.is_bool()) && to.is_float()) {
     return builder_->CreateUIToFP(value, target);
   } else {
     ICHECK(from.is_float() && to.is_float());
@@ -1060,8 +1075,8 @@ llvm::Value* CodeGenLLVM::CreateLookupReturnAddress(unsigned int level) {
   return call;
 }
 
-llvm::Value* CodeGenLLVM::CreateCallExtern(Type ret_type, String global_symbol,
-                                           const Array<PrimExpr>& args, bool skip_first_arg) {
+llvm::Value* CodeGenLLVM::CreateCallExtern(Type ret_type, ffi::String global_symbol,
+                                           const ffi::Array<PrimExpr>& args, bool skip_first_arg) {
   std::vector<llvm::Value*> arg_value;
   std::vector<llvm::Type*> arg_type;
   for (size_t i = static_cast<size_t>(skip_first_arg); i < args.size(); ++i) {
@@ -1367,7 +1382,7 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const CallNode* op) {
       arg_value.push_back(MakeValue(op->args[i]));
       arg_type.push_back(arg_value.back()->getType());
     }
-    llvm::Type* return_type = GetLLVMType(GetRef<PrimExpr>(op));
+    llvm::Type* return_type = GetLLVMType(ffi::GetRef<PrimExpr>(op));
     llvm::Function* f = GetIntrinsicDecl(id, return_type, arg_type);
     ICHECK(f) << "Cannot find intrinsic declaration, possible type mismatch: "
               << llvmGetIntrinName(id);
@@ -1406,7 +1421,7 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const CallNode* op) {
     const BufferLoadNode* load = op->args[0].as<BufferLoadNode>();
     ICHECK(op->args.size() == 1 && load);
 
-    Array<PrimExpr> indices = load->indices;
+    ffi::Array<PrimExpr> indices = load->indices;
     if (const RampNode* r = indices[indices.size() - 1].as<RampNode>()) {
       indices.Set(indices.size() - 1, r->base);
     }
@@ -1466,6 +1481,26 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const CallNode* op) {
         llvm::BasicBlock::Create(*llvm_target_->GetContext(), "ret_dummy", function_);
     builder_->SetInsertPoint(ret_dummy);
     return ret_dummy;
+  } else if (op->op.same_as(builtin::continue_loop())) {
+    ICHECK(!loop_frame_jump_tgts_.empty())
+        << "the tir.continue_loop should be inserted under at least one For or While stmts.";
+    builder_->CreateBr(loop_frame_jump_tgts_.back().first);
+    // LLVM allows exactly one terminator in a single basic block
+    // append a new dummy basic block to avoid error.
+    llvm::BasicBlock* post_dummy =
+        llvm::BasicBlock::Create(*llvm_target_->GetContext(), "post_cont_dummy", function_);
+    builder_->SetInsertPoint(post_dummy);
+    return post_dummy;
+  } else if (op->op.same_as(builtin::break_loop())) {
+    ICHECK(!loop_frame_jump_tgts_.empty())
+        << "the tir.break_loop should be inserted under at least one For or While stmts.";
+    builder_->CreateBr(loop_frame_jump_tgts_.back().second);
+    // LLVM allows exactly one terminator in a single basic block
+    // append a new dummy basic block to avoid error.
+    llvm::BasicBlock* post_dummy =
+        llvm::BasicBlock::Create(*llvm_target_->GetContext(), "post_break_dummy", function_);
+    builder_->SetInsertPoint(post_dummy);
+    return post_dummy;
   } else if (op->op.same_as(builtin::reinterpret())) {
     llvm::Type* target = DTypeToLLVMType(op->dtype);
     return builder_->CreateBitCast(MakeValue(op->args[0]), target);
@@ -1697,7 +1732,8 @@ bool CodeGenLLVM::HasAlignmentPadding(DataType dtype) {
 }
 
 void CodeGenLLVM::BufferAccessHelper(
-    Buffer buffer, Array<PrimExpr> indices, Optional<PrimExpr> predicate, DataType value_dtype,
+    Buffer buffer, ffi::Array<PrimExpr> indices, ffi::Optional<PrimExpr> predicate,
+    DataType value_dtype,
     std::function<llvm::Instruction*(TypedPointer buffer_ptr, int subelement_i,
                                      llvm::Value* predicate, int alignment, bool is_volatile)>
         make_instruction) {
@@ -1855,20 +1891,20 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const CallNode* op) {
       // call extern intrinsic
       ICHECK_GE(op->args.size(), 1U);
       auto global_symbol = Downcast<StringImm>(op->args[0]);
-      return this->CreateCallExtern(GetType(GetRef<PrimExpr>(op)), global_symbol->value, op->args,
-                                    true);
+      return this->CreateCallExtern(GetType(ffi::GetRef<PrimExpr>(op)), global_symbol->value,
+                                    op->args, true);
     } else if (op_attr_global_symbol_.count(call_op)) {
       // call extern if the op itself have a global symbol.
-      return this->CreateCallExtern(GetType(GetRef<PrimExpr>(op)), op_attr_global_symbol_[call_op],
-                                    op->args, false);
+      return this->CreateCallExtern(GetType(ffi::GetRef<PrimExpr>(op)),
+                                    op_attr_global_symbol_[call_op], op->args, false);
     } else {
-      VLOG(2) << "CreateIntrinsic: " << GetRef<Call>(op);
+      VLOG(2) << "CreateIntrinsic: " << ffi::GetRef<Call>(op);
       auto x = CreateIntrinsic(op);
       VLOG(2) << "CreateIntrinsic done";
       return x;
     }
   } else if (auto* ptr_gvar = op->op.as<GlobalVarNode>()) {
-    auto gvar = GetRef<GlobalVar>(ptr_gvar);
+    auto gvar = ffi::GetRef<GlobalVar>(ptr_gvar);
     auto it = functions_.find(ptr_gvar);
     ICHECK(it != functions_.end()) << "Call to undefined GlobalVar \"" << gvar << "\"";
     llvm::Function* callee = it->second;
@@ -1987,7 +2023,6 @@ void CodeGenLLVM::VisitStmt_(const BufferStoreNode* op) {
 
 void CodeGenLLVM::VisitStmt_(const ForNode* op) {
   EmitDebugLocation(op);
-  ICHECK(is_zero(op->min));
   analyzer_->Bind(op->loop_var, Range::FromMinExtent(op->min, op->extent));
   if (op->kind == ForKind::kUnrolled) {
     LOG(WARNING) << "Unroll hint get ignore at CodeGenLLVM backend, "
@@ -1995,8 +2030,11 @@ void CodeGenLLVM::VisitStmt_(const ForNode* op) {
   } else {
     ICHECK(op->kind == ForKind::kSerial);
   }
-  CreateSerialFor(MakeValue(op->min), MakeValue(op->extent),
-                  llvm::ConstantInt::getSigned(GetLLVMType(op->extent), 1), op->loop_var, op->body);
+  PrimExpr step = op->step.value_or(make_const(op->extent->dtype, 1));
+  PrimExpr end = is_zero(op->min) ? op->extent : analyzer_->Simplify(op->min + op->extent);
+  llvm::Value* begin_value = MakeValue(op->min);
+  llvm::Value* end_value = MakeValue(end);
+  CreateSerialFor(begin_value, end_value, MakeValue(step), op->loop_var, op->body);
 }
 
 void CodeGenLLVM::VisitStmt_(const WhileNode* op) {
@@ -2009,7 +2047,9 @@ void CodeGenLLVM::VisitStmt_(const WhileNode* op) {
   builder_->SetInsertPoint(while_cond);
   builder_->CreateCondBr(MakeValue(op->condition), while_body, while_merge);
   builder_->SetInsertPoint(while_body);
+  PushLoopFrame(while_cond, while_merge);
   this->VisitStmt(op->body);
+  PopLoopFrame();
   builder_->CreateBr(while_cond);
   builder_->SetInsertPoint(while_merge);
 }
@@ -2041,7 +2081,7 @@ void CodeGenLLVM::VisitStmt_(const IfThenElseNode* op) {
 void CodeGenLLVM::VisitStmt_(const AllocateConstNode* op) {
   EmitDebugLocation(op);
   auto data = op->data.value();
-  auto array = NDArrayToLLVMArray(llvm_target_->GetContext(), data);
+  auto array = TensorToLLVMArray(llvm_target_->GetContext(), data);
   std::string symbol_name = op->buffer_var->name_hint;
   llvm::GlobalVariable* param_symbol = new llvm::GlobalVariable(
       *module_, array->getType(), true, llvm::GlobalValue::InternalLinkage, array, symbol_name);
@@ -2188,7 +2228,7 @@ void CodeGenLLVM::VisitStmt_(const EvaluateNode* op) {
   MakeValue(op->value);
 }
 
-void CodeGenLLVM::EmitDebugLocation(const Optional<Span>& span) {
+void CodeGenLLVM::EmitDebugLocation(const ffi::Optional<Span>& span) {
 #if TVM_LLVM_VERSION >= 50
   if (di_subprogram_ == nullptr) {
     // debug info is not always generated outside of CPU codegen
@@ -2213,7 +2253,8 @@ void CodeGenLLVM::EmitDebugLocation() { builder_->SetCurrentDebugLocation(nullpt
 void CodeGenLLVM::EmitDebugLocation(const StmtNode* op) { EmitDebugLocation(op->span); }
 
 // Following Glow |DebugInfo::generateFunctionDebugInfo|, https://git.io/fjadv
-void CodeGenLLVM::AddDebugInformation(llvm::Function* f_llvm, const Array<Type>& tvm_param_types) {
+void CodeGenLLVM::AddDebugInformation(llvm::Function* f_llvm,
+                                      const ffi::Array<Type>& tvm_param_types) {
 #if TVM_LLVM_VERSION >= 50
   ICHECK(di_subprogram_);
   f_llvm->setSubprogram(di_subprogram_);
@@ -2274,9 +2315,11 @@ void CodeGenLLVM::AddDebugInformation(llvm::Value* llvm_value, const Var& tir_va
 #if TVM_LLVM_VERSION >= 50
   if (!di_subprogram_) return;
 
+  auto dbg_dtype = GetDebugType(GetType(tir_var));
+  // no invalid dtypes
+  if (!dbg_dtype) return;
   auto local_var = dbg_info_->di_builder_->createAutoVariable(
-      di_subprogram_, std::string(tir_var->name_hint), dbg_info_->file_, 0,
-      GetDebugType(GetType(tir_var)));
+      di_subprogram_, std::string(tir_var->name_hint), dbg_info_->file_, 0, dbg_dtype);
 
   auto* di_loc = llvm::DILocation::get(*llvm_target_->GetContext(), 0, 0, di_subprogram_);
 
@@ -2330,6 +2373,8 @@ llvm::DIType* CodeGenLLVM::GetDebugType(const Type& ty_tir, llvm::Type* ty_llvm)
       return nullptr;
     }
 
+    if (dtype.is_scalable_vector()) return nullptr;
+
     return dbg_info_->di_builder_->createBasicType(DLDataTypeToString(dtype).operator std::string(),
                                                    dtype.bits() * dtype.lanes(), dwarf_type);
 
@@ -2351,9 +2396,9 @@ static void CodegenLLVMRegisterReflection() {
            []() -> std::string { return llvm::sys::getProcessTriple(); })
       .def("tvm.codegen.llvm.GetHostCPUName",
            []() -> std::string { return llvm::sys::getHostCPUName().str(); })
-      .def("tvm.codegen.llvm.GetHostCPUFeatures", []() -> Map<String, IntImm> {
+      .def("tvm.codegen.llvm.GetHostCPUFeatures", []() -> ffi::Map<ffi::String, IntImm> {
 #if TVM_LLVM_VERSION >= 190
-        Map<String, IntImm> ret;
+        ffi::Map<ffi::String, IntImm> ret;
         auto features = llvm::sys::getHostCPUFeatures();
         for (auto it = features.begin(); it != features.end(); ++it) {
           std::string name = it->getKey().str();
@@ -2364,7 +2409,7 @@ static void CodegenLLVMRegisterReflection() {
 #else
       llvm::StringMap<bool> features;
       if (llvm::sys::getHostCPUFeatures(features)) {
-        Map<String, IntImm> ret;
+        ffi::Map<ffi::String, IntImm> ret;
         for (auto it = features.begin(); it != features.end(); ++it) {
           std::string name = it->getKey().str();
           bool value = it->getValue();
@@ -2378,7 +2423,7 @@ static void CodegenLLVMRegisterReflection() {
       });
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({ CodegenLLVMRegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { CodegenLLVMRegisterReflection(); }
 
 }  // namespace codegen
 }  // namespace tvm

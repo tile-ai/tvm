@@ -34,17 +34,17 @@ namespace codegen {
 namespace spirv {
 // num_signature means number of arguments used to query signature
 template <unsigned id>
-PrimExpr CallGLSLIntrin(PrimExpr e, const Array<PrimExpr>& args) {
+PrimExpr CallGLSLIntrin(PrimExpr e, const ffi::Array<PrimExpr>& args) {
   const tir::CallNode* call = e.as<tir::CallNode>();
   ICHECK(call != nullptr);
-  Array<PrimExpr> cargs;
+  ffi::Array<PrimExpr> cargs;
   // intrin id.
   cargs.push_back(IntImm(DataType::UInt(32), id));
 
   for (PrimExpr arg : args) {
     cargs.push_back(arg);
   }
-  return tir::Call(call->dtype, tir::builtin::call_spirv_pure_glsl450(), cargs);
+  return tir::Call(call->dtype, tir::builtin::call_spirv_pure_glsl450(), cargs, call->annotations);
 }
 
 template <unsigned id>

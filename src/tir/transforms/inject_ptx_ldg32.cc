@@ -41,7 +41,7 @@ class PTXRewriter : public StmtMutator {
       // addr[0] -> global_addr /  addr[1] -> local_addr
       addr_buffer = decl_buffer({IntImm(DataType::Int(32), 2)}, DataType::Int(32), "addr", "local");
       predicate_buffer =
-          decl_buffer({IntImm(DataType::Int(32), 1)}, DataType::Bool(1), "predicate", "local");
+          decl_buffer({IntImm(DataType::Int(32), 1)}, DataType::Bool(), "predicate", "local");
     }
     Stmt result = StmtMutator::VisitStmt_(allocate);
     if (!has_buffer_2) {
@@ -95,8 +95,8 @@ class PTXRewriter : public StmtMutator {
         BufferStore value_store(store->buffer, imm_value, {new_indice});
         Evaluate ptx_load(Call(store->buffer->dtype, tvm::tir::builtin::ptx_ldg32(),
                                {store->buffer->data, new_predicate, new_lhs, new_indice}));
-        Array<Stmt> tmp_seq = {addr_store, local_addr_store, predicate_store, value_store,
-                               ptx_load};
+        ffi::Array<Stmt> tmp_seq = {addr_store, local_addr_store, predicate_store, value_store,
+                                    ptx_load};
         SeqStmt seq_stmt = SeqStmt(tmp_seq);
         return seq_stmt;
       }
@@ -124,10 +124,10 @@ Pass InjectPTXLDG32(bool enable_inject_ptx_intrin) {
 
 // The pass can now be invoked via the pass infrastructure, but we also add a
 // Python binding for it
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.transform.InjectPTXLDG32", InjectPTXLDG32);
-});
+}
 
 }  // namespace transform
 }  // namespace tir

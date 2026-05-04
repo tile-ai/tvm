@@ -4002,6 +4002,41 @@ def func_attr_with_list():
     return func
 
 
+def func_with_loop_jumps():
+    @T.prim_func
+    def func(In: T.Buffer((1,), "int32"), Out: T.Buffer((2,), "int32")):
+        Out[0] = 0
+        Out[1] = 0
+        for i in range(1000):
+            if i % 13 == 0:
+                Out[1] = Out[1] + 1
+                continue
+            Out[0] = Out[0] + 1
+            if Out[0] >= In[0]:
+                break
+
+    return func
+
+
+def func_with_loop_steps():
+    @T.prim_func
+    def func(
+        A: T.Buffer((1024,)), B: T.Buffer((1024,)), C: T.Buffer((1024,)), tid: T.int32, v: T.int32
+    ):
+        for i in T.serial(tid, 1024, step=2):
+            C[i] = A[i] + B[i]
+        for i in T.unroll(tid, 1024, step=3):
+            C[i] = A[i] + B[i]
+        for i in T.vectorized(tid, 1024, step=4):
+            C[i] = A[i] + B[i]
+        for i in T.parallel(tid, 1024, step=5):
+            C[i] = A[i] + B[i]
+        for i in range(tid, 1024, 6):
+            C[i] = A[i] + B[i]
+
+    return func
+
+
 def op_of_literal():
     op_list = [
         (T.exp, 0),
@@ -4220,6 +4255,8 @@ ir_generator = tvm.testing.parameter(
     return_zero_private,
     return_zero_private_with_attr,
     func_attr_with_list,
+    func_with_loop_jumps,
+    func_with_loop_steps,
     *op_of_literal(),
     *relax_match_cast_struct_info_proxy(),
     relax_symbolic_size_var,

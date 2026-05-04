@@ -39,11 +39,11 @@ namespace llvm {
 using tir::FLowerIntrinsic;
 
 inline PrimExpr TVMExternCall(const tir::CallNode* call, const std::string& fname) {
-  Array<PrimExpr> new_args = {tir::StringImm(fname)};
+  ffi::Array<PrimExpr> new_args = {tir::StringImm(fname)};
   for (PrimExpr arg : call->args) {
     new_args.push_back(arg);
   }
-  return tir::Call(call->dtype, tir::builtin::call_pure_extern(), new_args);
+  return tir::Call(call->dtype, tir::builtin::call_pure_extern(), new_args, call->annotations);
 }
 
 template <std::string& tvm_wrapper, unsigned id, int num_sign>
@@ -51,7 +51,7 @@ inline PrimExpr DispatchTVMQHLWrapperFp16(const PrimExpr& e) {
   using namespace tir;
   const CallNode* call = e.as<CallNode>();
   ICHECK(call != nullptr);
-  Array<PrimExpr> new_args;
+  ffi::Array<PrimExpr> new_args;
 #if ENABLE_QHL
   // Check target for qfloat enablement
   const auto f = tvm::ffi::Function::GetGlobal("target.TargetCurrent");
@@ -72,7 +72,7 @@ inline PrimExpr DispatchTVMQHLWrapperFp16(const PrimExpr& e) {
   new_args.push_back(IntImm(DataType::UInt(32), id));
   new_args.push_back(IntImm(DataType::UInt(32), num_sign));
   new_args.insert(new_args.end(), call->args.begin(), call->args.end());
-  return tir::Call(call->dtype, tir::builtin::call_llvm_pure_intrin(), new_args);
+  return tir::Call(call->dtype, tir::builtin::call_llvm_pure_intrin(), new_args, call->annotations);
 }
 
 TVM_REGISTER_OP("tir.fma").set_attr<FLowerIntrinsic>(
@@ -183,8 +183,8 @@ TVM_REGISTER_OP("tir.sigmoid")
       const PrimExpr v1 = tir::Max(x, MinBound);
       const PrimExpr v2 = tir::Min(v1, MaxBound);
 
-      Array<tvm::PrimExpr> new_args = {v2};
-      const tir::Call new_call = tir::Call(call->dtype, call->op, new_args);
+      ffi::Array<tvm::PrimExpr> new_args = {v2};
+      const tir::Call new_call = tir::Call(call->dtype, call->op, new_args, call->annotations);
 
       // Enable QHL library for FP16 data type
       if (x->dtype.is_float16() && x->dtype.is_vector() && useqhl) {

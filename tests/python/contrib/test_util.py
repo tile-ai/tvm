@@ -17,8 +17,10 @@
 """Tests for functions in tvm/python/tvm/contrib/util.py."""
 
 import datetime
+import multiprocessing as mp
 import os
 import shutil
+import tempfile
 from tvm.contrib import utils
 
 
@@ -30,6 +32,17 @@ def validate_debug_dir_path(temp_dir, expected_basename):
     parent_dir = os.path.basename(dirname)
     create_time = datetime.datetime.strptime(parent_dir.split("___", 1)[0], "%Y-%m-%dT%H-%M-%S")
     assert abs(datetime.datetime.now() - create_time) < datetime.timedelta(seconds=60)
+
+
+def _create_debug_tempdir(root_dir):
+    from tvm.contrib import utils as worker_utils
+
+    worker_utils.TempDirectory._DEBUG_PARENT_DIR = None
+    worker_utils.TempDirectory._NUM_TEMPDIR_CREATED = 0
+    worker_utils.tempfile.gettempdir = lambda: root_dir
+
+    temp_dir = worker_utils.tempdir(keep_for_debug=True)
+    return temp_dir.temp_dir
 
 
 def test_tempdir():
@@ -83,6 +96,25 @@ def test_tempdir():
     finally:
         utils.TempDirectory.DEBUG_MODE = old_debug_mode
         utils.TempDirectory.TEMPDIRS = old_tempdirs
+
+
+def test_tempdir_debug_parent_dir_is_multiprocess_safe():
+    root_dir = tempfile.mkdtemp(prefix="tvm-util-tempdir-")
+    try:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(8) as pool:
+            temp_dirs = pool.map(_create_debug_tempdir, [root_dir] * 32)
+        assert len(temp_dirs) == 32
+        assert len(set(temp_dirs)) == 32
+        assert os.path.isdir(os.path.join(root_dir, "tvm-debug-mode-tempdirs"))
+    finally:
+        shutil.rmtree(root_dir, ignore_errors=True)
+
+
+def test_tempdir_remove_tolerates_partial_initialization():
+    temp_dir = object.__new__(utils.TempDirectory)
+    temp_dir.remove()
+    temp_dir.__del__()
 
 
 if __name__ == "__main__":
