@@ -1551,6 +1551,29 @@ def test_scatter_elements_symbolic():
     tvm.ir.assert_structural_equal(mod, Expected)
 
 
+@tvm.testing.parametrize_targets("cuda")
+def test_scatter_elements_gpu(target, dev):
+    """scatter_elements lowered for GPU must build"""
+
+    @I.ir_module
+    class Mod:
+        @R.function
+        def main(
+            x: R.Tensor((4, 8), "float32"),
+            indices: R.Tensor((2, 8), "int64"),
+            updates: R.Tensor((2, 8), "float32"),
+        ):
+            with R.dataflow():
+                lv = R.scatter_elements(x, indices, updates, axis=0)
+                gv = lv
+                R.output(gv)
+            return gv
+
+    with tvm.target.Target(target):
+        mod = LegalizeOps()(Mod)
+    relax.build(mod, target=target)
+
+
 def test_layout_transform():
     transformation = lambda a, b, c: (a, c, b // 3, b % 3)
     pad_value = 2
@@ -1836,6 +1859,29 @@ def test_scatter_nd():
 
     # fmt: on
     tvm.ir.assert_structural_equal(After, Expected)
+
+
+@tvm.testing.parametrize_targets("cuda")
+def test_scatter_nd_gpu(target, dev):
+    """scatter_nd lowered for GPU must build"""
+
+    @I.ir_module
+    class Mod:
+        @R.function
+        def main(
+            data: R.Tensor((4, 8), "float32"),
+            indices: R.Tensor((3, 2), "int64"),
+            updates: R.Tensor((3,), "float32"),
+        ):
+            with R.dataflow():
+                lv = R.scatter_nd(data, indices, updates)
+                gv = lv
+                R.output(gv)
+            return gv
+
+    with tvm.target.Target(target):
+        mod = LegalizeOps()(Mod)
+    relax.build(mod, target=target)
 
 
 if __name__ == "__main__":
