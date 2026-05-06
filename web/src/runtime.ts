@@ -1259,7 +1259,7 @@ export class Instance implements Disposable {
    * @param device The device to be fetched to.
    * @param options Options object.
    * @param cacheScope The scope identifier of the cache (legacy positional overload).
-   * @param cacheType The type of the cache: "cache", "indexeddb", or "cross-origin" (legacy positional overload).
+   * @param cacheType The type of the cache: "cache", "indexeddb", "cross-origin", or "opfs" (legacy positional overload).
    * @param signal An optional AbortSignal to abort the fetch (legacy positional overload).
    * @returns The meta data
    */

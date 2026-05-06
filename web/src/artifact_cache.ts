@@ -17,6 +17,8 @@
  * under the License.
  */
 
+import { OPFSStore } from "./opfs_store";
+
 export interface TensorCacheEntry {
   name: string;
   shape: Array<number>;
@@ -83,7 +85,7 @@ export interface ArtifactCacheTemplate {
   deleteInCache(url: string): Promise<void>;
 }
 
-export type ArtifactCacheType = "cache" | "indexeddb" | "cross-origin";
+export type ArtifactCacheType = "cache" | "indexeddb" | "cross-origin" | "opfs";
 
 export interface TensorCacheAccessOptions {
   cacheScope?: string;
@@ -194,7 +196,6 @@ class CrossOriginStorage {
     this.hashCache.set(url, hash);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async delete(_request: RequestLike): Promise<void> {
     // Cross-origin storage extension currently has no delete API.
     return;
@@ -550,6 +551,83 @@ export class ArtifactIndexedDBCache implements ArtifactCacheTemplate {
 }
 
 /**
+ * Cache by Origin Private File System (OPFS).
+ */
+export class ArtifactOPFSCache implements ArtifactCacheTemplate {
+  private readonly store: OPFSStore;
+
+  constructor(scope: string) {
+    this.store = new OPFSStore(scope);
+  }
+
+  static isAvailable(): boolean {
+    return OPFSStore.isAvailable();
+  }
+
+  async fetchWithCache(
+    url: string,
+    storetype?: string,
+    signal?: AbortSignal,
+  ): Promise<any> {
+    await this.addToCache(url, storetype, signal);
+    const cachedResponse = await this.store.read(url);
+    if (cachedResponse === undefined) {
+      throw new Error("ArtifactOPFSCache failed to fetch: " + url);
+    }
+    return this.responseToStoreType(cachedResponse, storetype);
+  }
+
+  async addToCache(
+    url: string,
+    _storetype?: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (await this.store.has(url)) {
+      return;
+    }
+    const request = new Request(
+      url,
+      signal ? { ...DEFAULT_FETCH_OPTIONS, signal } : DEFAULT_FETCH_OPTIONS,
+    );
+    const response = await fetch(request);
+    if (!response.ok) {
+      throw new Error(
+        `ArtifactOPFSCache: Unable to fetch ${url}, received status ${response.status}`,
+      );
+    }
+    await this.store.write(url, response.clone());
+  }
+
+  async hasAllKeys(keys: string[]): Promise<boolean> {
+    const results = await Promise.all(
+      keys.map(async (key) => await this.store.has(key)),
+    );
+    return results.every((result) => result);
+  }
+
+  async deleteInCache(url: string): Promise<void> {
+    await this.store.remove(url);
+  }
+
+  private async responseToStoreType(
+    response: Response,
+    storetype?: StoreType,
+  ): Promise<any> {
+    if (storetype === undefined) {
+      return response;
+    }
+    const format = storetype.toLowerCase();
+    if (format === "json") {
+      return response.json();
+    }
+    if (format === "arraybuffer") {
+      return response.arrayBuffer();
+    }
+    return response;
+  }
+}
+
+/**
  * Cache by cross-origin storage extension.
  */
 export class ArtifactCrossOriginStorageCache implements ArtifactCacheTemplate {
@@ -647,6 +725,9 @@ function normalizeCacheType(cacheType?: string): ArtifactCacheType {
   if (normalized === "cross-origin") {
     return "cross-origin";
   }
+  if (normalized === "opfs") {
+    return "opfs";
+  }
   console.error("Unsupported cacheType: " + cacheType + ", using default ArtifactCache.");
   return "cache";
 }
@@ -692,6 +773,9 @@ export function createArtifactCache(
       crossOriginFallbackWarningLogged = true;
     }
   }
+  if (cacheType === "opfs") {
+    return new ArtifactOPFSCache(scope);
+  }
   return new ArtifactCache(scope);
 }
 
@@ -701,7 +785,7 @@ export function createArtifactCache(
  *
  * @param tensorCacheUrl The cache url which links to the Tensor
  * @param cacheScope The scope identifier of the cache
- * @param cacheType The type of the cache: "cache", "indexedDB", or "cross-origin"
+ * @param cacheType The type of the cache: "cache", "indexedDB", "cross-origin", or "opfs"
  * @returns the result if the cache has Tensor
  */
 export async function hasTensorInCache(
@@ -739,7 +823,7 @@ export async function hasTensorInCache(
  *
  * @param cacheUrl The cacheUrl for the items
  * @param cacheScope The scope identifier of the cache
- * @param cacheType The type of the cache: "cache", "indexedDB", or "cross-origin"
+ * @param cacheType The type of the cache: "cache", "indexedDB", "cross-origin", or "opfs"
  */
 export async function deleteTensorCache(
   cacheUrl: string,

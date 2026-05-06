@@ -30,6 +30,7 @@ export {
   ArtifactCacheTemplate,
   ArtifactCache,
   ArtifactIndexedDBCache,
+  ArtifactOPFSCache,
   ArtifactCrossOriginStorageCache,
   createArtifactCache,
   hasTensorInCache,
