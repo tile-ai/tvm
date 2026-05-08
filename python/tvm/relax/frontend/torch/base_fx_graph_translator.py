@@ -1921,7 +1921,25 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
                 indices = relax.Tuple(processed_indices)
             else:
                 indices = relax.Tuple(indices)
-        return self.block_builder.emit(relax.op.index_put(tensor, indices, values, accumulate))
+
+        output = self.block_builder.emit(relax.op.index_put(tensor, indices, values, accumulate))
+
+        target_name = (
+            node.target if isinstance(node.target, str) else getattr(node.target, "__name__", "")
+        )
+        if target_name.startswith("index_put_") and len(node.args) > 0:
+            from torch import fx
+
+            if isinstance(node.args[0], fx.Node):
+                # `index_put_` is in-place. If the mutated input is an alias of another
+                # FX node, later reads via either the alias node or the original node
+                # must oberve the updated tensor.
+                aliased_expr = tensor
+                for env_node, env_expr in list(self.env.items()):
+                    if env_expr is aliased_expr:
+                        self.env[env_node] = output
+
+        return output
 
     def _index_tensor(self, node: fx.Node) -> relax.Var:
         args = self.retrieve_args(node)

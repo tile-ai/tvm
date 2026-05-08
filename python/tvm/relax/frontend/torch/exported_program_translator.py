@@ -1338,7 +1338,40 @@ class ExportedProgramImporter(BaseFXGraphImporter):
                 raise ValueError(f"Unsupported op {node.op}")
 
         assert output_args is not None
-        return output_args
+        return self._flatten_output_args(output_args)
+
+    @staticmethod
+    def _flatten_output_args(output_args) -> tuple[relax.Expr, ...]:
+        """Flatten output args into a tuple of Relax expressions.
+
+        ExportedProgram output trees contain nested Python tuple/list containers
+        (e.g. mutation outputs + user tuple outputs). Emitting nested Python tuples
+        directly through FFI may construct invalid Relax tuples.
+        """
+
+        flattened: list[relax.Expr] = []
+
+        def _visit(value):
+            if isinstance(value, relax.Expr):
+                flattened.append(value)
+            elif isinstance(value, list | tuple):
+                for item in value:
+                    _visit(item)
+            elif value is None:
+                # Preserve explicit None outputs as Relax null objects.
+                flattened.append(relax.op.null_value())
+            else:
+                raise ValueError(
+                    "Unsupported output type in exported graph output: "
+                    f"{type(value)}"
+                )
+
+        _visit(output_args)
+
+        if not flattened:
+            raise ValueError("Exported graph produced no Relax outputs")
+
+        return tuple(flattened)
 
     def _import_branch_subgraph(
         self,
@@ -1995,7 +2028,7 @@ class ExportedProgramImporter(BaseFXGraphImporter):
                 output_args = self._translate_fx_graph(
                     exported_program.graph_module, nodes, inputs_vars, custom_ops
                 )
-                assert isinstance(output_args, tuple | relax.Tuple)
+                output_args = self._flatten_output_args(output_args)
 
                 if unwrap_unit_return_tuple and len(output_args) == 1:
                     ret = output_args[0]
