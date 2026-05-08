@@ -414,11 +414,14 @@ Stmt GenerateBodyStmt(const ffi::Array<PrimExpr>& indices, const ffi::Array<Buff
     }
     body = SeqStmt::Flatten(body_stmts);
     if (n_buffers > 1) {
-      // When there are multiple buffers, we wrap the body with LetStmts.
-      for (int i = n_buffers - 1; i >= 0; --i) {
+      // When there are multiple buffers, bind temporaries before the stores.
+      ffi::Array<Stmt> seq;
+      for (int i = 0; i < n_buffers; ++i) {
         PrimExpr value = f_transform_and_remap(reduce->combiner.get()->operator()(lhs, rhs)[i]);
-        body = LetStmt(temp_vars[i], std::move(value), std::move(body));
+        seq.push_back(LetStmt(temp_vars[i], std::move(value)));
       }
+      seq.push_back(body);
+      body = SeqStmt::Flatten(SeqStmt(seq));
     }
   } else {
     // Case 2. Data parallel compute

@@ -168,10 +168,6 @@ class BufferAccessRegionCollector : public StmtExprVisitor {
       dom_analyzer_.Bind(op->var, op->value);
       dom_map_.emplace(op->var.get(), arith::IntSet::SinglePoint(op->value));
     }
-    StmtExprVisitor::VisitStmt(op->body);
-    if (arith::IsIndexType(op->value->dtype)) {
-      dom_map_.erase(op->var.get());
-    }
   }
 
   void VisitExpr_(const LetNode* op) final {

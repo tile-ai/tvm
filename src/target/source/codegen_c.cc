@@ -1103,7 +1103,6 @@ void CodeGenC::VisitStmt_(const LetStmtNode* op) {
       this->stream << ' ' << AllocVarID(op->var.get()) << " = " << value << ";\n";
     }
   }
-  PrintStmt(op->body);
 }
 
 void CodeGenC::VisitStmt_(const AllocateNode* op) {

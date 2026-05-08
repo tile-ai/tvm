@@ -575,7 +575,6 @@ void CodeGenWebGPU::VisitStmt_(const LetStmtNode* op) {
     PrintType(op->var.dtype(), this->stream);
     this->stream << " = " << value << ";\n";
   }
-  PrintStmt(op->body);
 }
 
 void CodeGenWebGPU::VisitStmt_(const BufferStoreNode* op) {

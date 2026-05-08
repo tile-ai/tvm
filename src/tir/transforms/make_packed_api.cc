@@ -286,11 +286,10 @@ PrimFunc MakePackedAPI(PrimFunc func) {
     PrimExpr arg_value;
     // type index checks
     Var type_index(param->name_hint + ".type_index", DataType::Int(32));
-    seq_init.push_back(LetStmt(type_index,
-                               tir::Call(DataType::Int(32), builtin::tvm_struct_get(),
-                                         {v_packed_args, IntImm(DataType::Int(32), i),
-                                          IntImm(DataType::Int(32), builtin::kTVMFFIAnyTypeIndex)}),
-                               nop));
+    seq_init.push_back(LetStmt(
+        type_index, tir::Call(DataType::Int(32), builtin::tvm_struct_get(),
+                              {v_packed_args, IntImm(DataType::Int(32), i),
+                               IntImm(DataType::Int(32), builtin::kTVMFFIAnyTypeIndex)})));
     DataType dtype = param.dtype();
     if (dtype.is_handle()) {
       std::ostringstream msg;

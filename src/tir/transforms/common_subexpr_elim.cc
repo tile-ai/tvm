@@ -478,8 +478,8 @@ Stmt CommonSubexpressionEliminator::VisitStmt(const Stmt& stmt) {
         // right to dive.
         result = ReplaceSelectedExpr::ReplaceSelectedExprInStmt(result, predicate_selector, new_var,
                                                                 CanContainEligibleComputations);
-        // Build a let-in that introduces the new variable in the current `result`
-        result = LetStmt(new_var, computation_and_nb.first, result);
+        // Build a let binding that introduces the new variable before the current `result`.
+        result = SeqStmt::Flatten(SeqStmt({LetStmt(new_var, computation_and_nb.first), result}));
         // We don't add the variable to the context because the invariant is that the
         // context is the context in which 'result' makes sense, and we've just updated it.
       } else {
@@ -529,38 +529,14 @@ Stmt CommonSubexpressionEliminator::VisitStmt_(const LetStmtNode* op) {
   // At this point, we have already done the generic treatment of introducing (via let-in) what
   // was doable at the toplevel of the given let-in.
 
-  // Save the context at the entry of the function
-  Context context_at_entry = context_;
-
   // Recurse on the `value` field for potentially rewriting it
   PrimExpr value_new = VisitExpr(op->value);
 
-  // Augment the context with the association (`var`, `value`) for preparing the next recursion
-  // on the `body`
-  context_.push_back({op->var, MaybeValue(op->value)});
-
-  // Recurse on the `body` (with this extended context)
-  // The recursive call will have potentially done new simplifications, because in this recursive
-  // call `var` will be a part of the context.
-  // (see in VisitStmt() that no introduction were performed when a computation was using an
-  // undefined variable, as that would lead to ill-formed code)
-  Stmt body_new = VisitStmt(op->body);
-
-  // Restaure the context to its content at the entrance to not carry out of scope declarations
-  // as the variable introduced by the let-in is not in scope outside of its body
-  context_ = context_at_entry;
-
-  // Rebuild the let-in with a new `value_new` and `body_new` where new simplifications might
-  // have been done.
-
-  // If the `value` and the `body` of the let-in have been rewritten to the same thing
-  if (value_new.same_as(op->value) && body_new.same_as(op->body)) {
+  if (value_new.same_as(op->value)) {
     // Return a reference to the same node
     return ffi::GetRef<Stmt>(op);
   } else {
-    // Otherwise return a let-in built with the new `value_new` and the new `body_new` that
-    // have just been obtained
-    return LetStmt(op->var, value_new, body_new, op->span);
+    return LetStmt(op->var, value_new, op->span);
   }
 }
 

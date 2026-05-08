@@ -342,29 +342,33 @@ void ErrorRFactorCrossThreadReductionNotApplicable(const ffi::Optional<ScheduleS
 }
 
 /*!
- * \brief Extract the BufferStores, which serve as the reduction updates, from the given LetStmt and
- * the BufferStores inside. And meanwhile set the buffer order of the reduction
+ * \brief Extract the BufferStores, which serve as the reduction updates, from a SeqStmt whose
+ * leading statements are LetStmt bindings. And meanwhile set the buffer order of the reduction
  * \param self The schedule state, used for error reporting
  * \param block The reduction block, used for error reporting
- * \param let The LetStmt from which the reduction updates are extracted
+ * \param seq_node The SeqStmt from which the reduction updates are extracted
  * \param n_buffers The number of buffers participating in the reduction
  * \param updates The extracted reduction updates
  * \param buf2index A mapping from reduction buffers to their indices of the reduction order
  * \throw ScheduleError If rfactor or cross-thread reduction cannot be applied to the block
  */
 void ExtractReductionUpdates(const ffi::Optional<ScheduleState>& self, Block block,
-                             const LetStmtNode* let, int n_buffers,
+                             const SeqStmtNode* seq_node, int n_buffers,
                              ffi::Array<BufferStore>* updates,
                              std::unordered_map<const BufferNode*, int>* buf2index) {
   std::unordered_map<const VarNode*, int> var2index;
   ffi::Array<PrimExpr> let_values;
   let_values.reserve(n_buffers);
   updates->resize(n_buffers);
+  if (seq_node == nullptr || static_cast<int>(seq_node->seq.size()) <= n_buffers) {
+    ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/3);
+  }
 
   // Step 1.
   // - Extract the BufferStore values from the LetStmts.
   // - Construct the mapping from let variables to the index.
   for (int i = 0; i < n_buffers; ++i) {
+    const auto* let = seq_node->seq[i].as<LetStmtNode>();
     if (let == nullptr) {
       ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/3);
     }
@@ -374,25 +378,17 @@ void ExtractReductionUpdates(const ffi::Optional<ScheduleState>& self, Block blo
     if (!insert_result.second) {
       ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/4);
     }
-    if (i != n_buffers - 1) {
-      let = let->body.as<LetStmtNode>();
-    }
   }
 
-  // There should be no more LetStmt.
-  if (let->body->IsInstance<LetStmtNode>()) {
+  // There should be no more leading LetStmt.
+  if (seq_node->seq[n_buffers].as<LetStmtNode>()) {
     ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/3);
   }
 
-  // Now `let` is expected to be the innermost LetStmt, whose body should either be a SeqStmt or
-  // a BufferStore
-  const auto* p_seq = let->body.as<SeqStmtNode>();
-  const auto* p_buf_store = let->body.as<BufferStoreNode>();
-  if (p_seq == nullptr && p_buf_store == nullptr) {
-    ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/5);
+  ffi::Array<Stmt> seq;
+  for (size_t i = n_buffers; i < seq_node->seq.size(); ++i) {
+    seq.push_back(seq_node->seq[i]);
   }
-  ffi::Array<Stmt> seq =
-      p_seq != nullptr ? p_seq->seq : ffi::Array<Stmt>{ffi::GetRef<BufferStore>(p_buf_store)};
   if (static_cast<int>(seq.size()) != n_buffers) {
     ErrorRFactorCrossThreadReductionNotApplicable(self, std::move(block), /*violated_cond=*/6);
   }
@@ -460,8 +456,8 @@ std::pair<ffi::Array<PrimExpr>, ffi::Array<BufferStore>> GetInitValuesAndUpdates
     updates.push_back(ffi::GetRef<BufferStore>(update));
     buf2index[update->buffer.get()] = 0;
   } else {
-    const auto* let = block->body.as<LetStmtNode>();
-    ExtractReductionUpdates(self, block, let, n_buffers, &updates, &buf2index);
+    const auto* seq = block->body.as<SeqStmtNode>();
+    ExtractReductionUpdates(self, block, seq, n_buffers, &updates, &buf2index);
   }
   ICHECK_EQ(updates.size(), n_buffers);
 

@@ -35,8 +35,10 @@ class TestReuseInSequentialLetStmt(BaseBeforeAfter):
         var = tir.Var("var", "int32")
         sequential_bindings = tir.SeqStmt(
             [
-                tir.LetStmt(var, 16, tir.Evaluate(var)),
-                tir.LetStmt(var, 32, tir.Evaluate(var)),
+                tir.LetStmt(var, 16),
+                tir.Evaluate(var),
+                tir.LetStmt(var, 32),
+                tir.Evaluate(var),
             ]
         )
         func = tir.PrimFunc([], sequential_bindings)
@@ -55,10 +57,10 @@ class TestReuseInSequentialLetStmt(BaseBeforeAfter):
 
 
 class TestReuseInNestedLetStmt(BaseBeforeAfter):
-    """De-dup nested bindings
+    """De-dup repeated bindings
 
-    Use of a variable with nested bindings is de-duplicated to refer
-    to the inner-most binding that contains the use site.
+    Without LetStmtNode::body, later bindings in the same SeqStmt remain
+    visible until the end of the sequential scope.
     """
 
     def before(self):
@@ -66,17 +68,14 @@ class TestReuseInNestedLetStmt(BaseBeforeAfter):
         # not valid TIR, and may not be expressible in future versions
         # of TVMSCript.
         var = tir.Var("var", "int32")
-        inner_let = tir.LetStmt(var, 16, tir.Evaluate(var))
-        outer_let = tir.LetStmt(
-            var,
-            32,
-            tir.SeqStmt(
-                [
-                    tir.Evaluate(var),
-                    inner_let,
-                    tir.Evaluate(var),
-                ]
-            ),
+        inner_let = tir.SeqStmt([tir.LetStmt(var, 16), tir.Evaluate(var)])
+        outer_let = tir.SeqStmt(
+            [
+                tir.LetStmt(var, 32),
+                tir.Evaluate(var),
+                inner_let,
+                tir.Evaluate(var),
+            ]
         )
         func = tir.PrimFunc([], outer_let)
 
@@ -87,9 +86,9 @@ class TestReuseInNestedLetStmt(BaseBeforeAfter):
         def func():
             with T.LetStmt(T.int32(32)) as outer:
                 T.evaluate(outer)
-                with T.LetStmt(T.int32(16)) as inner:
-                    T.evaluate(inner)
-                T.evaluate(outer)
+            with T.LetStmt(T.int32(16)) as inner:
+                T.evaluate(inner)
+                T.evaluate(inner)
 
         return func
 

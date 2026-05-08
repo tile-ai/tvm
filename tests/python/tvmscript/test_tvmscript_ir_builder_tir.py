@@ -309,7 +309,7 @@ def test_ir_builder_tir_let():
     let_actual = ib.get()
 
     # the expected Let statement
-    let_expected = tir.LetStmt(T.int32(), tir.IntImm("int32", 2), tir.Evaluate(0))
+    let_expected = tir.LetStmt(T.int32(), tir.IntImm("int32", 2))
 
     # Check if the generated ir is expected
     assert_structural_equal(let_actual, let_expected, map_free_vars=True)

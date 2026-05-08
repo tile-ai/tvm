@@ -32,6 +32,7 @@
 #include <tvm/tir/stmt_functor.h>
 
 #include <algorithm>
+#include <list>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -330,11 +331,28 @@ class ControlFlowGraphBuilder final : public IRVisitorWithAnalyzer {
   }
 
   void VisitStmt_(const LetStmtNode* op) override {
-    std::optional<BindLetVar> binding;
-    if (UsesLoopVar(op->value)) {
-      binding.emplace(this, op->var, op->value);
-    }
     Parent::VisitStmt_(op);
+  }
+
+  void VisitStmt_(const SeqStmtNode* op) override {
+    std::list<BindLetVar> scoped_let_bindings;
+    for (const Stmt& stmt : op->seq) {
+      if (const auto* let = stmt.as<LetStmtNode>()) {
+        out_->control_flow_lookup_[stmt.get()] = CurrentControlBlock();
+        Stmt prev_stmt = current_stmt_;
+        current_stmt_ = stmt;
+
+        VisitExpr(let->value);
+        analyzer_.Bind(let->var, let->value);
+        if (UsesLoopVar(let->value)) {
+          scoped_let_bindings.emplace_back(this, let->var, let->value);
+        }
+
+        current_stmt_ = prev_stmt;
+      } else {
+        VisitStmt(stmt);
+      }
+    }
   }
 
   void VisitExpr_(const BufferLoadNode* op) override {

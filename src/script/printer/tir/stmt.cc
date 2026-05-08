@@ -97,7 +97,6 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
     .set_dispatch<tir::LetStmt>("", [](tir::LetStmt stmt, AccessPath p, IRDocsifier d) -> Doc {
-      bool concise = AllowConciseScoping(d, stmt);
       // Step 1. Type annotation
       ffi::Optional<ExprDoc> type_doc = d->AsDoc<ExprDoc>(stmt->var->type_annotation,  //
                                                           p->Attr("var")->Attr("type_annotation"));
@@ -108,26 +107,14 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       }
       // Step 2. RHS
       ExprDoc rhs = d->AsDoc<ExprDoc>(stmt->value, p->Attr("value"));
-      // Step 3. LHS and body
-      With<TIRFrame> f(d, stmt);
-      ffi::Array<StmtDoc>* stmts = &(*f)->stmts;
+      // Step 3. LHS
       bool var_defined = d->IsVarDefined(stmt->var);
       if (!var_defined) {
-        DefineVar(stmt->var, *f, d);
+        DefineVar(stmt->var, d->frames.back(), d);
       }
       ExprDoc lhs = d->AsDoc<ExprDoc>(stmt->var, p->Attr("var"));
-      AsDocBody(stmt->body, p->Attr("body"), f->get(), d);
       // Step 4. Dispatch
-      if (var_defined) {
-        return ScopeDoc(std::nullopt, TIR(d, "LetStmt")->Call({rhs}, {"var"}, {lhs}), *stmts);
-      } else if (concise) {
-        stmts->insert(stmts->begin(), AssignDoc(lhs, rhs, type_doc));
-        return StmtBlockDoc(*stmts);
-      } else if (type_doc.defined() && !stmt->var->type_annotation->IsInstance<PrimTypeNode>()) {
-        return ScopeDoc(lhs, TIR(d, "LetStmt")->Call({rhs, type_doc.value()}), *stmts);
-      } else {
-        return ScopeDoc(lhs, TIR(d, "LetStmt")->Call({rhs}), *stmts);
-      }
+      return AssignDoc(lhs, rhs, type_doc);
     });
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)

@@ -101,7 +101,6 @@ class VarTouchedAnalysis : public StmtVisitor {
     ExprTouched tc(touched_var_, false);
     tc(op->value);
     Record(op->var.get(), tc);
-    this->VisitStmt(op->body);
   }
 
   void VisitStmt_(const BufferStoreNode* op) final {
@@ -307,11 +306,10 @@ class VTInjector : public arith::IRMutatorWithAnalyzer {
       return InjectVTLoop(ffi::GetRef<Stmt>(op), true);
     }
     visit_touched_var_ = false;
-    Stmt body = this->VisitStmt(op->body);
-    if (value.same_as(op->value) && body.same_as(op->body)) {
+    if (value.same_as(op->value)) {
       return ffi::GetRef<Stmt>(op);
     } else {
-      return LetStmt(op->var, value, body);
+      return LetStmt(op->var, value, op->span);
     }
   }
   // For

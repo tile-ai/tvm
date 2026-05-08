@@ -46,10 +46,7 @@ Stmt MergeNest(const std::vector<Stmt>& nest, Stmt body) {
       n->body = body;
       body = Stmt(n);
     } else if (const auto* let = s.as<LetStmtNode>()) {
-      auto n = ffi::make_object<LetStmtNode>(*let);
-      ICHECK(is_no_op(n->body));
-      n->body = body;
-      body = Stmt(n);
+      body = SeqStmt::Flatten(SeqStmt({LetStmt(let->var, let->value, let->span), body}));
     } else if (const auto* attr = s.as<AttrStmtNode>()) {
       auto n = ffi::make_object<AttrStmtNode>(*attr);
       ICHECK(is_no_op(n->body));
@@ -371,12 +368,44 @@ class IRConvertSSA final : public StmtExprMutator {
     if (defined_.count(v.get())) {
       PrimExpr value = this->VisitExpr(op->value);
       ScopedRedefine redefine(this, v);
-      Stmt body = this->VisitStmt(op->body);
-      return LetStmt(redefine.new_var, value, body);
+      return LetStmt(redefine.new_var, value, op->span);
     } else {
       defined_.insert(v.get());
       return StmtExprMutator::VisitStmt_(op);
     }
+  }
+  Stmt VisitStmt_(const SeqStmtNode* op) final {
+    ffi::Array<Stmt> new_seq;
+    bool changed = false;
+    std::vector<ScopedRedefine> redefines;
+
+    for (const Stmt& stmt : op->seq) {
+      if (const auto* let = stmt.as<LetStmtNode>()) {
+        PrimExpr value = this->VisitExpr(let->value);
+        Stmt new_stmt;
+        const Var& v = let->var;
+
+        if (defined_.count(v.get())) {
+          const ScopedRedefine& redefine = redefines.emplace_back(this, v);
+          new_stmt = LetStmt(redefine.new_var, value, let->span);
+        } else {
+          defined_.insert(v.get());
+          new_stmt = value.same_as(let->value) ? stmt : LetStmt(v, value, let->span);
+        }
+
+        changed = changed || !new_stmt.same_as(stmt);
+        new_seq.push_back(new_stmt);
+      } else {
+        Stmt new_stmt = this->VisitStmt(stmt);
+        changed = changed || !new_stmt.same_as(stmt);
+        new_seq.push_back(new_stmt);
+      }
+    }
+
+    if (!changed) {
+      return SeqStmt::Flatten(ffi::GetRef<Stmt>(op));
+    }
+    return SeqStmt::Flatten(SeqStmt(new_seq));
   }
   Stmt VisitStmt_(const ForNode* op) final {
     const Var& v = op->loop_var;

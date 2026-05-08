@@ -27,6 +27,7 @@
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 
+#include <tuple>
 #include <unordered_map>
 
 #include "../transforms/ir_utils.h"
@@ -114,6 +115,7 @@ class BlockReadWriteDetector : public StmtExprVisitor {
 
   void VisitStmt_(const ForNode* op) override;
   void VisitStmt_(const IfThenElseNode* op) override;
+  void VisitStmt_(const SeqStmtNode* op) override;
   void VisitStmt_(const BlockRealizeNode* op) override;
   void VisitStmt_(const BufferStoreNode* op) override;
   void VisitStmt_(const LetStmtNode* op) override;
@@ -188,9 +190,33 @@ void BlockReadWriteDetector::VisitStmt_(const IfThenElseNode* op) {
 }
 
 void BlockReadWriteDetector::VisitStmt_(const LetStmtNode* op) {
-  let_bindings_[op->var.get()] = op->value;
-  StmtVisitor::VisitStmt_(op);
-  let_bindings_.erase(op->var.get());
+  VisitExpr(op->value);
+}
+
+void BlockReadWriteDetector::VisitStmt_(const SeqStmtNode* op) {
+  std::vector<std::tuple<const VarNode*, bool, PrimExpr>> previous_bindings;
+  for (const Stmt& stmt : op->seq) {
+    if (const auto* let = stmt.as<LetStmtNode>()) {
+      VisitExpr(let->value);
+      auto it = let_bindings_.find(let->var.get());
+      previous_bindings.emplace_back(let->var.get(), it != let_bindings_.end(),
+                                     it != let_bindings_.end() ? it->second : PrimExpr());
+      let_bindings_[let->var.get()] = let->value;
+    } else {
+      StmtExprVisitor::VisitStmt(stmt);
+    }
+  }
+
+  for (auto it = previous_bindings.rbegin(); it != previous_bindings.rend(); ++it) {
+    const VarNode* var = std::get<0>(*it);
+    bool had_previous_binding = std::get<1>(*it);
+    const PrimExpr& previous_value = std::get<2>(*it);
+    if (had_previous_binding) {
+      let_bindings_[var] = previous_value;
+    } else {
+      let_bindings_.erase(var);
+    }
+  }
 }
 
 void BlockReadWriteDetector::VisitExpr_(const CallNode* op) {

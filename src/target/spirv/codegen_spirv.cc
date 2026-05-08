@@ -886,7 +886,6 @@ void CodeGenSPIRV::VisitStmt_(const LetStmtNode* op) {
   ICHECK(!op->var.dtype().is_handle());
   var_map_[op->var.get()] = MakeValue(op->value);
   analyzer_->Bind(op->var, op->value);
-  this->VisitStmt(op->body);
 }
 
 void CodeGenSPIRV::VisitStmt_(const SeqStmtNode* op) {

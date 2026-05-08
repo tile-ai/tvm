@@ -144,12 +144,10 @@ Stmt DataTypeLegalizer::VisitStmt_(const LetStmtNode* op) {
     var_remap_[op->var.get()] = var;
   }
 
-  Stmt new_body = this->VisitStmt(op->body);
-
-  if (value.same_as(op->value) && new_body.same_as(op->body)) {
+  if (value.same_as(op->value)) {
     return ffi::GetRef<Stmt>(op);
   } else {
-    return LetStmt(var, value, new_body, op->span);
+    return LetStmt(var, value, op->span);
   }
 }
 
@@ -584,8 +582,7 @@ Stmt IndexDataTypeRewriter::VisitStmt_(const LetStmtNode* op) {
   Var var = var_remap_[let_stmt->var.get()];
   is_enabled_ = is_enabled;
   ICHECK(value.dtype() == var.dtype());
-  // No need to re-visit body
-  return LetStmt(var, value, let_stmt->body, let_stmt->span);
+  return LetStmt(var, value, let_stmt->span);
 }
 
 #define TVM_DEFINE_CMPOP_EXPR_MUTATE_WITH_TYPE_MATCH(OP, FUNC)                     \

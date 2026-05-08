@@ -135,8 +135,7 @@ class LoopAnalyzer : public StmtExprVisitor {
       loops[f] = loop_info;
       return height + 1;
     } else if (stmt->IsInstance<LetStmtNode>()) {
-      const LetStmtNode* n = stmt.as<LetStmtNode>();
-      return TraverseLoop(n->body, parent_depth, has_parallel);
+      return parent_depth;
     } else if (stmt->IsInstance<AttrStmtNode>()) {
       const AttrStmtNode* n = stmt.as<AttrStmtNode>();
       return TraverseLoop(n->body, parent_depth, has_parallel);

@@ -68,8 +68,8 @@ class SSAVerifier final : public StmtExprVisitor {
   }
 
   void VisitStmt_(const LetStmtNode* op) final {
+    VisitExpr(op->value);
     MarkDef(op->var, op->value);
-    StmtExprVisitor::VisitStmt_(op);
   }
   void VisitStmt_(const ForNode* op) final {
     MarkDef(op->loop_var, op->loop_var);

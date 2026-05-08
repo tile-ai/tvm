@@ -130,11 +130,10 @@ def test_expr_constructor():
 def test_stmt_constructor():
     v = te.var("aa")
     nop = tvm.tir.Evaluate(1)
-    x = tvm.tir.LetStmt(v, 1, tvm.tir.Evaluate(1))
+    x = tvm.tir.LetStmt(v, 1)
     assert isinstance(x, tvm.tir.LetStmt)
     assert x.var == v
     assert x.value.value == 1
-    assert isinstance(x.body, tvm.tir.Evaluate)
 
     x = tvm.tir.AttrStmt(v == 1, "xx", 1, tvm.tir.Evaluate(1))
     assert isinstance(x, tvm.tir.AttrStmt)

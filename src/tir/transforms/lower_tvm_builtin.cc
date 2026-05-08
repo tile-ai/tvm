@@ -28,6 +28,7 @@
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
 
+#include <utility>
 #include <unordered_set>
 
 #include "ir_utils.h"
@@ -158,17 +159,22 @@ class BuiltinLower : public StmtExprMutator {
         scope.stack_shape = decl_buffer({IntImm(DataType::Int(64), scope.max_sizes.shape_stack)},
                                         DataType::Int(64), "stack_shape");
         stmt = DeclBuffer(scope.stack_shape, stmt);
-        stmt = LetStmt(scope.stack_shape->data, StackAlloca("shape", scope.max_sizes.shape_stack),
-                       stmt);
+        stmt = SeqStmt::Flatten(
+            SeqStmt({LetStmt(scope.stack_shape->data,
+                             StackAlloca("shape", scope.max_sizes.shape_stack)),
+                     stmt}));
       }
 
       if (scope.max_sizes.array_stack != 0) {
-        stmt = LetStmt(scope.stack_array, StackAlloca("array", scope.max_sizes.array_stack), stmt);
+        stmt = SeqStmt::Flatten(
+            SeqStmt({LetStmt(scope.stack_array, StackAlloca("array", scope.max_sizes.array_stack)),
+                     stmt}));
       }
 
       if (scope.max_sizes.arg_stack != 0) {
-        stmt = LetStmt(scope.stack_ffi_any, StackAlloca("tvm_ffi_any", scope.max_sizes.arg_stack),
-                       stmt);
+        stmt = SeqStmt::Flatten(SeqStmt(
+            {LetStmt(scope.stack_ffi_any, StackAlloca("tvm_ffi_any", scope.max_sizes.arg_stack)),
+             stmt}));
       }
     }
 
@@ -215,10 +221,38 @@ class BuiltinLower : public StmtExprMutator {
   Stmt VisitStmt_(const LetStmtNode* op) final {
     if (const CallNode* call = op->value.as<CallNode>()) {
       if (call->op.same_as(builtin::nd_mem_alloc_with_scope())) {
-        return StmtExprMutator::VisitStmt(MakeNdMemAllocWithScope(op, call));
+        auto [alloca, free_stmt] = MakeNdMemAllocWithScope(op, call);
+        if (nd_mem_free_stack_.empty()) {
+          return SeqStmt::Flatten(SeqStmt({alloca, free_stmt}));
+        }
+        nd_mem_free_stack_.back().push_back(free_stmt);
+        return alloca;
       }
     }
     return StmtExprMutator::VisitStmt_(op);
+  }
+
+  Stmt VisitStmt_(const SeqStmtNode* op) final {
+    nd_mem_free_stack_.emplace_back();
+
+    ffi::Array<Stmt> seq;
+    bool changed = false;
+    for (const Stmt& stmt : op->seq) {
+      Stmt new_stmt = this->VisitStmt(stmt);
+      changed = changed || !new_stmt.same_as(stmt);
+      seq.push_back(new_stmt);
+    }
+
+    auto free_stmts = std::move(nd_mem_free_stack_.back());
+    nd_mem_free_stack_.pop_back();
+    for (auto it = free_stmts.rbegin(); it != free_stmts.rend(); ++it) {
+      seq.push_back(*it);
+    }
+
+    if (!changed && free_stmts.empty()) {
+      return SeqStmt::Flatten(ffi::GetRef<Stmt>(op));
+    }
+    return SeqStmt::Flatten(SeqStmt(seq));
   }
 
   Stmt VisitStmt_(const AllocateNode* op) {
@@ -277,13 +311,14 @@ class BuiltinLower : public StmtExprMutator {
 
     body = AttrStmt(op->buffer_var, attr::storage_alignment,
                     make_const(DataType::Int(32), runtime::kTempAllocaAlignment), body);
-    body = LetStmt(op->buffer_var,
-                   Call(op->buffer_var.dtype(), Op::Get("tir.TVMBackendAllocWorkspace"),
-                        {cast(DataType::Int(32), device_type_.value()),
-                         cast(DataType::Int(32), device_id_.value()), total_bytes,
-                         IntImm(DataType::Int(32), op->dtype.code()),
-                         IntImm(DataType::Int(32), op->dtype.bits())}),
-                   body);
+    body = SeqStmt::Flatten(SeqStmt(
+        {LetStmt(op->buffer_var,
+                 Call(op->buffer_var.dtype(), Op::Get("tir.TVMBackendAllocWorkspace"),
+                      {cast(DataType::Int(32), device_type_.value()),
+                       cast(DataType::Int(32), device_id_.value()), total_bytes,
+                       IntImm(DataType::Int(32), op->dtype.code()),
+                       IntImm(DataType::Int(32), op->dtype.bits())})),
+         body}));
 
     return body;
   }
@@ -605,7 +640,7 @@ class BuiltinLower : public StmtExprMutator {
     return Call(op->dtype, lowered_packed_op, packed_args);
   }
 
-  Stmt MakeNdMemAllocWithScope(const LetStmtNode* let, const CallNode* call) {
+  std::pair<Stmt, Stmt> MakeNdMemAllocWithScope(const LetStmtNode* let, const CallNode* call) {
     ICHECK(device_type_) << "Unknown device type in current IR";
     ICHECK(device_id_) << "Unknown device id in current IR";
     Stmt throw_last_error = Evaluate(Call(DataType::Int(32), builtin::tvm_throw_last_error(), {}));
@@ -616,9 +651,8 @@ class BuiltinLower : public StmtExprMutator {
                          storage_scope, let->var});
     Stmt free_stmt = IfThenElse(free_op != make_zero(DataType::Int(32)), throw_last_error);
 
-    Stmt body = SeqStmt(
-        {IfThenElse(Call(DataType::Bool(), builtin::isnullptr(), {let->var}), throw_last_error),
-         let->body, free_stmt});
+    Stmt null_check = IfThenElse(Call(DataType::Bool(), builtin::isnullptr(), {let->var}),
+                                 throw_last_error);
 
     DataType dtype =
         let->var->type_annotation.as<PointerTypeNode>()->element_type.as<PrimTypeNode>()->dtype;
@@ -638,9 +672,10 @@ class BuiltinLower : public StmtExprMutator {
       args.push_back(call->args[i]);
     }
 
-    Call call_packed = Call(let->var.dtype(), builtin::tvm_call_packed(), args);
-    Stmt alloca = LetStmt(let->var, call_packed, body);
-    return alloca;
+    PrimExpr call_packed = this->VisitExpr(Call(let->var.dtype(), builtin::tvm_call_packed(), args));
+    Stmt alloca = SeqStmt::Flatten(
+        SeqStmt({LetStmt(let->var, call_packed), this->VisitStmt(null_check)}));
+    return {alloca, this->VisitStmt(free_stmt)};
   }
 
  private:
@@ -657,6 +692,9 @@ class BuiltinLower : public StmtExprMutator {
 
   // The prepration sequence to be emitted before the current statement.
   std::vector<std::vector<Stmt>> prep_seq_stack_;
+  // free_nd calls for nd_mem_alloc_with_scope are emitted at the end of the
+  // enclosing SeqStmt, preserving the old body-scoped lifetime.
+  std::vector<std::vector<Stmt>> nd_mem_free_stack_;
   ffi::Optional<PrimExpr> device_type_{std::nullopt};
   ffi::Optional<PrimExpr> device_id_{std::nullopt};
 

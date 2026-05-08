@@ -76,7 +76,6 @@ class StoreUndefLocator : public StmtExprVisitor {
       var_bindings_with_undef_.insert(op->var.get());
     }
 
-    StmtExprVisitor::VisitStmt(op->body);
   }
 
   void VisitExpr_(const VarNode* op) final {

@@ -66,7 +66,8 @@ class Stmt : public ObjectRef {
 };
 
 /*!
- * \brief Let binding, bind var to value, then run body.
+ * \brief Let binding, bind var to value for following statements in the
+ * enclosing sequential scope.
  */
 class LetStmtNode : public StmtNode {
  public:
@@ -74,15 +75,12 @@ class LetStmtNode : public StmtNode {
   Var var;
   /*! \brief The value to be bound. */
   PrimExpr value;
-  /*! \brief The body block. */
-  Stmt body;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
     refl::ObjectDef<LetStmtNode>()
         .def_ro("var", &LetStmtNode::var, refl::AttachFieldFlag::SEqHashDef())
-        .def_ro("value", &LetStmtNode::value)
-        .def_ro("body", &LetStmtNode::body);
+        .def_ro("value", &LetStmtNode::value);
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("tir.LetStmt", LetStmtNode, StmtNode);
 };
@@ -93,7 +91,7 @@ class LetStmtNode : public StmtNode {
  */
 class LetStmt : public Stmt {
  public:
-  TVM_DLL LetStmt(Var var, PrimExpr value, Stmt body, Span span = Span());
+  TVM_DLL LetStmt(Var var, PrimExpr value, Span span = Span());
 
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(LetStmt, Stmt, LetStmtNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(LetStmtNode);

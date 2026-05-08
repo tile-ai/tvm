@@ -54,21 +54,17 @@ class LetStmt(Stmt):
     value : PrimExpr
         The value in to be bound.
 
-    body : Stmt
-        The body statement.
-
     span : Optional[Span]
         The location of the stmt in the source code.
     """
 
     var: Var
     value: PrimExpr
-    body: Stmt
     span: Optional[Span]
 
-    def __init__(self, var: Var, value: PrimExpr, body: Stmt, span: Optional[Span] = None) -> None:
+    def __init__(self, var: Var, value: PrimExpr, span: Optional[Span] = None) -> None:
         self.__init_handle_by_constructor__(
-            _ffi_api.LetStmt, var, value, body, span  # type: ignore
+            _ffi_api.LetStmt, var, value, span  # type: ignore
         )
 
 

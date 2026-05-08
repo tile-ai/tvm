@@ -54,7 +54,7 @@ class StorageAccessInfoLower : public StmtExprMutator {
       Stmt stmt = StmtExprMutator::VisitStmt_(op);
       op = stmt.as<AllocateNode>();
       if (info->head_address.defined()) {
-        return LetStmt(op->buffer_var, info->head_address, op->body);
+        return SeqStmt::Flatten(SeqStmt({LetStmt(op->buffer_var, info->head_address), op->body}));
       } else {
         return op->body;
       }

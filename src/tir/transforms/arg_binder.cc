@@ -57,7 +57,7 @@ bool ArgBinder::Bind_(const PrimExpr& arg, const PrimExpr& value, const std::str
       defs_.emplace_back(v_arg);
       if (with_lets) {
         (*def_map_)[v] = arg;
-        init_nest_.emplace_back(LetStmt(v_arg, value, Evaluate(0)));
+        init_nest_.emplace_back(LetStmt(v_arg, value));
       } else {
         (*def_map_)[v] = value;
       }
@@ -200,7 +200,7 @@ void ArgBinder::BindDLTensor(const Buffer& buffer, const PrimExpr& device_type,
   Var v_shape(shape_handle_name(), DataType::Handle());
   def_handle_dtype_.Set(v_shape, make_const(tvm_shape_type, 0));
   init_nest_.emplace_back(
-      LetStmt(buf_shape->data, TVMArrayGet(DataType::Handle(), handle, builtin::kArrShape), nop));
+      LetStmt(buf_shape->data, TVMArrayGet(DataType::Handle(), handle, builtin::kArrShape)));
   init_nest_.emplace_back(DeclBuffer(buf_shape, nop));
   for (size_t k = 0; k < buffer->shape.size(); ++k) {
     if (buffer->dtype == DataType::Int(4) || buffer->dtype == DataType::UInt(4) ||
@@ -216,7 +216,7 @@ void ArgBinder::BindDLTensor(const Buffer& buffer, const PrimExpr& device_type,
                                    tvm_shape_type, arg_name + ".strides");
   def_handle_dtype_.Set(buf_strides->data, tir::TypeAnnotation(tvm_shape_type));
   init_nest_.emplace_back(LetStmt(
-      buf_strides->data, TVMArrayGet(DataType::Handle(), handle, builtin::kArrStrides), nop));
+      buf_strides->data, TVMArrayGet(DataType::Handle(), handle, builtin::kArrStrides)));
   init_nest_.emplace_back(DeclBuffer(buf_strides, nop));
   PrimExpr v_strides_is_null = Call(DataType::Bool(), builtin::isnullptr(), {buf_strides->data});
   if (buffer->strides.size() == 0) {

@@ -331,8 +331,8 @@ def test_no_normalization_without_commoning():
     z = te.var("z")
     a = te.var("a")
     # Test prog :
-    # let a = x + (y + z) in a
-    body = tvm.tir.LetStmt(a, x + (y + z), tvm.tir.Evaluate(a))
+    # let a = x + (y + z); evaluate(a)
+    body = tvm.tir.SeqStmt([tvm.tir.LetStmt(a, x + (y + z)), tvm.tir.Evaluate(a)])
 
     mod = tvm.IRModule.from_expr(tvm.tir.PrimFunc([x, y, z], body))
     body = tvm.tir.transform.CommonSubexprElimTIR(identify_equiv_terms=True)(mod)
@@ -341,8 +341,9 @@ def test_no_normalization_without_commoning():
 
     body = body["main"].body  # Gets the body of the main, i.e. the full statement
 
-    assert body.var.name == "a"
-    tvm.ir.assert_structural_equal(body.value, x + (y + z))
+    let_stmt = body.seq[0]
+    assert let_stmt.var.name == "a"
+    tvm.ir.assert_structural_equal(let_stmt.value, x + (y + z))
 
 
 # -------------------------------------------------
@@ -428,7 +429,7 @@ def test_deterministic_cse():
     expression = x
     for add in inc1 + inc2:
         expression = expression + add
-    let_stmt = tvm.tir.LetStmt(result, expression, tvm.tir.Evaluate(result))
+    let_stmt = tvm.tir.SeqStmt([tvm.tir.LetStmt(result, expression), tvm.tir.Evaluate(result)])
     mod = tvm.IRModule.from_expr(tvm.tir.PrimFunc([x], let_stmt))
 
     initial_hash = None

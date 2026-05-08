@@ -483,7 +483,7 @@ class ExpressionHoister : public arith::IRMutatorWithAnalyzer {
     }
     for (auto let_it = info.let_bindings.rbegin(); let_it != info.let_bindings.rend(); let_it++) {
       if (hoisted_let_bindings.count(let_it->var.get())) {
-        stmt = LetStmt(let_it->var, let_it->value, stmt);
+        stmt = SeqStmt::Flatten(SeqStmt({LetStmt(let_it->var, let_it->value), stmt}));
       }
     }
 
@@ -512,7 +512,7 @@ class ExpressionHoister : public arith::IRMutatorWithAnalyzer {
 
   Stmt VisitStmt_(const LetStmtNode* op) final {
     if (hoisted_let_bindings.count(op->var.get())) {
-      return this->VisitStmt(op->body);
+      return Evaluate(0);
     } else {
       return Parent::VisitStmt_(op);
     }

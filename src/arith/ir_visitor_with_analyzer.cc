@@ -46,7 +46,6 @@ void IRVisitorWithAnalyzer::VisitStmt_(const BlockNode* op) {
 void IRVisitorWithAnalyzer::VisitStmt_(const LetStmtNode* op) {
   this->VisitExpr(op->value);
   analyzer_.Bind(op->var, op->value);
-  this->VisitStmt(op->body);
 }
 
 void IRVisitorWithAnalyzer::VisitStmt_(const IfThenElseNode* op) {

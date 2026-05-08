@@ -411,7 +411,7 @@ class IRBuilder(object):
            The var that can be in for future emits.
         """
         var = _expr.Var(var_name, dtype=value.dtype)
-        self.emit(lambda x: _stmt.LetStmt(var, value, x))
+        self.emit(lambda x: _stmt.SeqStmt([_stmt.LetStmt(var, value), x]))
         return var
 
     def allocate(self, dtype, shape, name="buf", axis_separators=None, scope=""):

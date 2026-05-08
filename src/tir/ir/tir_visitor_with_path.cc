@@ -170,8 +170,6 @@ void TIRVisitorWithPath::Visit(const Range& range, AccessPath path) {
 
 void TIRVisitorWithPath::VisitStmt_(const LetStmtNode* op, AccessPath path) {
   Visit(op->value, path->Attr("value"));
-  auto context = WithDef(op->var, path->Attr("var"));
-  Visit(op->body, path->Attr("body"));
 }
 
 void TIRVisitorWithPath::VisitStmt_(const AttrStmtNode* op, AccessPath path) {
@@ -273,7 +271,20 @@ void TIRVisitorWithPath::VisitStmt_(const AssertStmtNode* op, AccessPath path) {
 }
 
 void TIRVisitorWithPath::VisitStmt_(const SeqStmtNode* op, AccessPath path) {
-  Visit(op->seq, path->Attr("seq"));
+  auto seq_path = path->Attr("seq");
+  std::vector<DefContext<Var>> context;
+  for (size_t i = 0; i < op->seq.size(); i++) {
+    const Stmt& stmt = op->seq[i];
+    auto stmt_path = seq_path->ArrayItem(i);
+    if (const auto* let = stmt.as<LetStmtNode>()) {
+      Visit(let->value, stmt_path->Attr("value"));
+      context.push_back(WithDef(let->var, stmt_path->Attr("var")));
+    } else {
+      Visit(stmt, stmt_path);
+    }
+  }
+
+  while (context.size()) context.pop_back();
 }
 
 void TIRVisitorWithPath::VisitStmt_(const EvaluateNode* op, AccessPath path) {

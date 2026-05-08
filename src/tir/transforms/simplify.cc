@@ -238,21 +238,18 @@ class StmtSimplifier : public IRMutatorWithAnalyzer {
       // necessary for proving conditional statements.
       non_inlined_bindings_.Set(op->var, value);
     }
-    Stmt body = this->VisitStmt(op->body);
-
     // TODO(Lunderberg): Update the Buffer object as part of
     // DeclBuffer updates, which will first require
     // https://github.com/apache/tvm/pull/14778.
     bool used_in_buffer_def = used_in_buffer_def_.count(op->var.get());
 
     if (can_inline && !used_in_buffer_def) {
-      return body;
-    } else if (value.same_as(op->value) && body.same_as(op->body)) {
+      return Evaluate(0);
+    } else if (value.same_as(op->value)) {
       return ffi::GetRef<Stmt>(op);
     } else {
       auto n = this->CopyOnWrite(op);
       n->value = std::move(value);
-      n->body = std::move(body);
       return Stmt(n);
     }
   }

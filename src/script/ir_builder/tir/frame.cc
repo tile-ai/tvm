@@ -133,7 +133,8 @@ void AssertFrameNode::ExitWithScope() {
 
 void LetFrameNode::ExitWithScope() {
   TIRFrameNode::ExitWithScope();
-  AddToParent(tvm::tir::LetStmt(var, value, AsStmt(stmts)));
+  AddToParent(tvm::tir::SeqStmt::Flatten(
+      tvm::tir::SeqStmt({tvm::tir::LetStmt(var, value), AsStmt(stmts)})));
 }
 
 void RealizeFrameNode::ExitWithScope() {
