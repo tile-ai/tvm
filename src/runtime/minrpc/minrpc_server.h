@@ -31,13 +31,13 @@
 #include <tvm/ffi/c_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/runtime/base.h>
-#include <tvm/runtime/logging.h>
+#include <tvm/ffi/error.h>
 
 #include <cstring>
 #include <memory>
 #include <utility>
 
-#include "../../support/generic_arena.h"
+#include "../../support/arena.h"
 #include "rpc_reference.h"
 
 namespace tvm {

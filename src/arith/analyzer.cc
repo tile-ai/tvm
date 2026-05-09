@@ -21,11 +21,13 @@
  * \file tvm/arith/analyzer.cc
  */
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/builtin.h>
+#include <tvm/runtime/logging.h>
+#include <tvm/tirx/builtin.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/op.h>
 
 #include "./scalable_expression.h"
 #include "const_fold.h"
@@ -70,8 +72,8 @@ void Analyzer::Bind(const Var& var, const PrimExpr& expr, bool allow_override) {
 }
 
 void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
-  ICHECK(range.defined());
-  if (tir::is_one(range->extent)) {
+  TVM_FFI_ICHECK(range.defined());
+  if (tirx::is_one(range->extent)) {
     this->Bind(var, range->min, allow_override);
   } else {
     this->const_int_bound.Bind(var, range, allow_override);
@@ -86,7 +88,7 @@ void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
 void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
   // decompose value as symbol * scale + offset
   int64_t offset = 0;
-  PrimExpr symbol_scale = tir::make_const(value.dtype(), 0);
+  PrimExpr symbol_scale = tirx::make_const(value.dtype(), 0);
 
   auto fcollect_sum = [&](PrimExpr val, int sign) {
     if (const auto* intimm = val.as<IntImmNode>()) {
@@ -103,7 +105,7 @@ void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
 
   // split out the symbol and non-symbolic part
   int64_t cscale = 1;
-  PrimExpr symbol = tir::make_const(value.dtype(), 1);
+  PrimExpr symbol = tirx::make_const(value.dtype(), 1);
   auto fcollect_prod = [&](PrimExpr val) {
     if (const auto* intimm = val.as<IntImmNode>()) {
       cscale *= intimm->value;
@@ -111,7 +113,7 @@ void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
       symbol = symbol * val;
     }
   };
-  UnpackReduction<tir::MulNode>(symbol_scale, fcollect_prod);
+  UnpackReduction<tirx::MulNode>(symbol_scale, fcollect_prod);
   if (cscale <= 0) return;
   // override the constant int bound by marking it as non-negative
   // NOTE: there might be future opportunities of more bound hint
@@ -140,7 +142,7 @@ void Analyzer::Bind(const ffi::Map<Var, Range>& variables, bool allow_override) 
 }
 
 void ConstraintContext::EnterWithScope() {
-  ICHECK(recovery_functions_.size() == 0);
+  TVM_FFI_ICHECK(recovery_functions_.size() == 0);
   // entering the scope.
   recovery_functions_.push_back(analyzer_->const_int_bound.EnterConstraint(constraint_));
   recovery_functions_.push_back(analyzer_->modular_set.EnterConstraint(constraint_));
@@ -161,7 +163,7 @@ void ConstraintContext::ExitWithScope() {
 }
 
 bool Analyzer::CanProveGreaterEqual(const PrimExpr& expr, int64_t lower_bound) {
-  if (const auto* ptr = expr.as<tir::IntImmNode>()) {
+  if (const auto* ptr = expr.as<tirx::IntImmNode>()) {
     return ptr->value >= lower_bound;
   }
   auto bd = this->const_int_bound(this->rewrite_simplify(expr));
@@ -170,7 +172,7 @@ bool Analyzer::CanProveGreaterEqual(const PrimExpr& expr, int64_t lower_bound) {
 }
 
 bool Analyzer::CanProveLess(const PrimExpr& expr, int64_t upper_bound) {
-  if (const auto* ptr = expr.as<tir::IntImmNode>()) {
+  if (const auto* ptr = expr.as<tirx::IntImmNode>()) {
     return ptr->value < upper_bound;
   }
   auto bd = this->const_int_bound(this->rewrite_simplify(expr));
@@ -191,7 +193,7 @@ bool Analyzer::CanProveEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
 bool Analyzer::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs, const PrimExpr& shape) {
   if (this->CanProve(lhs <= shape, ProofStrength::kSymbolicBound)) return true;
   // no need to do further attempt if shape is already a constant.
-  if (tir::is_const_int(shape)) return false;
+  if (tirx::is_const_int(shape)) return false;
   // collect constant scale and ignore symbolic part
   // so 32 * n => cscale = 32
   int64_t cscale = 1;
@@ -200,7 +202,7 @@ bool Analyzer::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs, cons
       cscale *= ptr->value;
     }
   };
-  UnpackReduction<tir::MulNode>(shape, fcollect);
+  UnpackReduction<tirx::MulNode>(shape, fcollect);
   PrimExpr const_shape_bound = IntImm(shape.dtype(), std::abs(cscale));
   if (this->CanProve(lhs <= const_shape_bound, ProofStrength::kSymbolicBound)) return true;
   return false;
@@ -212,102 +214,79 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
     return ptr->value != 0;
   }
   PrimExpr simplified = Simplify(expr);
-  const int64_t* as_int = tir::as_const_int(simplified);
-  if (as_int && *as_int) { return true; }
+  const int64_t* as_int = tirx::as_const_int(simplified);
+  if (as_int && *as_int) return true;
 
-  // Structured boolean reasoning for Or/And (and their bitwise counterparts on bool)
-  // Evaluate children with the same proof strength.
-  if (const auto* not_node = simplified.as<tir::NotNode>()) {
+  if (const auto* not_node = simplified.as<tirx::NotNode>()) {
     PrimExpr a = not_node->a;
-    // Try direct complements on common comparators
-    if (const auto* p = a.as<tir::LTNode>()) {
-      return CanProve(tir::GE(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::LTNode>()) {
+      return CanProve(tirx::GE(p->a, p->b), strength);
     }
-    if (const auto* p = a.as<tir::LENode>()) {
-      return CanProve(tir::GT(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::LENode>()) {
+      return CanProve(tirx::GT(p->a, p->b), strength);
     }
-    if (const auto* p = a.as<tir::GTNode>()) {
-      return CanProve(tir::LE(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::GTNode>()) {
+      return CanProve(tirx::LE(p->a, p->b), strength);
     }
-    if (const auto* p = a.as<tir::GENode>()) {
-      return CanProve(tir::LT(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::GENode>()) {
+      return CanProve(tirx::LT(p->a, p->b), strength);
     }
-    if (const auto* p = a.as<tir::EQNode>()) {
-      return CanProve(tir::NE(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::EQNode>()) {
+      return CanProve(tirx::NE(p->a, p->b), strength);
     }
-    if (const auto* p = a.as<tir::NENode>()) {
-      return CanProve(tir::EQ(p->a, p->b), strength);
+    if (const auto* p = a.as<tirx::NENode>()) {
+      return CanProve(tirx::EQ(p->a, p->b), strength);
     }
-    // De Morgan on canonical boolean nodes
-    if (const auto* or_node = a.as<tir::OrNode>()) {
-      PrimExpr lhs = tir::Not(or_node->a);
-      PrimExpr rhs = tir::Not(or_node->b);
-      return CanProve(tir::And(lhs, rhs), strength);
+    if (const auto* or_node = a.as<tirx::OrNode>()) {
+      PrimExpr lhs = tirx::Not(or_node->a);
+      PrimExpr rhs = tirx::Not(or_node->b);
+      return CanProve(tirx::And(lhs, rhs), strength);
     }
-    if (const auto* and_node = a.as<tir::AndNode>()) {
-      PrimExpr lhs = tir::Not(and_node->a);
-      PrimExpr rhs = tir::Not(and_node->b);
-      return CanProve(tir::Or(lhs, rhs), strength);
+    if (const auto* and_node = a.as<tirx::AndNode>()) {
+      PrimExpr lhs = tirx::Not(and_node->a);
+      PrimExpr rhs = tirx::Not(and_node->b);
+      return CanProve(tirx::Or(lhs, rhs), strength);
     }
-    // De Morgan on bitwise boolean calls
-    if (const auto* c = a.as<tir::CallNode>()) {
-      using namespace tir;
+    if (const auto* c = a.as<tirx::CallNode>()) {
+      using namespace tirx;
       if (c->op.same_as(builtin::bitwise_or()) && c->args.size() == 2 && a.dtype().is_bool()) {
-        PrimExpr lhs = tir::Not(c->args[0]);
-        PrimExpr rhs = tir::Not(c->args[1]);
-        return CanProve(tir::And(lhs, rhs), strength);
+        PrimExpr lhs = tirx::Not(c->args[0]);
+        PrimExpr rhs = tirx::Not(c->args[1]);
+        return CanProve(tirx::And(lhs, rhs), strength);
       }
       if (c->op.same_as(builtin::bitwise_and()) && c->args.size() == 2 && a.dtype().is_bool()) {
-        PrimExpr lhs = tir::Not(c->args[0]);
-        PrimExpr rhs = tir::Not(c->args[1]);
-        return CanProve(tir::Or(lhs, rhs), strength);
+        PrimExpr lhs = tirx::Not(c->args[0]);
+        PrimExpr rhs = tirx::Not(c->args[1]);
+        return CanProve(tirx::Or(lhs, rhs), strength);
       }
     }
-    if (const auto* inner_not = a.as<tir::NotNode>()) {
-      // Double negation
+    if (const auto* inner_not = a.as<tirx::NotNode>()) {
       return CanProve(inner_not->a, strength);
     }
-    // Fallback: if `a` simplifies to constant false, then Not(a) is true
     PrimExpr a_simpl = Simplify(a);
-    const int64_t* a_const = tir::as_const_int(a_simpl);
+    const int64_t* a_const = tirx::as_const_int(a_simpl);
     if (a_const && *a_const == 0) { return true; }
-    // Otherwise, cannot conclude true
   }
-  if (const auto* or_node = simplified.as<tir::OrNode>()) {
-    if (CanProve(or_node->a, strength)) {
-      return true;
-    }
-    if (CanProve(or_node->b, strength)) {
-      return true;
-    }
+  if (const auto* or_node = simplified.as<tirx::OrNode>()) {
+    if (CanProve(or_node->a, strength)) return true;
+    if (CanProve(or_node->b, strength)) return true;
   }
-  if (const auto* and_node = simplified.as<tir::AndNode>()) {
-    bool lhs = CanProve(and_node->a, strength);
-    bool rhs = CanProve(and_node->b, strength);
-    if (lhs && rhs) {
-      return true;
-    }
+  if (const auto* and_node = simplified.as<tirx::AndNode>()) {
+    if (CanProve(and_node->a, strength) && CanProve(and_node->b, strength)) return true;
   }
-  if (const auto* call = simplified.as<tir::CallNode>()) {
-    using namespace tir;
+  if (const auto* call = simplified.as<tirx::CallNode>()) {
+    using namespace tirx;
     if (call->op.same_as(builtin::bitwise_or()) && call->args.size() == 2 &&
         simplified.dtype().is_bool()) {
-      if (CanProve(call->args[0], strength) || CanProve(call->args[1], strength)) {
-        return true;
-      }
+      if (CanProve(call->args[0], strength) || CanProve(call->args[1], strength)) return true;
     }
     if (call->op.same_as(builtin::bitwise_and()) && call->args.size() == 2 &&
         simplified.dtype().is_bool()) {
-      bool lhs = CanProve(call->args[0], strength);
-      bool rhs = CanProve(call->args[1], strength);
-      if (lhs && rhs) {
-        return true;
-      }
+      if (CanProve(call->args[0], strength) && CanProve(call->args[1], strength)) return true;
     }
     if (call->op.same_as(builtin::bitwise_not()) && call->args.size() == 1 &&
         simplified.dtype().is_bool()) {
-      // Treat as logical not and reuse Not handling by constructing tir::Not
-      return CanProve(tir::Not(call->args[0]), strength);
+      return CanProve(tirx::Not(call->args[0]), strength);
     }
   }
   if (strength >= ProofStrength::kSymbolicBound) {
@@ -318,19 +297,19 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
     // This strategy can only be called from top-level and not from sub-analyzers.
     ffi::Optional<PrimExpr> pos_diff;
     int lower_bound = 0;
-    if (const auto* ptr_lt = expr.as<tir::LTNode>()) {
+    if (const auto* ptr_lt = expr.as<tirx::LTNode>()) {
       pos_diff = ptr_lt->b - ptr_lt->a;
       lower_bound = 1;
     }
-    if (const auto* ptr_le = expr.as<tir::LENode>()) {
+    if (const auto* ptr_le = expr.as<tirx::LENode>()) {
       pos_diff = ptr_le->b - ptr_le->a;
       lower_bound = 0;
     }
-    if (const auto* ptr_gt = expr.as<tir::GTNode>()) {
+    if (const auto* ptr_gt = expr.as<tirx::GTNode>()) {
       pos_diff = ptr_gt->a - ptr_gt->b;
       lower_bound = 1;
     }
-    if (const auto* ptr_ge = expr.as<tir::GENode>()) {
+    if (const auto* ptr_ge = expr.as<tirx::GENode>()) {
       pos_diff = ptr_ge->a - ptr_ge->b;
       lower_bound = 0;
     }
@@ -403,7 +382,7 @@ PrimExpr Analyzer::Simplify(const PrimExpr& expr, int steps) {
   res = this->canonical_simplify(res);
 
   for (int i = 0; i < steps; ++i) {
-    if (tir::is_const_int(res)) {
+    if (tirx::is_const_int(res)) {
       return res;
     }
     if (i % 2 == 0) {
@@ -498,10 +477,11 @@ static FnFactory BuildAnalyzerFactory(std::shared_ptr<tvm::arith::Analyzer> self
       });
     } else if (name == "bind") {
       return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
+        bool allow_override = args.size() >= 3 && args[2].cast<bool>();
         if (auto opt_range = args[1].try_cast<Range>()) {
-          self->Bind(args[0].cast<Var>(), opt_range.value());
+          self->Bind(args[0].cast<Var>(), opt_range.value(), allow_override);
         } else {
-          self->Bind(args[0].cast<Var>(), args[1].cast<PrimExpr>());
+          self->Bind(args[0].cast<Var>(), args[1].cast<PrimExpr>(), allow_override);
         }
       });
     } else if (name == "can_prove") {

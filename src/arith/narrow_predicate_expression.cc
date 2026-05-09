@@ -22,17 +22,18 @@
  * \brief Utility to deduce bound of expression
  */
 #include <tvm/arith/int_solver.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/stmt_functor.h>
 
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 /* \brief Given a true expression that includes free parameter,
  * generate a true expression without the free parameters.
@@ -48,10 +49,10 @@ using namespace tir;
  */
 // Utility for generating a known true expression from an expression
 // with free parameters, and the range of those parameters.
-class ExpressionNarrower : public tir::ExprMutator {
+class ExpressionNarrower : public tirx::ExprMutator {
  public:
   static PrimExpr Apply(PrimExpr expr, ffi::Map<Var, Range> free_parameters) {
-    ICHECK(expr.dtype().is_bool()) << "Expected boolean expression, but received " << expr;
+    TVM_FFI_ICHECK(expr.dtype().is_bool()) << "Expected boolean expression, but received " << expr;
     ExpressionNarrower mutator(free_parameters);
     return mutator(expr);
   }
@@ -60,7 +61,7 @@ class ExpressionNarrower : public tir::ExprMutator {
   explicit ExpressionNarrower(ffi::Map<Var, Range> free_parameters)
       : free_parameters_(free_parameters) {}
 
-  using Parent = tir::ExprMutator;
+  using Parent = tirx::ExprMutator;
   using Parent::VisitExpr_;
 
   enum class Context {
@@ -193,7 +194,7 @@ class ExpressionNarrower : public tir::ExprMutator {
         return Context::Minimize;
 
       default:
-        LOG(FATAL) << "Unhandled Context, all legal values should be handled";
+        TVM_FFI_THROW(InternalError) << "Unhandled Context, all legal values should be handled";
     }
   }
 

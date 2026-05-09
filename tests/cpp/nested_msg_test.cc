@@ -18,11 +18,12 @@
  */
 
 #include <gtest/gtest.h>
+#include <tvm/ffi/extra/structural_equal.h>
 #include <tvm/relax/nested_msg.h>
 #include <tvm/relax/struct_info.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/logging.h>
-#include <tvm/tir/expr.h>
+#include <tvm/tirx/expr.h>
 
 #include <algorithm>
 #include <array>
@@ -215,10 +216,11 @@ TEST(NestedMsg, MapToNestedMsgBySInfo) {
   auto arr1 = arr[1].NestedArray();
 
   EXPECT_TRUE(arr1[0].IsLeaf());
-  EXPECT_TRUE(StructuralEqual()(arr1[0].LeafValue(), TupleGetItem(TupleGetItem(x, 1), 0)));
+  EXPECT_TRUE(
+      tvm::ffi::StructuralEqual()(arr1[0].LeafValue(), TupleGetItem(TupleGetItem(x, 1), 0)));
 
   EXPECT_TRUE(arr[2].IsLeaf());
-  EXPECT_TRUE(StructuralEqual()(arr[2].LeafValue(), TupleGetItem(x, 2)));
+  EXPECT_TRUE(tvm::ffi::StructuralEqual()(arr[2].LeafValue(), TupleGetItem(x, 2)));
 }
 
 TEST(NestedMsg, NestedMsgToExpr) {
@@ -233,7 +235,7 @@ TEST(NestedMsg, NestedMsgToExpr) {
 
   NestedMsg<Integer> msg = {c0, {c0, c1}, {c0, {c1, c2}}};
   auto expr = NestedMsgToExpr<Integer>(msg, [&](ffi::Optional<Integer> leaf) {
-    ICHECK(leaf.defined());
+    TVM_FFI_ICHECK(leaf.defined());
     int value = leaf.value().IntValue();
     switch (value) {
       case 0:
@@ -246,13 +248,13 @@ TEST(NestedMsg, NestedMsgToExpr) {
   });
 
   Expr expected = Tuple({x, Tuple({x, y}), Tuple({x, Tuple({y, z})})});
-  EXPECT_TRUE(StructuralEqual()(expr, expected));
+  EXPECT_TRUE(tvm::ffi::StructuralEqual()(expr, expected));
 
   // test simplified
   relax::Var t("t", sf1);
   NestedMsg<Expr> msg1 = {TupleGetItem(t, 0), TupleGetItem(t, 1)};
   auto expr1 = NestedMsgToExpr<Expr>(msg1, [](ffi::Optional<Expr> leaf) { return leaf.value(); });
-  EXPECT_TRUE(StructuralEqual()(expr1, t));
+  EXPECT_TRUE(tvm::ffi::StructuralEqual()(expr1, t));
 }
 
 TEST(NestedMsg, CombineNestedMsg) {
@@ -323,7 +325,7 @@ TEST(NestedMsg, TransformTupleLeaf) {
 
   Expr expected = Tuple({y, Tuple({y, z}), x, Tuple({y, Tuple({y, z})})});
 
-  EXPECT_TRUE(StructuralEqual()(
+  EXPECT_TRUE(tvm::ffi::StructuralEqual()(
       TransformTupleLeaf(expr, std::array<NInt, 2>({msg1, msg2}), ftransleaf), expected));
 
   EXPECT_TRUE(

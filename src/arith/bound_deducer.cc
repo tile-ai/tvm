@@ -24,8 +24,8 @@
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/expr_functor.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/expr_functor.h>
 
 #include <unordered_map>
 #include <unordered_set>
@@ -35,7 +35,7 @@
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 // a visitor to find the path to the target variable
 // from a expression.
@@ -53,17 +53,17 @@ class VariablePathFinder : public ExprVisitor {
     if (!found_) path_.pop_back();
   }
 
-  std::vector<const Object*> path_;
+  std::vector<const ffi::Object*> path_;
 
  private:
   bool found_{false};
   PrimExpr target_;
-  std::unordered_set<const Object*> visited_;
+  std::unordered_set<const ffi::Object*> visited_;
 };
 
 // get the path to the variable,
 // return empty vector to represent failure
-std::vector<const Object*> GetPath(PrimExpr target, PrimExpr expr) {
+std::vector<const ffi::Object*> GetPath(PrimExpr target, PrimExpr expr) {
   VariablePathFinder v(target);
   v(expr);
   return v.path_;
@@ -93,7 +93,7 @@ class BoundDeducer : public ExprFunctor<void(const PrimExpr&)> {
     }
   }
 
-  void VisitExprDefault_(const Object* op) final { success_ = false; }
+  void VisitExprDefault_(const ffi::Object* op) final { success_ = false; }
 
   SignType GetSignType(const PrimExpr& e) {
     if (e.dtype().is_uint()) {
@@ -224,7 +224,7 @@ class BoundDeducer : public ExprFunctor<void(const PrimExpr&)> {
   const std::unordered_map<const VarNode*, IntSet>& hint_map_;
   const std::unordered_map<const VarNode*, IntSet>& relax_map_;
   ExprIntSetMap expr_map_;
-  std::vector<const Object*> path_;
+  std::vector<const ffi::Object*> path_;
   size_t iter_{0};
   // internal analzyer
   Analyzer analyzer_;
@@ -263,7 +263,7 @@ CompareOp BoundDeducer::ReverseOp(CompareOp comp_op) {
     case kLess:
       return kGreater;
     default:
-      LOG(FATAL) << "Not a valid compare op";
+      TVM_FFI_THROW(InternalError) << "Not a valid compare op";
   }
 }
 

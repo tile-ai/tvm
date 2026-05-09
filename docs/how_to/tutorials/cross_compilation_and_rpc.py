@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: E501
 """
 .. _tutorial-cross-compilation-and-rpc:
 
@@ -51,7 +52,9 @@ and the Firefly-RK3399 for an OpenCL example.
 #
 #   git clone --recursive https://github.com/apache/tvm tvm
 #   cd tvm
-#   make runtime -j2
+#   mkdir build && cd build
+#   cp ../cmake/config.cmake .
+#   cmake .. && cmake --build . --parallel $(nproc)
 #
 # After building the runtime successfully, we need to set environment variables
 # in :code:`~/.bashrc` file. We can edit :code:`~/.bashrc`
@@ -93,12 +96,11 @@ and the Firefly-RK3399 for an OpenCL example.
 #
 # Here we will declare a simple kernel on the local machine:
 
-
 import numpy as np
+import tvm_ffi
 
 import tvm
-from tvm import te
-from tvm import rpc
+from tvm import rpc, te
 from tvm.contrib import utils
 
 n = tvm.runtime.convert(1024)
@@ -108,7 +110,7 @@ mod = tvm.IRModule.from_expr(te.create_prim_func([A, B]).with_attr("global_symbo
 
 ######################################################################
 # Then we cross compile the kernel.
-# The target should be 'llvm -mtriple=armv7l-linux-gnueabihf' for
+# The target should be {"kind": "llvm", "mtriple": "armv7l-linux-gnueabihf"} for
 # Raspberry Pi 3B, but we use 'llvm' here to make this tutorial runnable
 # on our webpage building server. See the detailed note in the following block.
 
@@ -117,7 +119,7 @@ local_demo = True
 if local_demo:
     target = "llvm"
 else:
-    target = "llvm -mtriple=armv7l-linux-gnueabihf"
+    target = {"kind": "llvm", "mtriple": "armv7l-linux-gnueabihf"}
 
 func = tvm.compile(mod, target=target)
 # save the lib at a local temp folder
@@ -132,8 +134,8 @@ func.export_library(path)
 #   to False and replace :code:`target` in :code:`build` with the appropriate
 #   target triple for your device. The target triple which might be
 #   different for different devices. For example, it is
-#   :code:`'llvm -mtriple=armv7l-linux-gnueabihf'` for Raspberry Pi 3B and
-#   :code:`'llvm -mtriple=aarch64-linux-gnu'` for RK3399.
+#   :code:`{"kind": "llvm", "mtriple": "armv7l-linux-gnueabihf"}` for Raspberry Pi 3B and
+#   :code:`{"kind": "llvm", "mtriple": "aarch64-linux-gnu"}` for RK3399.
 #
 #   Usually, you can query the target by running :code:`gcc -v` on your
 #   device, and looking for the line starting with :code:`Target:`
@@ -195,9 +197,9 @@ np.testing.assert_equal(b.numpy(), a.numpy() + 1)
 # function over number times, measures the cost per run on the remote
 # device and returns the measured cost. Network overhead is excluded.
 
-time_f = func.time_evaluator(func.entry_name, dev, number=10)
+time_f = func.time_evaluator("add_one", dev, number=10)
 cost = time_f(a, b).mean
-print("%g secs/op" % cost)
+print(f"{cost:g} secs/op")
 
 #########################################################################
 # Run OpenCL Kernel Remotely by RPC
@@ -216,9 +218,10 @@ print("%g secs/op" % cost)
 #
 # .. code-block:: bash
 #
-#    cp cmake/config.cmake .
+#    mkdir -p build && cd build
+#    cp ../cmake/config.cmake .
 #    sed -i "s/USE_OPENCL OFF/USE_OPENCL ON/" config.cmake
-#    make runtime -j4
+#    cmake .. && cmake --build . --parallel $(nproc)
 #
 # The following function shows how we run an OpenCL kernel remotely
 
@@ -228,12 +231,12 @@ def run_opencl():
     # them according to your environment.
     opencl_device_host = "10.77.1.145"
     opencl_device_port = 9090
-    target = tvm.target.Target("opencl", host="llvm -mtriple=aarch64-linux-gnu")
+    target = tvm.target.Target("opencl", host={"kind": "llvm", "mtriple": "aarch64-linux-gnu"})
 
     # create schedule for the above "add one" compute declaration
     mod = tvm.IRModule.from_expr(te.create_prim_func([A, B]))
-    sch = tvm.tir.Schedule(mod)
-    (x,) = sch.get_loops(block=sch.get_block("B"))
+    sch = tvm.s_tir.Schedule(mod)
+    (x,) = sch.get_loops(block=sch.get_sblock("B"))
     xo, xi = sch.split(x, [None, 32])
     sch.bind(xo, "blockIdx.x")
     sch.bind(xi, "threadIdx.x")
@@ -356,23 +359,23 @@ def run_pytorch_model_via_rpc():
         # Choose the appropriate target for your device:
         #
         # ARM devices:
-        #   - Raspberry Pi 3/4 (32-bit): "llvm -mtriple=armv7l-linux-gnueabihf"
-        #   - Raspberry Pi 4 (64-bit) / Jetson: "llvm -mtriple=aarch64-linux-gnu"
-        #   - Android: "llvm -mtriple=aarch64-linux-android"
+        #   - Raspberry Pi 3/4 (32-bit): {"kind": "llvm", "mtriple": "armv7l-linux-gnueabihf"}
+        #   - Raspberry Pi 4 (64-bit) / Jetson: {"kind": "llvm", "mtriple": "aarch64-linux-gnu"}
+        #   - Android: {"kind": "llvm", "mtriple": "aarch64-linux-android"}
         #
         # x86 servers:
-        #   - Linux x86_64: "llvm -mtriple=x86_64-linux-gnu"
-        #   - With AVX-512: "llvm -mtriple=x86_64-linux-gnu -mcpu=skylake-avx512"
+        #   - Linux x86_64: {"kind": "llvm", "mtriple": "x86_64-linux-gnu"}
+        #   - With AVX-512: {"kind": "llvm", "mtriple": "x86_64-linux-gnu", "mcpu": "skylake-avx512"}
         #
         # RISC-V:
-        #   - RV64: "llvm -mtriple=riscv64-unknown-linux-gnu"
+        #   - RV64: {"kind": "llvm", "mtriple": "riscv64-unknown-linux-gnu"}
         #
         # GPU targets:
-        #   - CUDA: tvm.target.Target("cuda", host="llvm -mtriple=x86_64-linux-gnu")
-        #   - OpenCL: tvm.target.Target("opencl", host="llvm -mtriple=aarch64-linux-gnu")
+        #   - CUDA: tvm.target.Target("cuda", host={"kind": "llvm", "mtriple": "x86_64-linux-gnu"})
+        #   - OpenCL: tvm.target.Target("opencl", host={"kind": "llvm", "mtriple": "aarch64-linux-gnu"})
         #
         # For this example, we use ARM 64-bit
-        target = tvm.target.Target("llvm -mtriple=aarch64-linux-gnu")
+        target = tvm.target.Target({"kind": "llvm", "mtriple": "aarch64-linux-gnu"})
         print(f"Cross-compiling for target: {target}")
 
     # Apply optimization pipeline
@@ -463,33 +466,49 @@ def run_pytorch_model_via_rpc():
     # Step 5: Run Inference on Remote Device
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # Execute the model on the remote ARM device and retrieve results
+    #
+    # Note: When running VM over RPC, we use set_input() and invoke_stateful()
+    # instead of direct function call (vm["main"](...)). This is because RPC
+    # transmits tensors as DLTensor*, while VM builtins expect ffi.Tensor.
+    # The set_input API handles this conversion internally.
 
     # Prepare input data
     input_data = np.random.randn(1, 1, 28, 28).astype("float32")
     remote_input = tvm.runtime.tensor(input_data, dev)
 
-    # Run inference on remote device
-    output = vm["main"](remote_input, *remote_params)
+    # Run inference using set_input + invoke_stateful for RPC compatibility
+    vm.set_input("main", remote_input, *remote_params)
+    vm.invoke_stateful("main")
+    output = vm.get_outputs("main")
 
     # Extract result (handle both tuple and single tensor outputs)
-    if isinstance(output, tvm.ir.Array) and len(output) > 0:
+    if isinstance(output, tvm_ffi.Array) and len(output) > 0:
         result = output[0]
     else:
         result = output
 
     # Retrieve result from remote device to local
     result_np = result.numpy()
-    print(f"Inference completed on remote device")
+    print("Inference completed on remote device")
     print(f"  Output shape: {result_np.shape}")
     print(f"  Predicted class: {np.argmax(result_np)}")
+
+    ######################################################################
+    # Alternative: Direct Function Call (Local Only)
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Note: The direct call syntax vm["main"](input, *params) works for
+    # local execution but may fail over RPC due to type mismatch between
+    # DLTensor* (RPC) and ffi.Tensor (VM builtins). For RPC, always use
+    # the set_input + invoke_stateful pattern shown above.
 
     ######################################################################
     # Step 6: Performance Evaluation (Optional)
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # Measure inference time on the remote device, excluding network overhead
+    # Note: For RPC, use invoke_stateful with time_evaluator
 
-    time_f = vm.time_evaluator("main", dev, number=10, repeat=3)
-    prof_res = time_f(remote_input, *remote_params)
+    time_f = vm.time_evaluator("invoke_stateful", dev, number=10, repeat=3)
+    prof_res = time_f("main")
     print(f"Inference time on remote device: {prof_res.mean * 1000:.2f} ms")
 
     ######################################################################
@@ -513,7 +532,7 @@ def run_pytorch_model_via_rpc():
     #
     #    .. code-block:: python
     #
-    #       from tvm import dlight as dl
+    #       from tvm.s_tir import dlight as dl
     #       with target:
     #           mod = dl.ApplyDefaultSchedule()(mod)
     #
@@ -527,12 +546,12 @@ def run_pytorch_model_via_rpc():
     #
     #       # Example: ARM with NEON
     #       target = tvm.target.Target(
-    #           "llvm -mtriple=aarch64-linux-gnu -mattr=+neon"
+    #           {"kind": "llvm", "mtriple": "aarch64-linux-gnu", "mattr": "+neon"}
     #       )
     #
     #       # Example: x86 with AVX-512
     #       target = tvm.target.Target(
-    #           "llvm -mtriple=x86_64-linux-gnu -mcpu=skylake-avx512"
+    #           {"kind": "llvm", "mtriple": "x86_64-linux-gnu", "mcpu": "skylake-avx512"}
     #       )
     #
     # See :doc:`e2e_opt_model </how_to/tutorials/e2e_opt_model>` for detailed

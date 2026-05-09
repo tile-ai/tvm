@@ -14,14 +14,16 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F841
 
 import numpy as np
+
 import tvm
 import tvm.script
 import tvm.testing
 from tvm import relax
 from tvm.script import relax as R
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 use_np_array = tvm.testing.parameter(False, True)
 
@@ -36,7 +38,7 @@ def test_bind_params(use_np_array):
             B = T.match_buffer(y, (16, 16))
             C = T.match_buffer(z, (16, 16))
             for i0, j, k0, i1, k1 in T.grid(4, 16, 4, 4, 4):
-                with T.block("matmul"):
+                with T.sblock("matmul"):
                     vi = T.axis.S(16, i0 * 4 + i1)
                     vj = T.axis.S(16, j)
                     vk = T.axis.R(16, k0 * 4 + k1)
@@ -45,9 +47,9 @@ def test_bind_params(use_np_array):
                     C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
 
         @R.function
-        def main(
-            x: R.Tensor((16, 16), "float32"), w: R.Tensor((16, 16), "float32")
-        ) -> R.Tensor((16, 16), "float32"):
+        def main(x: R.Tensor((16, 16), "float32"), w: R.Tensor((16, 16), "float32")) -> R.Tensor(
+            (16, 16), "float32"
+        ):
             gv0 = R.call_tir(InputModule.tir_matmul, (x, w), R.Tensor((16, 16), dtype="float32"))
             return gv0
 

@@ -18,6 +18,7 @@
  */
 #include "./bcast_session.h"
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/runtime/disco/session.h>
 
@@ -28,8 +29,8 @@ namespace runtime {
 
 struct BcastSessionObj::Internal {
   template <typename... Args>
-  static void TVM_ALWAYS_INLINE BroadcastUnpacked(BcastSessionObj* self, DiscoAction action,
-                                                  int64_t reg_id, Args&&... args) {
+  TVM_FFI_INLINE static void BroadcastUnpacked(BcastSessionObj* self, DiscoAction action,
+                                               int64_t reg_id, Args&&... args) {
     constexpr int kNumArgs = 2 + sizeof...(Args);
     ffi::AnyView packed_args[kNumArgs];
     ffi::PackedArgs::Fill(packed_args, static_cast<int>(action), reg_id,
@@ -38,7 +39,7 @@ struct BcastSessionObj::Internal {
   }
 
   static DRef MakeDRef(int reg_id, Session session) {
-    ObjectPtr<DRefObj> p = ffi::make_object<DRefObj>();
+    ffi::ObjectPtr<DRefObj> p = ffi::make_object<DRefObj>();
     p->reg_id = reg_id;
     p->session = session;
     return DRef(std::move(p));
@@ -69,19 +70,20 @@ void BcastSessionObj::Shutdown() {
 
 void BcastSessionObj::InitCCL(ffi::String ccl, ffi::Shape device_ids) {
   const auto pf = tvm::ffi::Function::GetGlobal("runtime.disco." + ccl + ".init_ccl");
-  CHECK(pf.has_value()) << "ValueError: Cannot initialize CCL `" << ccl
-                        << "`, because cannot find function: runtime.disco." << ccl << ".init_ccl";
+  TVM_FFI_CHECK(pf.has_value(), ValueError)
+      << "Cannot initialize CCL `" << ccl << "`, because cannot find function: runtime.disco."
+      << ccl << ".init_ccl";
   (*pf)(ffi::GetRef<Session>(this), device_ids);
 }
 
 void BcastSessionObj::SyncWorker(int worker_id) {
   BcastSessionObj::Internal::BroadcastUnpacked(this, DiscoAction::kSyncWorker, worker_id);
   ffi::PackedArgs args = this->RecvReplyPacked(worker_id);
-  ICHECK_EQ(args.size(), 2);
+  TVM_FFI_ICHECK_EQ(args.size(), 2);
   DiscoAction action = static_cast<DiscoAction>(args[0].cast<int>());
   int ret_worker_id = args[1].cast<int>();
-  ICHECK(action == DiscoAction::kSyncWorker);
-  ICHECK_EQ(ret_worker_id, worker_id);
+  TVM_FFI_ICHECK(action == DiscoAction::kSyncWorker);
+  TVM_FFI_ICHECK_EQ(ret_worker_id, worker_id);
 }
 
 DRef BcastSessionObj::CallWithPacked(const ffi::PackedArgs& args) {

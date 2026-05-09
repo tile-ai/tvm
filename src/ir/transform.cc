@@ -21,22 +21,21 @@
  * \file src/ir/transform.cc
  * \brief Infrastructure for transformation passes.
  */
-#include <dmlc/thread_local.h>
+#include <tvm/ffi/extra/structural_hash.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/rvalue_ref.h>
+#include <tvm/ir/repr.h>
 #include <tvm/ir/transform.h>
-#include <tvm/node/repr_printer.h>
-#include <tvm/node/structural_hash.h>
 #include <tvm/relax/expr.h>
 #include <tvm/runtime/device_api.h>
+#include <tvm/runtime/logging.h>
 
 #include <stack>
 
 namespace tvm {
 namespace transform {
 
-using tvm::ReprPrinter;
 using tvm::ffi::Any;
 
 TVM_REGISTER_PASS_CONFIG_OPTION("testing.immutable_module", Bool);
@@ -54,26 +53,29 @@ struct PassContextThreadLocalEntry {
 };
 
 /*! \brief Thread local store to hold the pass context. */
-typedef dmlc::ThreadLocalStore<PassContextThreadLocalEntry> PassContextThreadLocalStore;
+static PassContextThreadLocalEntry* PassContextThreadLocalStoreGet() {
+  static thread_local PassContextThreadLocalEntry inst;
+  return &inst;
+}
 
 void PassContext::EnterWithScope() {
   InstrumentEnterPassContext();
 
-  PassContextThreadLocalEntry* entry = PassContextThreadLocalStore::Get();
+  PassContextThreadLocalEntry* entry = PassContextThreadLocalStoreGet();
   entry->context_stack.push(*this);
 }
 
 void PassContext::ExitWithScope() {
-  PassContextThreadLocalEntry* entry = PassContextThreadLocalStore::Get();
-  ICHECK(!entry->context_stack.empty());
-  ICHECK(entry->context_stack.top().same_as(*this));
+  PassContextThreadLocalEntry* entry = PassContextThreadLocalStoreGet();
+  TVM_FFI_ICHECK(!entry->context_stack.empty());
+  TVM_FFI_ICHECK(entry->context_stack.top().same_as(*this));
   entry->context_stack.pop();
 
   InstrumentExitPassContext();
 }
 
 PassContext PassContext::Current() {
-  PassContextThreadLocalEntry* entry = PassContextThreadLocalStore::Get();
+  PassContextThreadLocalEntry* entry = PassContextThreadLocalStoreGet();
   if (!entry->context_stack.empty()) {
     return entry->context_stack.top();
   } else {
@@ -105,7 +107,7 @@ class PassConfigManager {
  public:
   void Register(std::string key, ffi::String value_type_str,
                 std::function<ffi::Any(ffi::Any)> legalization) {
-    ICHECK_EQ(key2vtype_.count(key), 0U);
+    TVM_FFI_ICHECK_EQ(key2vtype_.count(key), 0U);
     ValueTypeInfo info;
     info.type_str = value_type_str;
     info.legalization = legalization;
@@ -119,22 +121,21 @@ class PassConfigManager {
       auto it = key2vtype_.find(key);
       if (it == key2vtype_.end()) {
         std::ostringstream os;
-        os << "AttributeError: Invalid config option \'" << key << "\' candidates are:";
+        os << "Invalid config option \'" << key << "\' candidates are:";
         int counter = 0;
         for (const auto& [key, value] : key2vtype_) {
           os << ' ';
           if (counter++ != 0) os << ',';
           os << key;
         }
-        LOG(FATAL) << os.str();
+        TVM_FFI_THROW(AttributeError) << os.str();
       }
       const auto& info = it->second;
 
-      ICHECK(value != nullptr) << "AttributeError: " << key << " is None";
+      TVM_FFI_CHECK(value != nullptr, AttributeError) << key << " is None";
 
-      ICHECK(info.legalization) << "AttributeError: "
-                                << "Config option \'" << key
-                                << "\' was defined without a legalization function.";
+      TVM_FFI_CHECK(info.legalization, AttributeError)
+          << "Config option \'" << key << "\' was defined without a legalization function.";
       auto legalized = info.legalization(value);
       if (!legalized.same_as(value)) {
         update.emplace_back(key, legalized);
@@ -292,7 +293,7 @@ IRModule Pass::operator()(IRModule mod) const {
 
 IRModule Pass::operator()(IRModule mod, const PassContext& pass_ctx) const {
   const PassNode* node = operator->();
-  ICHECK(node != nullptr);
+  TVM_FFI_ICHECK(node != nullptr);
   const PassInfo& pass_info = node->Info();
   if (!pass_ctx.InstrumentBeforePass(mod, pass_info)) {
     DLOG(INFO) << "Skipping pass : " << pass_info->name
@@ -311,10 +312,10 @@ IRModule Pass::operator()(IRModule mod, const PassContext& pass_ctx) const {
 
 IRModule Pass::AssertImmutableModule(const IRModule& mod, const PassNode* node,
                                      const PassContext& pass_ctx) {
-  size_t before_pass_hash = tvm::StructuralHash()(mod);
+  size_t before_pass_hash = ffi::StructuralHash()(mod);
   IRModule copy_mod = mod;
   IRModule ret = node->operator()(mod, pass_ctx);
-  size_t after_pass_hash = tvm::StructuralHash()(copy_mod);
+  size_t after_pass_hash = ffi::StructuralHash()(copy_mod);
   if (before_pass_hash != after_pass_hash) {
     // The chance of getting a hash conflict between a module and the same module but mutated
     // must be very low.
@@ -402,20 +403,20 @@ IRModule ModulePassNode::operator()(IRModule mod, const PassContext& pass_ctx) c
     pass_ctx->diag_ctx = previous;
   }
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block this is a bug.";
 
   const PassInfo& pass_info = Info();
-  ICHECK(mod.defined()) << "The input module must be set.";
+  TVM_FFI_ICHECK(mod.defined()) << "The input module must be set.";
 
   VLOG_CONTEXT << pass_info->name;
   VLOG(0) << "Executing module pass with opt level: " << pass_info->opt_level;
 
   mod = pass_func(std::move(mod), pass_ctx);
 
-  ICHECK(mod.defined()) << "The return value of a module pass must be set.";
+  TVM_FFI_ICHECK(mod.defined()) << "The return value of a module pass must be set.";
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block this is a bug.";
 
   pass_ctx->diag_ctx.value().Render();
@@ -448,8 +449,8 @@ void SequentialNode::ResolveDependency(const IRModule& mod) {
   // 1. Consider the required passes for each pass.
   // 2. Only resolve the enabled passes.
   // 3. Build a dependency graph. Probably we need to update the pass list.
-  LOG(FATAL) << "Pass dependency has not been resolved yet."
-             << "\n";
+  TVM_FFI_THROW(InternalError) << "Pass dependency has not been resolved yet."
+                               << "\n";
 }
 
 Pass GetPass(const ffi::String& pass_name) {
@@ -459,7 +460,7 @@ Pass GetPass(const ffi::String& pass_name) {
   } else {
     f = tvm::ffi::Function::GetGlobal("transform." + pass_name);
   }
-  ICHECK(f.has_value()) << "Cannot use " << pass_name << " to create the pass";
+  TVM_FFI_ICHECK(f.has_value()) << "Cannot use " << pass_name << " to create the pass";
   return (*f)().cast<Pass>();
 }
 
@@ -469,7 +470,7 @@ Pass GetPass(const ffi::String& pass_name) {
 IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) const {
   for (const Pass& pass : passes) {
     VLOG(0) << "Running pass " << pass->Info()->name;
-    ICHECK(pass.defined()) << "Found undefined pass for optimization.";
+    TVM_FFI_ICHECK(pass.defined()) << "Found undefined pass for optimization.";
     const PassInfo& pass_info = pass->Info();
     if (!pass_ctx.PassEnabled(pass_info)) {
       VLOG(0) << "skipping disabled pass '" << pass_info->name << "'";
@@ -504,23 +505,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<PassInfoNode>([](const ObjectRef& ref, tvm::ReprPrinter* p) {
-      auto* node = static_cast<const PassInfoNode*>(ref.get());
-      p->stream << "The meta data of the pass - ";
-      p->stream << "pass name: " << node->name;
-      p->stream << ", opt_level: " << node->opt_level;
-      if (node->required.empty()) {
-        p->stream << ", required passes: []\n";
-      } else {
-        p->stream << ", required passes: ["
-                  << "\n";
-        for (const auto& it : node->required) {
-          p->stream << it << ", ";
-        }
-        p->stream << "]\n";
-      }
-    });
+// Pattern A (RM): auto-default repr from reflection for PassInfoNode.
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   PassContextNode::RegisterReflection();
@@ -544,13 +529,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
            [](Pass pass, ffi::RValueRef<IRModule> mod) { return pass(*std::move(mod)); });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<ModulePassNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const ModulePassNode*>(ref.get());
-      const PassInfo info = node->Info();
-      p->stream << "Run Module pass: " << info->name << " at the optimization level "
-                << info->opt_level;
-    });
+// Pattern A (RM): auto-default repr from reflection for ModulePassNode.
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
@@ -565,19 +544,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<SequentialNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const SequentialNode*>(ref.get());
-      const PassInfo info = node->Info();
-      p->stream << "Run Sequential pass: " << info->name << " at the optimization level "
-                << info->opt_level << ". ";
-      p->stream << "The passes will be executed are: [";
-      for (const auto& it : node->passes) {
-        const PassInfo pass_info = it->Info();
-        p->stream << pass_info->name << " ";
-      }
-      p->stream << "]";
-    });
+// Pattern A (RM): auto-default repr from reflection for SequentialNode.
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
@@ -601,19 +568,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<PassContextNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const PassContextNode*>(ref.get());
-      p->stream << "Pass context information: "
-                << "\n";
-      p->stream << "\topt_level: " << node->opt_level << "\n";
-
-      p->stream << "\trequired passes: " << node->required_pass << "\n";
-      p->stream << "\tdisabled passes: " << node->disabled_pass << "\n";
-      p->stream << "\tinstruments: " << node->instruments << "\n";
-
-      p->stream << "\tconfig: " << node->config << "\n";
-    });
+// Pattern A (RM): auto-default repr from reflection for PassContextNode.
 
 class PassContext::Internal {
  public:

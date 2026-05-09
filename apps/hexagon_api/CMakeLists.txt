@@ -47,6 +47,8 @@ ExternalProject_Add(x86_tvm_runtime_rpc
     "-DUSE_HEXAGON_TOOLCHAIN=${USE_HEXAGON_TOOLCHAIN}"
     "-DCMAKE_CXX_STANDARD=17"
     "-DTVM_FFI_USE_LIBBACKTRACE=OFF"
+    "-DTVM_FFI_USE_THREADS=OFF"
+    "-DTVM_FFI_USE_DL_LIBS=OFF"
     "-DUSE_RPC=ON"
     "-DUSE_CPP_RPC=ON"
     "-DUSE_HEXAGON=ON"
@@ -81,6 +83,8 @@ ExternalProject_Add(android_tvm_runtime_rpc
     "-DUSE_HEXAGON_ARCH=${USE_HEXAGON_ARCH}"
     "-DCMAKE_CXX_STANDARD=17"
     "-DTVM_FFI_USE_LIBBACKTRACE=OFF"
+    "-DTVM_FFI_USE_THREADS=OFF"
+    "-DTVM_FFI_USE_DL_LIBS=OFF"
     "-DUSE_RPC=ON"
     "-DUSE_CPP_RPC=ON"
     "-DUSE_HEXAGON=ON"
@@ -95,7 +99,7 @@ ExternalProject_Add(android_tvm_runtime_rpc
 ExternalProject_Get_Property(android_tvm_runtime_rpc BINARY_DIR)
 ExternalProject_Add_Step(android_tvm_runtime_rpc copy_runtime
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${BINARY_DIR}/libtvm_runtime.so
+    ${BINARY_DIR}/lib/libtvm_runtime.so
     ${HEXAGON_API_BINARY_DIR}
   DEPENDEES install
 )
@@ -133,6 +137,8 @@ ExternalProject_Add(hexagon_tvm_runtime_rpc
     "-DHEXAGON_EXTERNAL_LIBS_SHA=${HEXAGON_EXTERNAL_LIBS_SHA}"
     "-DCMAKE_CXX_STANDARD=17"
     "-DTVM_FFI_USE_LIBBACKTRACE=OFF"
+    "-DTVM_FFI_USE_THREADS=OFF"
+    "-DTVM_FFI_USE_DL_LIBS=OFF"
     "-DUSE_RPC=OFF"
     "-DUSE_HEXAGON=ON"
     "-DUSE_HEXAGON_RPC=ON"
@@ -149,7 +155,7 @@ ExternalProject_Add(hexagon_tvm_runtime_rpc
 ExternalProject_Get_Property(hexagon_tvm_runtime_rpc BINARY_DIR)
 ExternalProject_Add_Step(hexagon_tvm_runtime_rpc copy_binaries
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${BINARY_DIR}/libtvm_runtime.a
+    ${BINARY_DIR}/lib/libtvm_runtime.a
     ${BINARY_DIR}/libhexagon_rpc_skel.so
     ${BINARY_DIR}/libhexagon_rpc_sim.so
     ${HEXAGON_API_BINARY_DIR}

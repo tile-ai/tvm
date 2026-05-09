@@ -22,6 +22,7 @@
  * \brief Implementation of use-def analysis.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
@@ -57,13 +58,14 @@ class UDChain : relax::ExprVisitor {
  private:
   ffi::Map<Var, Expr> bound_values;
   std::unordered_set<Var> forward_declarations;
-  std::unordered_map<Var, support::OrderedSet<Var, ObjectPtrHash, ObjectPtrEqual>> usage_map;
-  support::OrderedSet<Var, ObjectPtrHash, ObjectPtrEqual> outputs;
+  std::unordered_map<Var, support::OrderedSet<Var, ffi::ObjectPtrHash, ffi::ObjectPtrEqual>>
+      usage_map;
+  support::OrderedSet<Var, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> outputs;
 
   ffi::Optional<Var> cur_user_;
 
   void VisitBinding_(const VarBindingNode* binding) override {
-    CHECK(!bound_values.count(binding->var))
+    TVM_FFI_ICHECK(!bound_values.count(binding->var))
         << "Variable " << binding->var << " was defined multiple times";
     bound_values.Set(binding->var, binding->value);
 
@@ -104,7 +106,8 @@ class UDChain : relax::ExprVisitor {
   }
 
   void DefineVar(const Var& var) {
-    CHECK(!usage_map.count(var)) << "Variable " << var << " was used before its definition";
+    TVM_FFI_ICHECK(!usage_map.count(var))
+        << "Variable " << var << " was used before its definition";
     usage_map[var] = {};
   }
 };
@@ -121,10 +124,29 @@ ffi::Map<Var, ffi::Array<Var>> DataflowBlockUseDef(const DataflowBlock& dfb) {
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.analysis.udchain", DataflowBlockUseDef);
+  refl::GlobalDef()
+      .def("relax.analysis.udchain", DataflowBlockUseDef)
+      .def("relax.analysis.used_vars", [](const Expr& expr) {
+        auto used_vars = GetUsedVars(expr);
+        ffi::Array<Var> result;
+        for (const VarNode* var_node : used_vars) {
+          result.push_back(ffi::GetRef<Var>(var_node));
+        }
+        return result;
+      });
 }
 
 VarUsageInfo CollectVarUsage(const Expr& expr) { return UDChain::Collect(expr); }
+
+std::set<const VarNode*> GetUsedVars(const Expr& expr) {
+  class UsedVars : public ExprVisitor {
+   public:
+    std::set<const VarNode*> used_vars;
+    void VisitExpr_(const VarNode* op) override { used_vars.insert(op); }
+  } visitor;
+  visitor.VisitExpr(expr);
+  return std::move(visitor.used_vars);
+}
 
 }  // namespace relax
 }  // namespace tvm

@@ -30,7 +30,7 @@
 #include <tvm/ffi/container/array.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/module.h>
-#include <tvm/node/functor.h>
+#include <tvm/ir/node_functor.h>
 
 namespace tvm {
 namespace ir {
@@ -43,7 +43,7 @@ class CalleeCollector {
    * Implementation should call `CalleeCollector::Mark` for each
    * `GlobalVar` in the function.
    */
-  using FType = NodeFunctor<void(const ObjectRef&, CalleeCollector*)>;
+  using FType = NodeFunctor<void(const ffi::ObjectRef&, CalleeCollector*)>;
   TVM_DLL static FType& vtable() {
     static FType inst;
     return inst;

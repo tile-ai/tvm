@@ -21,15 +21,16 @@
  * \file relax/ir/transform.cc
  * \brief Relax specific transformation passes.
  */
-#include <dmlc/thread_local.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/rvalue_ref.h>
-#include <tvm/node/repr_printer.h>
+#include <tvm/ir/repr.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/struct_info_functor.h>
 #include <tvm/relax/transform.h>
+#include <tvm/runtime/logging.h>
 
 namespace tvm {
 namespace relax {
@@ -119,12 +120,12 @@ IRModule FunctionPassNode::operator()(IRModule mod, const PassContext& pass_ctx)
     pass_ctx->diag_ctx = previous;
   }
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block this is a bug.";
 
   const PassInfo& pass_info = Info();
 
-  ICHECK(mod.defined());
+  TVM_FFI_ICHECK(mod.defined());
 
   VLOG_CONTEXT << pass_info->name;
   VLOG(0) << "Executing function pass with opt level: " << pass_info->opt_level;
@@ -146,7 +147,7 @@ IRModule FunctionPassNode::operator()(IRModule mod, const PassContext& pass_ctx)
     updated_mod->Add(pair.first, pair.second, true);
   }
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block, this is a bug.";
 
   pass_ctx->diag_ctx.value().Render();
@@ -177,13 +178,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<FunctionPassNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const FunctionPassNode*>(ref.get());
-      const PassInfo info = node->Info();
-      p->stream << "Run Function pass: " << info->name << " at the optimization level "
-                << info->opt_level;
-    });
+// Pattern A (RM): auto-default repr from reflection for FunctionPassNode.
 
 class DataflowBlockPass;
 
@@ -236,13 +231,13 @@ class DataflowBlockMutator : public ExprMutator {
   BindingBlock VisitBindingBlock_(const DataflowBlockNode* n) final {
     // collect Global Scope Vars and Symbolic Vars inside the DataflowBlock
     ffi::Map<ffi::String, Var> global_scope_vars;
-    ffi::Map<ffi::String, tir::Var> symbolic_vars;
+    ffi::Map<ffi::String, tirx::Var> symbolic_vars;
     for (const Binding& binding : n->bindings) {
       Var var = binding->var;
       if (const auto* match_cast = binding.as<MatchCastNode>()) {
         auto collected_vars = SymbolicVarCollector::Collect(match_cast->struct_info);
-        for (const tir::VarNode* var : collected_vars) {
-          symbolic_vars.Set(var->name_hint, ffi::GetRef<tir::Var>(var));
+        for (const tirx::VarNode* var : collected_vars) {
+          symbolic_vars.Set(var->name_hint, ffi::GetRef<tirx::Var>(var));
         }
       }
       if (!var.as<DataflowVarNode>()) {
@@ -259,22 +254,22 @@ class DataflowBlockMutator : public ExprMutator {
       Var var = binding->var;
       if (const auto* match_cast = binding.as<MatchCastNode>()) {
         auto collected_vars = SymbolicVarCollector::Collect(match_cast->struct_info);
-        for (const tir::VarNode* var : collected_vars) {
+        for (const tirx::VarNode* var : collected_vars) {
           if (symbolic_vars.count(var->name_hint) > 0) {
-            tir::Var old_var = symbolic_vars[var->name_hint];
-            ICHECK(var == old_var.get())
+            tirx::Var old_var = symbolic_vars[var->name_hint];
+            TVM_FFI_ICHECK(var == old_var.get())
                 << "Error: DataflowBlock Pass should not rewrite any Symbolic Var.";
             symbolic_vars.erase(var->name_hint);
           }
         }
       }
       if (!var.as<DataflowVarNode>() && global_scope_vars.count(var->name_hint()) > 0) {
-        ICHECK(var.same_as(global_scope_vars[var->name_hint()]))
+        TVM_FFI_ICHECK(var.same_as(global_scope_vars[var->name_hint()]))
             << "Error: DataflowBlock Pass should not rewrite any GlobalScope Var.";
         global_scope_vars.erase(var->name_hint());
       }
     }
-    ICHECK(global_scope_vars.empty() && symbolic_vars.empty())
+    TVM_FFI_ICHECK(global_scope_vars.empty() && symbolic_vars.empty())
         << "Error: DataflowBlock Pass should not delete any GlobalScope/Symbolic Var.";
 
     return updated_block;
@@ -283,7 +278,7 @@ class DataflowBlockMutator : public ExprMutator {
  private:
   class SymbolicVarCollector : public StructInfoVisitor {
    public:
-    static std::unordered_set<const tir::VarNode*> Collect(const StructInfo& info) {
+    static std::unordered_set<const tirx::VarNode*> Collect(const StructInfo& info) {
       SymbolicVarCollector collector;
       collector.VisitStructInfo(info);
       return std::move(collector.symbolic_vars_);
@@ -291,13 +286,13 @@ class DataflowBlockMutator : public ExprMutator {
 
    private:
     void VisitStructInfoExprField(const PrimExpr& expr) final {
-      if (const tir::VarNode* sym_var = expr.as<tir::VarNode>()) {
+      if (const tirx::VarNode* sym_var = expr.as<tirx::VarNode>()) {
         symbolic_vars_.insert(sym_var);
       }
     }
 
    private:
-    std::unordered_set<const tir::VarNode*> symbolic_vars_;
+    std::unordered_set<const tirx::VarNode*> symbolic_vars_;
   };
 
   std::function<DataflowBlock(DataflowBlock, IRModule, PassContext)> pass_func_;
@@ -340,12 +335,12 @@ IRModule DataflowBlockPassNode::operator()(IRModule mod, const PassContext& pass
     pass_ctx->diag_ctx = previous;
   }
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block, this is a bug.";
 
   const PassInfo& pass_info = Info();
 
-  ICHECK(mod.defined());
+  TVM_FFI_ICHECK(mod.defined());
 
   VLOG_CONTEXT << pass_info->name;
   VLOG(0) << "Executing DataflowBlock pass with opt level: " << pass_info->opt_level;
@@ -368,7 +363,7 @@ IRModule DataflowBlockPassNode::operator()(IRModule mod, const PassContext& pass
     updated_mod->Add(pair.first, pair.second, true);
   }
 
-  ICHECK(pass_ctx->diag_ctx)
+  TVM_FFI_ICHECK(pass_ctx->diag_ctx)
       << "The diagnostic context was set at the top of this block this is a bug.";
 
   pass_ctx->diag_ctx.value().Render();
@@ -400,13 +395,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       });
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<DataflowBlockPassNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const DataflowBlockPassNode*>(ref.get());
-      const PassInfo info = node->Info();
-      p->stream << "Run DataflowBlock pass: " << info->name << " at the optimization level "
-                << info->opt_level;
-    });
+// Pattern A (RM): auto-default repr from reflection for DataflowBlockPassNode.
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   FunctionPassNode::RegisterReflection();

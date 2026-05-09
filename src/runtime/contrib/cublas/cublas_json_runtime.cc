@@ -22,6 +22,7 @@
  * \brief A simple JSON runtime for CUBLAS.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
@@ -55,10 +56,10 @@ class CublasJSONRuntime : public JSONRuntimeBase {
     // JSONRuntimeBase::SetInputOutputBuffers(...) is not thread safe. Since CublasJSONRuntime
     // can be used by multiple GPUs running on different threads, we avoid using that function
     // and directly call cuBLAS on the inputs from ffi::PackedArgs.
-    ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
+    ffi::ObjectPtr<ffi::Object> sptr_to_self = ffi::GetObjectPtr<ffi::Object>(this);
     if (this->symbol_name_ == name) {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
-        ICHECK(this->initialized_) << "The module has not been initialized";
+        TVM_FFI_ICHECK(this->initialized_) << "The module has not been initialized";
         this->Run(args);
       });
     } else {
@@ -94,9 +95,9 @@ class CublasJSONRuntime : public JSONRuntimeBase {
     cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(kDLCUDA, device_id));
 
     auto get_input = [this, &dl_tensors](const JSONGraphNode& node, int idx) {
-      ICHECK_LT(idx, node.GetInputs().size());
+      TVM_FFI_ICHECK_LT(idx, node.GetInputs().size());
       auto eid = EntryID(node.GetInputs()[idx]);
-      ICHECK(eid < dl_tensors.size());
+      TVM_FFI_ICHECK(eid < dl_tensors.size());
       return dl_tensors[eid];
     };
 
@@ -139,7 +140,7 @@ class CublasJSONRuntime : public JSONRuntimeBase {
 
         std::optional<float> dq_scale = std::nullopt;
         if (op_name.find("dequantize") != std::string::npos) {
-          dq_scale = std::stof(node.GetAttr<std::vector<std::string>>("dq_scale")[0]);
+          dq_scale = static_cast<float>(node.GetAttr<double>("dq_scale"));
         }
 
         tvm::contrib::CallCublasLt(entry_ptr->handle, stream, entry_ptr->matmul_pref_desc, a_ptr,
@@ -150,7 +151,7 @@ class CublasJSONRuntime : public JSONRuntimeBase {
     }
   }
 
-  void Run() override { LOG(FATAL) << "Unreachable"; }
+  void Run() override { TVM_FFI_THROW(InternalError) << "Unreachable"; }
 };
 
 ffi::Module CublasJSONRuntimeCreate(ffi::String symbol_name, ffi::String graph_json,

@@ -31,7 +31,7 @@ namespace relax {
 Expr attention(Expr query, Expr key, Expr value, ffi::Optional<Expr> bias,
                ffi::Optional<FloatImm> scale, ffi::Optional<ffi::String> causal_mask,
                ffi::Optional<IntImm> window_size) {
-  ObjectPtr<AttentionAttrs> attrs = ffi::make_object<AttentionAttrs>();
+  ffi::ObjectPtr<AttentionAttrs> attrs = ffi::make_object<AttentionAttrs>();
   attrs->scale = scale;
   attrs->causal_mask = causal_mask;
   attrs->window_size = window_size;
@@ -48,7 +48,7 @@ Expr attention(Expr query, Expr key, Expr value, ffi::Optional<Expr> bias,
 Expr attention_var_len(Expr query, Expr key, Expr value, Expr seqstart_q, Expr seqstart_k,
                        Expr max_seqlen_q, Expr max_seqlen_k, ffi::Optional<FloatImm> scale,
                        ffi::Optional<ffi::String> causal_mask, ffi::Optional<IntImm> window_size) {
-  ObjectPtr<AttentionAttrs> attrs = ffi::make_object<AttentionAttrs>();
+  ffi::ObjectPtr<AttentionAttrs> attrs = ffi::make_object<AttentionAttrs>();
   attrs->scale = scale;
   attrs->causal_mask = causal_mask;
   attrs->window_size = window_size;
@@ -125,7 +125,7 @@ StructInfo InferStructInfoAttention(const Call& call, const BlockBuilder& ctx) {
     }
     auto diag_equal_or_broadcast = [&](PrimExpr v1, PrimExpr v2, ffi::String m1, ffi::String m2,
                                        ffi::String dim) {
-      if (analyzer->CanProve(v1 != v2) && !tir::is_one(v2)) {
+      if (analyzer->CanProve(v1 != v2) && !tirx::is_one(v2)) {
         ctx->ReportFatal(Diagnostic::Error(call)
                          << "The " << m1 << " " << dim << " and the " << m2 << " " << dim
                          << " should be the same or broadcastable. However, the " << dim << " of "

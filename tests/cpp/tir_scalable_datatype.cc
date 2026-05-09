@@ -20,8 +20,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/tir/builtin.h>
-#include <tvm/tir/expr.h>
+#include <tvm/tirx/builtin.h>
+#include <tvm/tirx/expr.h>
 
 #ifdef TVM_LLVM_VERSION
 #include <llvm/IR/Intrinsics.h>
@@ -83,7 +83,7 @@ TEST(ScalableDataType, TestIsScalar) {
 
 TEST(ScalableDataType, TestScalableDataTypeToString) {
   tvm::DataType scalable_type = tvm::DataType(kDLInt, 32, 4, true);
-  EXPECT_EQ(tvm::runtime::DLDataTypeToString(scalable_type), "int32xvscalex4");
+  EXPECT_EQ(tvm::ffi::DLDataTypeToString(scalable_type), "int32xvscalex4");
 }
 
 TEST(ScalableDataType, TestStringToScalableDataType) {
@@ -112,13 +112,13 @@ TEST(ScalableDataType, TestGetScalableVectorBytes) {
       {
         try {
           tvm::runtime::GetVectorBytes(scalable_type);
-        } catch (const tvm::InternalError& e) {
+        } catch (const tvm::ffi::Error& e) {
           EXPECT_THAT(e.what(),
                       HasSubstr("Can't fetch the lanes of a scalable vector at a compile time"));
           throw;
         }
       },
-      tvm::InternalError);
+      tvm::ffi::Error);
 }
 
 TEST(ScalableDataType, TestScalableDataTypeInvalidLanesError) {
@@ -126,12 +126,12 @@ TEST(ScalableDataType, TestScalableDataTypeInvalidLanesError) {
       {
         try {
           tvm::DataType(kDLFloat, 62, 1, true);
-        } catch (const tvm::InternalError& e) {
+        } catch (const tvm::ffi::Error& e) {
           EXPECT_THAT(e.what(), HasSubstr("Invalid value for vscale factor"));
           throw;
         }
       },
-      tvm::InternalError);
+      tvm::ffi::Error);
 }
 
 TEST(ScalableDataType, TestScalableDataTypeInvalidVscaleFactorAccess) {
@@ -142,12 +142,12 @@ TEST(ScalableDataType, TestScalableDataTypeInvalidVscaleFactorAccess) {
       {
         try {
           fixed_length_type.vscale_factor();
-        } catch (const tvm::InternalError& e) {
+        } catch (const tvm::ffi::Error& e) {
           EXPECT_THAT(e.what(), HasSubstr("A fixed length vector doesn't have a vscale factor"));
           throw;
         }
       },
-      tvm::InternalError);
+      tvm::ffi::Error);
 }
 
 TEST(ScalableDataType, TestScalableDataTypeInvalidLanesAccess) {
@@ -156,13 +156,13 @@ TEST(ScalableDataType, TestScalableDataTypeInvalidLanesAccess) {
       {
         try {
           scalable_type.lanes();
-        } catch (const tvm::InternalError& e) {
+        } catch (const tvm::ffi::Error& e) {
           EXPECT_THAT(e.what(),
                       HasSubstr("Can't fetch the lanes of a scalable vector at a compile time"));
           throw;
         }
       },
-      tvm::InternalError);
+      tvm::ffi::Error);
 }
 
 TEST(ScalableDataType, TestScalableBool) {
@@ -184,16 +184,15 @@ TEST(ScalableDataType, TestScalableUInt) {
 // -----------
 // Integration
 // -----------
-#if TVM_LLVM_VERSION >= 130
 TEST(ScalableDataType, TestScalableIntrinCall) {
   tvm::DataType scalable_type = tvm::DataType(kDLInt, 32, 4, true);
-  tvm::tir::Call call =
-      tvm::tir::Call(scalable_type, tvm::tir::builtin::call_llvm_intrin(),
+  tvm::tirx::Call call =
+      tvm::tirx::Call(scalable_type, tvm::tirx::builtin::call_llvm_intrin(),
 #if TVM_LLVM_VERSION >= 200
-                     {tvm::IntImm(tvm::DataType::Int(32), ::llvm::Intrinsic::stepvector)});
+                      {tvm::IntImm(tvm::DataType::Int(32), ::llvm::Intrinsic::stepvector)});
 #else
-                     {tvm::IntImm(tvm::DataType::Int(32),
-                                  ::llvm::Intrinsic::experimental_stepvector)});
+                      {tvm::IntImm(tvm::DataType::Int(32),
+                                   ::llvm::Intrinsic::experimental_stepvector)});
 #endif
   ASSERT_EQ(call->dtype, scalable_type);
   ASSERT_EQ(call->Script(),
@@ -203,7 +202,6 @@ TEST(ScalableDataType, TestScalableIntrinCall) {
             "T.call_llvm_intrin(\"int32xvscalex4\", \"llvm.experimental.stepvector\")");
 #endif
 }
-#endif
 
 TEST(ScalableDataType, TestTIRScriptScalableDtype2Str) {
   tvm::DataType scalable_type = tvm::DataType(kDLInt, 32, 4, true);

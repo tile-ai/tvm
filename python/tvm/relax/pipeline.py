@@ -20,13 +20,14 @@ oRelax enables flexible pipeline optimizations before min build.
 This namespace offers a pre-defined collection that can be used
 as it is or serves as a basis to do further composition.
 """
+
 # pylint: disable=unused-argument
-from typing import Union, Optional
 
 import tvm
-from tvm import meta_schedule as ms
+from tvm.s_tir import meta_schedule as ms
 
 from . import backend, transform
+from .backend.utils import BackendDispatcher
 
 
 def zero_pipeline(*, enable_warning: bool = False):
@@ -108,10 +109,10 @@ def default_build_pipeline():
 
 def static_shape_tuning_pipeline(
     total_trials: int,
-    target: Union[str, tvm.target.Target],
+    target: str | tvm.target.Target,
     work_dir: str = "tuning_logs",
     cpu_weight_prepack: bool = False,
-    max_trials_per_task: Optional[int] = None,
+    max_trials_per_task: int | None = None,
 ):
     """Tune the static shape model and store the log to database.
 
@@ -150,7 +151,7 @@ def static_shape_tuning_pipeline(
 
         mod = relax.pipeline.static_shape_tuning_pipeline(
             total_trials=1000,
-            target="llvm -num-cores 16",
+            target={"kind": "llvm", "num-cores": 16},
             work_dir="tuning_logs",
             cpu_weight_prepack=True,
             max_trials_per_task=64,
@@ -235,7 +236,7 @@ def get_pipeline(name: str = "zero", **kwargs) -> tvm.transform.Pass:
 
     if name not in PIPELINE_MAP:
         raise ValueError(
-            f"Unknown pre-built pipeline {name}," f"candidates are {list(PIPELINE_MAP.keys())}"
+            f"Unknown pre-built pipeline {name},candidates are {list(PIPELINE_MAP.keys())}"
         )
     return PIPELINE_MAP[name](**kwargs)
 
@@ -270,7 +271,8 @@ def library_dispatch_passes(target: tvm.target.Target):
         return backend.cpu_generic.library_dispatch_passes(target)
     if target.kind.name == "opencl" and "adreno" in target.keys:
         return backend.adreno.library_dispatch_passes(target)
-    # Todo(tvm-team): support gpu-generic
+    if BackendDispatcher.is_gpu_target(target):
+        return backend.gpu_generic.library_dispatch_passes(target)
     raise ValueError(f"Target {target} is not yet supported by library dispatch passes.")
 
 
@@ -286,8 +288,9 @@ def legalize_passes(target: tvm.target.Target):
         return backend.cpu_generic.legalize_passes(target)
     if target.kind.name == "opencl" and "adreno" in target.keys:
         return backend.adreno.legalize_passes(target)
-    # Todo(tvm-team): support gpu-generic
-    raise ValueError(f"Target {target} is not yet supported by library dispatch passes.")
+    if BackendDispatcher.is_gpu_target(target):
+        return backend.gpu_generic.legalize_passes(target)
+    raise ValueError(f"Target {target} is not yet supported by legalize passes.")
 
 
 def dataflow_lower_passes(target: tvm.target.Target):
@@ -302,7 +305,8 @@ def dataflow_lower_passes(target: tvm.target.Target):
         return backend.cpu_generic.dataflow_lower_passes(target)
     if target.kind.name == "opencl" and "adreno" in target.keys:
         return backend.adreno.dataflow_lower_passes(target)
-    # Todo(tvm-team): support gpu-generic
+    if BackendDispatcher.is_gpu_target(target):
+        return backend.gpu_generic.dataflow_lower_passes(target)
     raise ValueError(f"Target {target} is not yet supported by dataflow lowering passes.")
 
 
@@ -318,7 +322,8 @@ def finalize_passes(target: tvm.target.Target):
         return backend.cpu_generic.finalize_passes(target)
     if target.kind.name == "opencl" and "adreno" in target.keys:
         return backend.adreno.finalize_passes(target)
-    # Todo(tvm-team): support gpu-generic
+    if BackendDispatcher.is_gpu_target(target):
+        return backend.gpu_generic.finalize_passes(target)
     raise ValueError(f"Target {target} is not yet supported by finalization passes.")
 
 
@@ -334,7 +339,8 @@ def get_default_pipeline(target: tvm.target.Target):
         return backend.cpu_generic.get_default_pipeline(target)
     if target.kind.name == "opencl" and "adreno" in target.keys:
         return backend.adreno.get_default_pipeline(target)
-    # Todo(tvm-team): support gpu-generic
+    if BackendDispatcher.is_gpu_target(target):
+        return backend.gpu_generic.get_default_pipeline(target)
     raise ValueError(
         f"Target {target} is not yet supported by default pipeline. "
         "Please lower and build the IRModule manually."

@@ -19,6 +19,7 @@
 
 /*! \file src/relax/transform/decompose_ops.cc */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/attrs/nn.h>
@@ -32,7 +33,7 @@ namespace relax {
 
 TensorStructInfo MatchTensorStructInfo(Expr data) {
   auto _sinfo = MatchStructInfo<TensorStructInfo>(data);
-  ICHECK(_sinfo.defined()) << "Expect data to be a tensor, but get " << GetStructInfo(data);
+  TVM_FFI_ICHECK(_sinfo.defined()) << "Expect data to be a tensor, but get " << GetStructInfo(data);
   return _sinfo.value();
 }
 
@@ -51,7 +52,7 @@ Expr ExpandToMatchInput(Expr data, int ndim, ffi::Array<Integer> axes) {
 
 Tuple DecomposeBatchNorm(const Call& call) {
   auto attrs = call->attrs.as<BatchNormAttrs>();
-  ICHECK_NOTNULL(attrs);
+  TVM_FFI_ICHECK_NOTNULL(attrs);
 
   Expr data = call->args[0];
   TensorStructInfo sinfo = MatchTensorStructInfo(data);
@@ -78,9 +79,9 @@ Tuple DecomposeBatchNorm(const Call& call) {
 
 Expr MutateBatchNormForTraining(Call call) {
   auto attrs = call->attrs.as<BatchNormAttrs>();
-  ICHECK_NOTNULL(attrs);
+  TVM_FFI_ICHECK_NOTNULL(attrs);
 
-  ICHECK_EQ(call->args.size(), 5);
+  TVM_FFI_ICHECK_EQ(call->args.size(), 5);
   Expr data = call->args[0];
   Expr gamma = call->args[1];
   Expr beta = call->args[2];
@@ -113,7 +114,7 @@ Expr MutateBatchNormForTraining(Call call) {
 
 Expr DecomposeLayerNorm(const Call& call) {
   auto attrs = call->attrs.as<LayerNormAttrs>();
-  ICHECK_NOTNULL(attrs);
+  TVM_FFI_ICHECK_NOTNULL(attrs);
 
   Expr data = call->args[0];
   TensorStructInfo sinfo = MatchTensorStructInfo(data);
@@ -139,10 +140,10 @@ Expr DecomposeLayerNorm(const Call& call) {
 }
 
 Expr TensorToShape(const Call& call_node, const BlockBuilder& builder) {
-  ICHECK(call_node->struct_info_.defined());
+  TVM_FFI_ICHECK(call_node->struct_info_.defined());
   Expr expr = call_node->args[0];
   const ShapeStructInfoNode* sinfo = GetStructInfoAs<ShapeStructInfoNode>(call_node);
-  ICHECK(sinfo);
+  TVM_FFI_ICHECK(sinfo);
   // call builtin function that converts tensor to shape tuple
   // TODO(@sunggg): Register operator for "vm.builtin.tensor_to_shape"
   static const Op& call_pure_packed_op = Op::Get("relax.call_pure_packed");
@@ -155,7 +156,7 @@ Expr TensorToShape(const Call& call_node, const BlockBuilder& builder) {
   // ffi::Array<PrimExpr>), we define symbolic variables and returns them as a ShapeExpr.
   ffi::Array<PrimExpr> shape_var;
   for (int i = 0; i < sinfo->ndim; i++) {
-    shape_var.push_back(tir::Var("x", DataType::Int(64)));
+    shape_var.push_back(tirx::Var("x", DataType::Int(64)));
   }
   // bind symbolic variables to the shape tuple
   relax::Var var("y", ShapeStructInfo(shape_var));

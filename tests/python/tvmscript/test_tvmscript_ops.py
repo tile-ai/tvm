@@ -16,9 +16,10 @@
 # under the License.
 
 import numpy as np
+
 import tvm
 import tvm.testing
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 
 @T.prim_func
@@ -36,11 +37,11 @@ def get_valid_counts(
     out_buf = T.match_buffer(out, (1, 2500, 6), "float32")
     out_indices_buf = T.match_buffer(out_indices, (1, 2500), "int32")
 
-    with T.block("init"):
+    with T.sblock("init"):
         vi = T.axis.S(1, 0)
         valid_count_buf[vi] = T.int32(0)
         for j in range(2500):
-            with T.block("update"):
+            with T.sblock("update"):
                 vj = T.axis.S(2500, j)
                 T.reads([data_buf[vi, vj, 6]])
                 T.writes([valid_count_buf[vi], out_indices_buf[vi, vj], out_buf[vi, vj, 6]])
@@ -108,8 +109,8 @@ def alloc_zero_dim_buffer(a: T.handle, b: T.handle) -> None:
     A = T.match_buffer(a, [], dtype="float32")
     B = T.match_buffer(b, [], dtype="float32")
     # body
-    # tir.with block("root")
-    C = T.alloc_buffer([], dtype="float32")
+    # tirx.with block("root")
+    C = T.sblock_alloc_buffer([], dtype="float32")
     A[()] = T.float32(2)
     C[()] = A[()] + B[()]
     B[()] = C[()]
@@ -119,10 +120,10 @@ def alloc_zero_dim_buffer(a: T.handle, b: T.handle) -> None:
 def alloc_zero_dim_buffer_block(a: T.handle, b: T.handle) -> None:
     A = T.match_buffer(a, (), "float32")
     B = T.match_buffer(b, (), "float32")
-    with T.block("root"):
+    with T.sblock("root"):
         T.reads([])
         T.writes([])
-        C = T.alloc_buffer((), "float32")
+        C = T.sblock_alloc_buffer((), "float32")
         A[()] = T.float32(2)
         C[()] = A[()] + B[()]
         B[()] = C[()]

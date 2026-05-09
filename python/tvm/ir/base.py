@@ -15,8 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 """Common base structures."""
-import tvm.error
+
 from tvm_ffi import get_global_func, register_object
+
+import tvm.error
 from tvm.runtime import Object, _ffi_node_api
 
 from . import _ffi_api, json_compact
@@ -24,6 +26,14 @@ from . import _ffi_api, json_compact
 
 class Node(Object):
     """Base class of all IR Nodes."""
+
+    def __repr__(self) -> str:
+        from tvm.runtime.script_printer import _script  # noqa: PLC0415
+
+        try:
+            return _script(self, None)
+        except Exception:  # noqa: BLE001
+            return super().__repr__()
 
 
 @register_object("ir.SourceMap")
@@ -64,7 +74,12 @@ class Span(Object):
 
     def __init__(self, source_name, line, end_line, column, end_column):
         self.__init_handle_by_constructor__(
-            _ffi_api.Span, source_name, line, end_line, column, end_column  # type: ignore # pylint: disable=no-member
+            _ffi_api.Span,
+            source_name,
+            line,
+            end_line,
+            column,
+            end_column,  # type: ignore # pylint: disable=no-member
         )
 
 
@@ -156,9 +171,9 @@ def structural_equal(lhs, rhs, map_free_vars=False):
     - Normal node: equality is recursively defined without the restriction
       of graph nodes.
 
-    Vars(tir::Var, relax::Var) are graph nodes.
+    Vars(tirx::Var, relax::Var) are graph nodes.
 
-    A var-type node(e.g. tir::Var) can be mapped as equal to another var
+    A var-type node(e.g. tirx::Var) can be mapped as equal to another var
     with the same type if one of the following condition holds:
 
     - They appear in a same definition point(e.g. function argument).
@@ -260,7 +275,7 @@ def structural_hash(node, map_free_vars=False):
 
     - Normal node: the hash value is defined by its content and type only.
     - Graph node: each graph node will be assigned a unique index ordered by the
-      first occurence during the visit. The hash value of a graph node is
+      first occurrence during the visit. The hash value of a graph node is
       combined from the hash values of its contents and the index.
 
     structural_hash is made to be concistent with structural_equal.

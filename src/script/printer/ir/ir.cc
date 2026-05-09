@@ -35,15 +35,15 @@ struct SortableFunction {
       : priority(0), gv(obj.first), func(obj.second) {
     if (gv->name_hint == "main") {
       priority = 1000;
-    } else if (obj.second->GetTypeKey() == "tir.PrimFunc") {
+    } else if (obj.second->GetTypeKey() == "tirx.PrimFunc") {
       priority = 1;
     } else if (obj.second->GetTypeKey() == "relax.expr.ExternFunc") {
       priority = 2;
     } else if (obj.second->GetTypeKey() == "relax.expr.Function") {
       priority = 3;
     } else {
-      LOG(FATAL) << "TypeError: TVMScript cannot print functions of type: "
-                 << obj.second->GetTypeKey();
+      TVM_FFI_THROW(TypeError) << "TVMScript cannot print functions of type: "
+                               << obj.second->GetTypeKey();
     }
   }
 
@@ -103,10 +103,10 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
           AssignDoc assignment(lhs, expr.value(), std::nullopt);
           (*f)->stmts.push_back(assignment);
         } else {
-          LOG(FATAL) << "TypeError: "
-                     << "Expected IRModule to only contain functions, "
-                     << " but mod[" << gv->name_hint << "] with type  " << base_func->GetTypeKey()
-                     << " produced Doc type of " << doc->GetTypeKey();
+          TVM_FFI_THROW(TypeError)
+              << "Expected IRModule to only contain functions, "
+              << " but mod[" << gv->name_hint << "] with type  " << base_func->GetTypeKey()
+              << " produced Doc type of " << doc->GetTypeKey();
         }
       }
       return HeaderWrapper(d, ClassDoc(module_doc, {IR(d, "ir_module")}, (*f)->stmts));
@@ -130,7 +130,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
     .set_dispatch<VDevice>("", [](VDevice vdev, AccessPath p, IRDocsifier d) -> Doc {
       d->AddGlobalInfo("vdevice", vdev);
-      ffi::Map<ffi::String, ffi::Any> config = vdev->target->Export();
+      ffi::Map<ffi::String, ffi::Any> config = vdev->target->ToConfig();
       return IR(d, "vdevice")
           ->Call({d->AsDoc<ExprDoc>(config, p),
                   LiteralDoc::Int(vdev->vdevice_id, p->Attr("vdevice_id")),
@@ -160,15 +160,15 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
           });
     });
 
-std::string ReprPrintIRModule(const ObjectRef& mod, const PrinterConfig& cfg) {
+std::string ReprPrintIRModule(const ffi::ObjectRef& mod, const PrinterConfig& cfg) {
   return ReprPrintIR(mod, cfg);
 }
 
-TVM_SCRIPT_REPR(GlobalVarNode, ReprPrintIR);
-TVM_SCRIPT_REPR(DictAttrsNode, ReprPrintIR);
-TVM_SCRIPT_REPR(FuncTypeNode, ReprPrintIR);
-TVM_SCRIPT_REPR(RangeNode, ReprPrintIR);
-TVM_SCRIPT_REPR(IRModuleNode, ReprPrintIRModule);
+TVM_REGISTER_SCRIPT_AS_REPR(GlobalVarNode, ReprPrintIR);
+TVM_REGISTER_SCRIPT_AS_REPR(DictAttrsNode, ReprPrintIR);
+TVM_REGISTER_SCRIPT_AS_REPR(FuncTypeNode, ReprPrintIR);
+TVM_REGISTER_SCRIPT_AS_REPR(RangeNode, ReprPrintIR);
+TVM_REGISTER_SCRIPT_AS_REPR(IRModuleNode, ReprPrintIRModule);
 
 }  // namespace printer
 }  // namespace script

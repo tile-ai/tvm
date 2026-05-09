@@ -15,13 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=missing-docstring, invalid-name, unused-argument
+# ruff: noqa: F401, F841
 
 import pytest
+
 import tvm
 from tvm.relax.base_py_module import BasePyModule
 from tvm.script import ir as I
-from tvm.script import tir as T
 from tvm.script import relax as R
+from tvm.script import tirx as T
 
 
 @I.ir_module
@@ -65,9 +67,9 @@ class SimplePyFuncModule(BasePyModule):
             out[i] = x[i] * y[i]
 
     @R.function
-    def main_relax(
-        x: R.Tensor((5,), "float32"), y: R.Tensor((5,), "float32")
-    ) -> R.Tensor((5,), "float32"):
+    def main_relax(x: R.Tensor((5,), "float32"), y: R.Tensor((5,), "float32")) -> R.Tensor(
+        (5,), "float32"
+    ):
         return R.add(x, y)
 
 
@@ -127,7 +129,7 @@ class ComplexPyFuncModule(BasePyModule):
 
     @T.prim_func
     def extract_features(data: T.handle, features: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Data = T.match_buffer(data, (10,), "float32")
         Features = T.match_buffer(features, (10,), "float32")
 
@@ -136,7 +138,7 @@ class ComplexPyFuncModule(BasePyModule):
 
     @T.prim_func
     def ml_inference(features: T.handle, params: T.handle, output: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Features = T.match_buffer(features, (10,), "float32")
         Params = T.match_buffer(params, (10,), "float32")
         Output = T.match_buffer(output, (5,), "float32")
@@ -146,7 +148,7 @@ class ComplexPyFuncModule(BasePyModule):
 
     @T.prim_func
     def post_process(predictions: T.handle, final: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Predictions = T.match_buffer(predictions, (5,), "float32")
         Final = T.match_buffer(final, (5,), "float32")
 
@@ -155,7 +157,7 @@ class ComplexPyFuncModule(BasePyModule):
 
     @T.prim_func
     def normalize_data(data: T.handle, normalized: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Data = T.match_buffer(data, (10,), "float32")
         Normalized = T.match_buffer(normalized, (10,), "float32")
 
@@ -211,7 +213,7 @@ class EdgeCasePyFuncModule(BasePyModule):
 
     @T.prim_func
     def dummy_tir(data: T.handle, output: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Data = T.match_buffer(data, (1,), "float32")
         Output = T.match_buffer(output, (1,), "float32")
         Output[0] = Data[0]
@@ -271,7 +273,7 @@ class PerformancePyFuncModule(BasePyModule):
 
     @T.prim_func
     def vectorized_add(a: T.handle, b: T.handle, c: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         A = T.match_buffer(a, (10,), "float32")
         B = T.match_buffer(b, (10,), "float32")
         C = T.match_buffer(c, (10,), "float32")
@@ -289,8 +291,8 @@ class IntegrationPyFuncModule(BasePyModule):
         """Integration with scikit-learn preprocessing."""
         try:
             # Import sklearn components
-            from sklearn.preprocessing import StandardScaler
             from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
 
             # Create and fit scaler
             scaler = StandardScaler()
@@ -343,7 +345,7 @@ class IntegrationPyFuncModule(BasePyModule):
 
     @T.prim_func
     def final_transform(data: T.handle, output: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Data = T.match_buffer(data, (10, 10), "float32")
         Output = T.match_buffer(output, (10, 10), "float32")
 
@@ -408,7 +410,7 @@ class ErrorHandlingPyFuncModule(BasePyModule):
 
     @T.prim_func
     def safe_transform(data: T.handle, output: T.handle):
-        T.func_attr({"tir.noalias": True})
+        T.func_attr({"tirx.noalias": True})
         Data = T.match_buffer(data, (5,), "float32")
         Output = T.match_buffer(output, (5,), "float32")
 
@@ -714,11 +716,12 @@ def test_python_functions_in_irmodule():
 
 def test_call_py_func_with_base_py_module():
     """Test R.call_py_func with BasePyModule."""
-    import torch
     import numpy as np
-    from tvm.relax.op import call_py_func
+    import torch
+
+    from tvm.relax import TensorStructInfo, Var
     from tvm.relax.expr import StringImm
-    from tvm.relax import Var, TensorStructInfo
+    from tvm.relax.op import call_py_func
 
     # Test 1: Operator creation and basic properties
     x = Var("x", TensorStructInfo((5,), "float32"))

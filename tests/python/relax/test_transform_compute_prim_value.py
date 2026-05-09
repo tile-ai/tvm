@@ -17,14 +17,12 @@
 
 import tvm
 import tvm.testing
-from tvm.script import ir as I, relax as R, tir as T
+from tvm.script import ir as I
+from tvm.script import relax as R
+from tvm.script import tirx as T
 
 
-class BaseCompare(tvm.testing.CompareBeforeAfter):
-    transform = tvm.relax.transform.ComputePrimValue()
-
-
-class TestPrimValueInAssertCondition(BaseCompare):
+def test_prim_value_in_assert_condition():
     @I.ir_module
     class Before:
         @R.function(pure=False)
@@ -44,11 +42,14 @@ class TestPrimValueInAssertCondition(BaseCompare):
 
         @T.prim_func(private=True)
         def compute_symbolic_expr(N: T.int64) -> T.bool:
-            T.func_attr({"tir.is_host_func": True})
+            T.func_attr({"tirx.is_host_func": True})
             T.ret(N % 16 == 0)
 
+    After = tvm.relax.transform.ComputePrimValue()(Before)
+    tvm.ir.assert_structural_equal(After, Expected)
 
-class TestPrimValueInBranchCondition(BaseCompare):
+
+def test_prim_value_in_branch_condition():
     @I.ir_module
     class Before:
         @R.function(pure=False)
@@ -74,11 +75,14 @@ class TestPrimValueInBranchCondition(BaseCompare):
 
         @T.prim_func(private=True)
         def compute_symbolic_expr(N: T.int64) -> T.bool:
-            T.func_attr({"tir.is_host_func": True})
+            T.func_attr({"tirx.is_host_func": True})
             T.ret(N % 16 == 0)
 
+    After = tvm.relax.transform.ComputePrimValue()(Before)
+    tvm.ir.assert_structural_equal(After, Expected)
 
-class TestPrimValueInPureFunction(BaseCompare):
+
+def test_prim_value_in_pure_function():
     @I.ir_module
     class Before:
         @R.function
@@ -99,8 +103,11 @@ class TestPrimValueInPureFunction(BaseCompare):
 
         @T.prim_func(private=True)
         def compute_symbolic_expr(N: T.int64, M: T.int64) -> T.int64:
-            T.func_attr({"tir.is_host_func": True})
+            T.func_attr({"tirx.is_host_func": True})
             T.ret(N * M)
+
+    After = tvm.relax.transform.ComputePrimValue()(Before)
+    tvm.ir.assert_structural_equal(After, Expected)
 
 
 if __name__ == "__main__":

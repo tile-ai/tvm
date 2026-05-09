@@ -16,9 +16,12 @@
 # under the License.
 
 # pylint: disable=invalid-name,unnecessary-comprehension
-""" Testing functions for the RPC server."""
+"""Testing functions for the RPC server."""
+
 import numpy as np
+
 import tvm
+import tvm.testing
 
 
 # RPC test functions to be registered for unit-tests purposes

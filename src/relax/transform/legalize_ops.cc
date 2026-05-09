@@ -23,13 +23,15 @@
  * with corresponding low-level TIR PrimFuncs.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/op_attr_types.h>
 #include <tvm/relax/struct_info.h>
 #include <tvm/relax/transform.h>
-#include <tvm/tir/transform.h>
+#include <tvm/runtime/logging.h>
+#include <tvm/tirx/transform.h>
 
 #include <set>
 
@@ -97,7 +99,7 @@ class LegalizeMutator : public ExprMutator {
       // Avoid accidental sharing of TIR variables in the legalized
       // PrimFuncs, when kernels for multiple devices are generated
       // from the same PrimFunc.
-      output = tir::transform::ConvertSSA()(output);
+      output = tirx::transform::ConvertSSA()(output);
     }
 
     return output;
@@ -194,7 +196,7 @@ class LegalizeMutator : public ExprMutator {
     }
 
     auto base_func = builder_->GetContextIRModule()->Lookup(gvar.value());
-    auto opt_prim_func = base_func.as<tir::PrimFunc>();
+    auto opt_prim_func = base_func.as<tirx::PrimFunc>();
     if (!opt_prim_func) {
       // The call is to something other than a PrimFunc.  It may be
       // another Relax function, in which case the legalization of its
@@ -287,8 +289,15 @@ class LegalizeMutator : public ExprMutator {
         return false;
       }
 
-      std::string op_name(op->name);
-      bool is_data_dependent_op = (op_name.find("dynamic") != std::string::npos);
+      bool is_data_dependent_op = [&]() -> bool {
+        if (Op::HasAttrMap("FDataDependent")) {
+          auto op_map = Op::GetAttrMap<Bool>("FDataDependent");
+          if (op_map.count(op)) {
+            return op_map[op]->value;
+          }
+        }
+        return false;
+      }();
       bool ret_shape_defined = KnowAllShapeValues(GetStructInfo(visited_call));
       if (!is_data_dependent_op && !ret_shape_defined) {
         // This operator cannot be legalized, because legalization by
@@ -303,10 +312,6 @@ class LegalizeMutator : public ExprMutator {
         // data-dependent op, and match cast to define symbolic output
         // shapes.  These symbolic output shapes at compile time can
         // be by later operations to refer to the runtime shape.
-        //
-        // TODO(Lunderberg): Make a new operator attribute
-        // `.set_attr<Bool>("DataDependent")`, rather than relying on
-        // the name of the operator.
         return false;
       }
 
@@ -324,7 +329,7 @@ class LegalizeMutator : public ExprMutator {
       // Second choice, use a default legalization
       legalization_func = legalize_map[op];
     } else if (call_packed_map.count(op)) {
-      // Third choice, use an explicit FCallPacked replacement.  This does not require the shape
+      // Third choice, use an explicit ffi::String replacement.  This does not require the shape
       ffi::String packed_func_name = call_packed_map[op];
       legalization_func = [packed_func_name](const BlockBuilder& bb, const Call& call) -> Expr {
         return Call(ExternFunc(packed_func_name), call->args, Attrs(), {GetStructInfo(call)});

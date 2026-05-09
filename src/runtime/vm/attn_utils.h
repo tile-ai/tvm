@@ -24,6 +24,7 @@
 #ifndef TVM_RUNTIME_VM_ATTN_UTILS_H_
 #define TVM_RUNTIME_VM_ATTN_UTILS_H_
 
+#include <tvm/ffi/container/shape.h>
 #include <tvm/runtime/tensor.h>
 
 #include <algorithm>
@@ -77,7 +78,7 @@ inline ffi::Shape GetKVCacheShape(AttnKind attn_kind, int64_t num_total_pages, i
   } else if (attn_kind == AttnKind::kLinearAttn) {
     return {num_sequence, num_kv_heads, qk_head_dim, v_head_dim};
   }
-  ICHECK(false);
+  TVM_FFI_ICHECK(false);
   return ffi::Shape();
 }
 
@@ -286,7 +287,7 @@ GetBlockIdsOnDepth(const std::vector<Sequence*>& sequences,
  * input blocks.
  */
 inline std::pair<std::vector<std::pair<int32_t, int32_t>>, bool> GetChunkedBlockIds(
-    const std::vector<int32_t>& block_ids, bool enable_coalesce, const IntTuple& append_lengths,
+    const std::vector<int32_t>& block_ids, bool enable_coalesce, const ffi::Shape& append_lengths,
     const std::vector<Block>& global_block_pool, bool is_decode_request) {
   std::vector<std::pair<int32_t, int32_t>> uncoalesced_block_ids;
   std::vector<std::pair<int32_t, int32_t>> coalesced_block_ids;
@@ -354,12 +355,12 @@ class HostMemoryVector {
 
   explicit HostMemoryVector(int64_t reserved_size, DLDataType dtype, Device device)
       : reserved_size_(reserved_size) {
-    ICHECK(DataType(dtype) == DataType::Int(32));
+    TVM_FFI_ICHECK(DataType(dtype) == DataType::Int(32));
     data_ = Tensor::Empty({reserved_size}, dtype, device);
   }
 
   void push_back(int32_t value) {
-    ICHECK_LE(current_size_, reserved_size_);
+    TVM_FFI_ICHECK_LE(current_size_, reserved_size_);
     if (current_size_ == reserved_size_) {
       reserved_size_ *= 2;
       Tensor new_data = Tensor::Empty({reserved_size_}, data_->dtype, data_->device);
@@ -370,13 +371,13 @@ class HostMemoryVector {
   }
 
   const int32_t& operator[](int64_t idx) const {
-    ICHECK_GE(idx, 0) << "Index " << idx << " is negative.";
-    ICHECK_LT(idx, current_size_) << "Index " << idx << " out of bounds " << current_size_;
+    TVM_FFI_ICHECK_GE(idx, 0) << "Index " << idx << " is negative.";
+    TVM_FFI_ICHECK_LT(idx, current_size_) << "Index " << idx << " out of bounds " << current_size_;
     return static_cast<int32_t*>(data_->data)[idx];
   }
 
   int32_t back() const {
-    ICHECK_GT(current_size_, 0) << "Vector is empty";
+    TVM_FFI_ICHECK_GT(current_size_, 0) << "Vector is empty";
     return static_cast<int32_t*>(data_->data)[current_size_ - 1];
   }
 
@@ -389,13 +390,13 @@ class HostMemoryVector {
   /*! \brief Return the vector as an Tensor. */
   Tensor as_tensor() { return data_.CreateView({current_size_}, data_->dtype); }
 
-  IntTuple as_int_tuple() const {
+  ffi::Shape as_int_tuple() const {
     std::vector<int64_t> values;
     values.reserve(current_size_);
     for (int i = 0; i < current_size_; ++i) {
       values.push_back(static_cast<int32_t*>(data_->data)[i]);
     }
-    return IntTuple(values);
+    return ffi::Shape(values);
   }
 
  private:
@@ -429,7 +430,7 @@ class PagedKVCacheAuxDataManager {
         device_(device),
         preferred_host_device_(preferred_host_device),
         copy_stream_(copy_stream) {
-    ICHECK(DataType(dtype_aux) == DataType::Int(32));
+    TVM_FFI_ICHECK(DataType(dtype_aux) == DataType::Int(32));
   }
 
   virtual ~PagedKVCacheAuxDataManager() = default;
@@ -661,7 +662,7 @@ class PlainPagedKVCacheAuxDataManager : public PagedKVCacheAuxDataManager {
                                     HostMemoryVector* sliding_window_offset,
                                     HostMemoryVector* sink_size, int depth) final {
     int n_elem = last_page_len->size();
-    ICHECK_GT(n_elem, 0);
+    TVM_FFI_ICHECK_GT(n_elem, 0);
     Tensor view = length_info_on_depths_device_[depth].CreateView({3, n_elem}, dtype_aux_);
     ffi::Shape copy_shape{n_elem};
     CopyVecDataToArray(view, last_page_len->data(), copy_shape);
@@ -687,7 +688,7 @@ class PlainPagedKVCacheAuxDataManager : public PagedKVCacheAuxDataManager {
   Tensor CopyCommitSrcDstPosInPageTableAsync(HostMemoryVector* src_data,
                                              HostMemoryVector* dst_data) final {
     int n_elem = src_data->size();
-    ICHECK_GT(n_elem, 0);
+    TVM_FFI_ICHECK_GT(n_elem, 0);
     Tensor view = commit_copy_src_dst_pos_in_page_table_device_.CreateView({2, n_elem}, dtype_aux_);
     ffi::Shape copy_shape{n_elem};
     CopyVecDataToArray(view, src_data->data(), copy_shape);
@@ -717,7 +718,7 @@ class PlainPagedKVCacheAuxDataManager : public PagedKVCacheAuxDataManager {
       void* nptr = workspace->GetNativePtr(array);
       uint64_t copy_size;
       if (shape.defined()) {
-        ICHECK_EQ(shape.value().size(), 1);
+        TVM_FFI_ICHECK_EQ(shape.value().size(), 1);
         copy_size = shape.value()->data[0] * sizeof(int32_t);
       } else {
         copy_size = DeviceAPI::Get(array->device)->GetDataSize(*array.operator->());
@@ -728,7 +729,7 @@ class PlainPagedKVCacheAuxDataManager : public PagedKVCacheAuxDataManager {
 #endif
 
     if (shape.defined()) {
-      ICHECK_EQ(shape.value().size(), 1);
+      TVM_FFI_ICHECK_EQ(shape.value().size(), 1);
       copy_dst.ndim = 1;
       copy_dst.shape = const_cast<int64_t*>(shape.value()->data);
     }
