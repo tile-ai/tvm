@@ -224,7 +224,7 @@ class ExprOp:
         expr : PrimExpr
             Expression with new type
         """
-        return _generic.cast(self, dtype, span)
+        return _generic.cast(self, dtype, span=span)
 
 
 class EqualOp(ObjectConvertible, ExprOp):
@@ -671,14 +671,28 @@ class Cast(PrimExprWithOp):
     value : PrimExpr
         The value of the function.
 
+    rounding_mode : str, optional
+        Rounding mode: "", "rn", "rz", "rp", "rm", "rs".
+        Empty string means use backend default.
+
+    satfinite : bool, optional
+        Whether to saturate to finite. Default is True.
+
+    random_bits : PrimExpr, optional
+        Random bits for stochastic rounding (rounding_mode="rs").
+
     span : Optional[Span]
         The location of this expression in the source code.
     """
 
     value: PrimExpr
 
-    def __init__(self, dtype, value, span: Optional[Span] = None) -> None:
-        self.__init_handle_by_constructor__(_ffi_api.Cast, dtype, value, span)  # type: ignore
+    def __init__(
+        self, dtype, value, rounding_mode="", satfinite=True, random_bits=None, span=None
+    ) -> None:
+        self.__init_handle_by_constructor__(
+            _ffi_api.Cast, dtype, value, rounding_mode, satfinite, random_bits, span  # type: ignore
+        )
 
 
 @tvm_ffi.register_object("tir.Add")

@@ -126,13 +126,25 @@ def floordiv(lhs, rhs, span=None):
     return _ffi_api._OpFloorDiv(lhs, rhs, span)  # type: ignore
 
 
-def cast(src, dtype, span=None):
+_VALID_CAST_ROUNDING_MODES = {"", "rn", "rz", "rp", "rm", "rs"}
+
+
+def cast(src, dtype, rounding_mode="", satfinite=True, random_bits=None, span=None):
     """Generic cast operator.
 
     Parameters
     ----------
     src : object
         The source operand.
+    dtype : str
+        The target data type.
+    rounding_mode : str, optional
+        Rounding mode: "", "rn", "rz", "rp", "rm", "rs".
+        Empty string means use backend default.
+    satfinite : bool, optional
+        Whether to saturate to finite. Default is True.
+    random_bits : PrimExpr, optional
+        Random bits for stochastic rounding (rounding_mode="rs").
     span : Optional[Span]
         The location of this operator in the source.
 
@@ -141,4 +153,17 @@ def cast(src, dtype, span=None):
     op : tvm.Expr
         The result Expr of cast operaton.
     """
-    return _ffi_api._cast(dtype, src, span)  # type: ignore
+    if rounding_mode not in _VALID_CAST_ROUNDING_MODES:
+        raise ValueError(
+            f"Invalid rounding_mode '{rounding_mode}'. "
+            f"Must be one of: {sorted(_VALID_CAST_ROUNDING_MODES)}"
+        )
+    if not isinstance(satfinite, bool):
+        raise ValueError(
+            f"Invalid satfinite '{satfinite}'. Must be a bool (True for satfinite, False for no saturation)"
+        )
+    if rounding_mode == "rs" and random_bits is None:
+        raise ValueError("random_bits is required when rounding_mode='rs' (stochastic rounding)")
+    if rounding_mode != "rs" and random_bits is not None:
+        raise ValueError("random_bits is only valid with rounding_mode='rs' (stochastic rounding)")
+    return _ffi_api._cast(dtype, src, rounding_mode, satfinite, random_bits, span)  # type: ignore

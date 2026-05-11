@@ -76,15 +76,35 @@ class StringImm : public PrimExpr {
 /*!
  * \brief Cast value from one data type to another.
  * \note The lanes of value should keep fixed.
+ *
+ * Optional fields control hardware-level rounding and saturation behavior
+ * for narrowing conversions (e.g., float32 → float8_e4m3).
+ *
+ * - rounding_mode: "", "rn", "rz", "rp", "rm", "rs" (stochastic).
+ *   Empty string means use backend default (typically "rn").
+ * - satfinite: bool. true means saturate to finite (default), false means no saturation.
+ *   Empty string means use backend default (typically "satfinite" for FP8).
+ * - random_bits: Required when rounding_mode is "rs" (stochastic rounding).
+ *   Provides the random bits operand for the PTX cvt.rs instruction.
  */
 class CastNode : public PrimExprNode {
  public:
   /*! \brief Original data type. */
   PrimExpr value;
+  /*! \brief Rounding mode: "", "rn", "rz", "rp", "rm", "rs". */
+  ffi::String rounding_mode;
+  /*! \brief Whether to saturate to finite (true = satfinite, false = no saturation). */
+  bool satfinite{true};
+  /*! \brief Random bits for stochastic rounding (rounding_mode="rs"). */
+  ffi::Optional<PrimExpr> random_bits;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
-    refl::ObjectDef<CastNode>().def_ro("value", &CastNode::value);
+    refl::ObjectDef<CastNode>()
+        .def_ro("value", &CastNode::value)
+        .def_ro("rounding_mode", &CastNode::rounding_mode)
+        .def_ro("satfinite", &CastNode::satfinite)
+        .def_ro("random_bits", &CastNode::random_bits);
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("tir.Cast", CastNode, PrimExprNode);
 };
@@ -96,6 +116,8 @@ class CastNode : public PrimExprNode {
 class Cast : public PrimExpr {
  public:
   TVM_DLL Cast(DataType dtype, PrimExpr value, Span span = Span());
+  TVM_DLL Cast(DataType dtype, PrimExpr value, ffi::String rounding_mode, bool satfinite,
+               ffi::Optional<PrimExpr> random_bits = std::nullopt, Span span = Span());
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Cast, PrimExpr, CastNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CastNode);
 };

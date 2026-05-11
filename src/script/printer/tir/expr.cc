@@ -124,7 +124,23 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
     .set_dispatch<tir::Cast>("", [](tir::Cast cast, AccessPath p, IRDocsifier d) -> Doc {
       ExprDoc dtype = LiteralDoc::DataType(cast->dtype, p->Attr("dtype"));
       ExprDoc value = d->AsDoc<ExprDoc>(cast->value, p->Attr("value"));
-      return TIR(d, "Cast")->Call({dtype, value});
+      ffi::Array<ffi::String> kwargs_keys;
+      ffi::Array<ExprDoc> kwargs_values;
+      if (!cast->rounding_mode.empty()) {
+        kwargs_keys.push_back("rounding_mode");
+        kwargs_values.push_back(
+            LiteralDoc::Str(cast->rounding_mode, p->Attr("rounding_mode")));
+      }
+      if (!cast->satfinite) {
+        kwargs_keys.push_back("satfinite");
+        kwargs_values.push_back(LiteralDoc::Boolean(false, p->Attr("satfinite")));
+      }
+      if (cast->random_bits.defined()) {
+        kwargs_keys.push_back("random_bits");
+        kwargs_values.push_back(
+            d->AsDoc<ExprDoc>(cast->random_bits.value(), p->Attr("random_bits")));
+      }
+      return TIR(d, "Cast")->Call({dtype, value}, kwargs_keys, kwargs_values);
     });
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)

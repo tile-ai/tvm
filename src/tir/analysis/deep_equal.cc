@@ -137,7 +137,15 @@ class ExprDeepEqualChecker : private ExprFunctor<bool(const PrimExpr&, const Pri
 
   bool VisitExpr_(const CastNode* plhs, const PrimExpr& rhs) final {
     const auto* prhs = rhs.as<CastNode>();
-    return plhs->dtype == prhs->dtype && VisitExpr(plhs->value, prhs->value);
+    if (plhs->dtype != prhs->dtype) return false;
+    if (plhs->rounding_mode != prhs->rounding_mode) return false;
+    if (plhs->satfinite != prhs->satfinite) return false;
+    bool lhs_has_rb = plhs->random_bits.defined();
+    bool rhs_has_rb = prhs->random_bits.defined();
+    if (lhs_has_rb != rhs_has_rb) return false;
+    if (lhs_has_rb && !VisitExpr(plhs->random_bits.value(), prhs->random_bits.value()))
+      return false;
+    return VisitExpr(plhs->value, prhs->value);
   }
 
   bool VisitExpr_(const NotNode* plhs, const PrimExpr& rhs) final {

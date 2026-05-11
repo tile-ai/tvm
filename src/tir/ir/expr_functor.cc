@@ -96,7 +96,12 @@ void ExprVisitor::VisitExpr_(const ReduceNode* op) {
   this->VisitExpr(op->condition);
 }
 
-void ExprVisitor::VisitExpr_(const CastNode* op) { this->VisitExpr(op->value); }
+void ExprVisitor::VisitExpr_(const CastNode* op) {
+  this->VisitExpr(op->value);
+  if (op->random_bits.defined()) {
+    this->VisitExpr(op->random_bits.value());
+  }
+}
 
 void ExprVisitor::VisitExpr_(const NotNode* op) { this->VisitExpr(op->a); }
 
@@ -246,10 +251,15 @@ PrimExpr ExprMutator::VisitExpr_(const ReduceNode* op) {
 
 PrimExpr ExprMutator::VisitExpr_(const CastNode* op) {
   PrimExpr value = this->VisitExpr(op->value);
-  if (value.same_as(op->value)) {
+  ffi::Optional<PrimExpr> random_bits = op->random_bits;
+  if (random_bits.defined()) {
+    random_bits = this->VisitExpr(random_bits.value());
+  }
+  if (value.same_as(op->value) &&
+      (!random_bits.defined() || random_bits.value().same_as(op->random_bits.value()))) {
     return ffi::GetRef<PrimExpr>(op);
   } else {
-    return Cast(op->dtype, value);
+    return Cast(op->dtype, value, op->rounding_mode, op->satfinite, random_bits);
   }
 }
 

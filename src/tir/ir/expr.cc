@@ -253,14 +253,37 @@ Cast::Cast(DataType t, PrimExpr value, Span span) {
   ObjectPtr<CastNode> node = ffi::make_object<CastNode>();
   node->dtype = t;
   node->value = std::move(value);
+  node->rounding_mode = "";
+  node->satfinite = true;
+  node->random_bits = std::nullopt;
+  node->span = std::move(span);
+  data_ = std::move(node);
+}
+
+Cast::Cast(DataType t, PrimExpr value, ffi::String rounding_mode, bool satfinite,
+           ffi::Optional<PrimExpr> random_bits, Span span) {
+  ICHECK(value.defined());
+  ICHECK_EQ(t.get_lanes_or_vscale_factor(), value.dtype().get_lanes_or_vscale_factor());
+  ICHECK(t.is_scalable_vector() == value.dtype().is_scalable_vector());
+  ObjectPtr<CastNode> node = ffi::make_object<CastNode>();
+  node->dtype = t;
+  node->value = std::move(value);
+  node->rounding_mode = std::move(rounding_mode);
+  node->satfinite = satfinite;
+  node->random_bits = std::move(random_bits);
   node->span = std::move(span);
   data_ = std::move(node);
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tir.Cast", [](DataType dtype, PrimExpr value, Span span) {
-    return Cast(dtype, value, span);
+  refl::GlobalDef().def("tir.Cast", [](DataType dtype, PrimExpr value, ffi::String rounding_mode,
+                                       bool satfinite, ffi::Optional<PrimExpr> random_bits,
+                                       Span span) {
+    if (rounding_mode.empty() && satfinite && !random_bits.defined()) {
+      return Cast(dtype, value, span);
+    }
+    return Cast(dtype, value, rounding_mode, satfinite, random_bits, span);
   });
 }
 

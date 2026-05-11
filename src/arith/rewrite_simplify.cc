@@ -2494,7 +2494,11 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const VarNode* op) {
 PrimExpr RewriteSimplifier::Impl::VisitExpr_(const CastNode* op) {
   PrimExpr ret = IRMutatorWithAnalyzer::VisitExpr_(op);
   op = ret.as<CastNode>();
-  return cast(op->dtype, op->value);
+  if (op->rounding_mode.empty() && op->satfinite && !op->random_bits.defined()) {
+    return cast(op->dtype, op->value);
+  }
+  // When rounding/saturation fields are set, preserve them through simplification
+  return ret;
 }
 
 bool RewriteSimplifier::Impl::CanInlineLet(const LetNode* op) {

@@ -1193,7 +1193,15 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("tir.round", tvm::round)
       .def("tir.nearbyint", tvm::nearbyint)
       .def("tir.trunc", tvm::trunc)
-      .def("tir._cast", tvm::cast)
+      .def("tir._cast",
+           [](DataType dtype, PrimExpr src, ffi::String rounding_mode, bool satfinite,
+              ffi::Optional<PrimExpr> random_bits, Span span) -> PrimExpr {
+             if (rounding_mode.empty() && satfinite && !random_bits.defined()) {
+               return tvm::cast(dtype, std::move(src), std::move(span));
+             }
+             ICHECK(src.defined());
+             return tir::Cast(dtype, src, rounding_mode, satfinite, random_bits, span);
+           })
       .def("tir.reinterpret", tvm::reinterpret);
 }
 
