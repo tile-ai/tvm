@@ -240,6 +240,71 @@ class OperatorConverter:
             "SQRT": functools.partial(self._convert_unary_elemwise, relax_op=_op.sqrt),
             "SQUARE": self.convert_square,
             "SQUARED_DIFFERENCE": self.convert_squared_difference,
+            "STABLEHLO_ABS": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.abs
+            ),
+            "STABLEHLO_ADD": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.add
+            ),
+            "STABLEHLO_AND": self._convert_stablehlo_and,
+            "STABLEHLO_BROADCAST_IN_DIM": self._convert_stablehlo_broadcast_in_dim,
+            "STABLEHLO_CLAMP": self._convert_stablehlo_clamp,
+            "STABLEHLO_COMPARE": self._convert_stablehlo_compare,
+            "STABLEHLO_CONCATENATE": self._convert_stablehlo_concatenate,
+            "STABLEHLO_CONVERT": self._convert_stablehlo_convert,
+            "STABLEHLO_COSINE": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.cos
+            ),
+            "STABLEHLO_DIVIDE": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.divide
+            ),
+            "STABLEHLO_DYNAMIC_SLICE": self._convert_stablehlo_dynamic_slice,
+            "STABLEHLO_EXPONENTIAL": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.exp
+            ),
+            "STABLEHLO_FLOOR": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.floor
+            ),
+            "STABLEHLO_GATHER": self._convert_stablehlo_gather,
+            "STABLEHLO_IOTA": self._convert_stablehlo_iota,
+            "STABLEHLO_LOG": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.log
+            ),
+            "STABLEHLO_LOGISTIC": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.sigmoid
+            ),
+            "STABLEHLO_MAXIMUM": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.maximum
+            ),
+            "STABLEHLO_MINIMUM": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.minimum
+            ),
+            "STABLEHLO_MULTIPLY": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.multiply
+            ),
+            "STABLEHLO_NEGATE": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.negative
+            ),
+            "STABLEHLO_OR": self._convert_stablehlo_or,
+            "STABLEHLO_PAD": self._convert_stablehlo_pad,
+            "STABLEHLO_POWER": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.power
+            ),
+            "STABLEHLO_RSQRT": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.rsqrt
+            ),
+            "STABLEHLO_SELECT": functools.partial(
+                self._convert_stablehlo_ternary, relax_op=_op.where
+            ),
+            "STABLEHLO_SHIFT_LEFT": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.left_shift
+            ),
+            "STABLEHLO_SUBTRACT": functools.partial(
+                self._convert_stablehlo_binary, relax_op=_op.subtract
+            ),
+            "STABLEHLO_TANH": functools.partial(
+                self._convert_stablehlo_unary, relax_op=_op.tanh
+            ),
             "SQUEEZE": self.convert_squeeze,
             "STRIDED_SLICE": self.convert_strided_slice,
             "SUB": functools.partial(self._convert_elemwise, relax_op=_op.subtract),
@@ -1322,6 +1387,434 @@ class OperatorConverter:
         if output_tensor.qnn_params:
             out = self.quantize(out, output_tensor)
         return out
+
+    def _convert_stablehlo_unary(self, op, relax_op):
+        """Convert a unary StableHLO TFLite builtin operator.
+
+        StableHLO builtins do not have TFLite fused activation attributes. Keep
+        this path independent from the regular TFLite elemwise/QNN helpers so
+        StableHLO semantics are mapped directly to Relax operators.
+        """
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 1, "input tensors length should be 1"
+
+        assert len(self.get_output_tensors(op)) == 1, "output tensors length should be 1"
+
+        in_expr = self.get_tensor_expr(input_tensors[0])
+        return relax_op(in_expr)
+
+    def _convert_stablehlo_binary(self, op, relax_op):
+        """Convert a binary StableHLO TFLite builtin operator.
+
+        StableHLO builtins do not have TFLite fused activation attributes. Keep
+        this path independent from the regular TFLite elemwise/QNN helpers so
+        StableHLO semantics are mapped directly to Relax operators.
+        """
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+
+        assert len(self.get_output_tensors(op)) == 1, "output tensors length should be 1"
+
+        lhs_expr = self.get_tensor_expr(input_tensors[0])
+        rhs_expr = self.get_tensor_expr(input_tensors[1])
+        return relax_op(lhs_expr, rhs_expr)
+
+    def _convert_stablehlo_and(self, op):
+        """Convert StableHLO AND for bool and integer tensors."""
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+
+        assert len(self.get_output_tensors(op)) == 1, "output tensors length should be 1"
+
+        lhs = self.get_tensor_expr(input_tensors[0])
+        rhs = self.get_tensor_expr(input_tensors[1])
+        dtype = lhs.struct_info.dtype
+        if dtype == "bool":
+            op_fn = _op.logical_and
+        elif dtype.startswith(("int", "uint")):
+            op_fn = _op.bitwise_and
+        else:
+            raise tvm.error.OpNotImplemented(
+                f"STABLEHLO_AND with dtype {dtype} is not supported"
+            )
+        return self.bb.normalize(op_fn(lhs, rhs))
+
+    def _convert_stablehlo_or(self, op):
+        """Convert StableHLO OR for bool and integer tensors."""
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+
+        assert len(self.get_output_tensors(op)) == 1, "output tensors length should be 1"
+
+        lhs = self.get_tensor_expr(input_tensors[0])
+        rhs = self.get_tensor_expr(input_tensors[1])
+        dtype = lhs.struct_info.dtype
+        if dtype == "bool":
+            op_fn = _op.logical_or
+        elif dtype.startswith(("int", "uint")):
+            op_fn = _op.bitwise_or
+        else:
+            raise tvm.error.OpNotImplemented(
+                f"STABLEHLO_OR with dtype {dtype} is not supported"
+            )
+        return self.bb.normalize(op_fn(lhs, rhs))
+
+    def _convert_stablehlo_ternary(self, op, relax_op):
+        """Convert a ternary StableHLO TFLite builtin operator.
+
+        StableHLO builtins do not have TFLite fused activation attributes. Keep
+        this path independent from the regular TFLite elemwise/QNN helpers so
+        StableHLO semantics are mapped directly to Relax operators.
+        """
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 3, "input tensors length should be 3"
+
+        assert len(self.get_output_tensors(op)) == 1, "output tensors length should be 1"
+
+        arg0 = self.get_tensor_expr(input_tensors[0])
+        arg1 = self.get_tensor_expr(input_tensors[1])
+        arg2 = self.get_tensor_expr(input_tensors[2])
+        return relax_op(arg0, arg1, arg2)
+
+    def _get_stablehlo_options(self, op, options_cls):
+        """Parse BuiltinOptions2 for a StableHLO TFLite builtin operator.
+
+        Returns an initialized options object of the given class.
+        """
+        from tflite.BuiltinOptions2 import BuiltinOptions2
+
+        op_options = op.BuiltinOptions2()
+        # Look up the expected BuiltinOptions2 enum value by matching the class
+        # name to an enum member (e.g. StablehloConcatenateOptions → 1).
+        options_type = getattr(BuiltinOptions2, options_cls.__name__, None)
+        if options_type is not None:
+            assert op.BuiltinOptions2Type() == options_type, (
+                f"Unexpected BuiltinOptions2 type: expected "
+                f"{options_cls.__name__}, got {op.BuiltinOptions2Type()}"
+            )
+        result = options_cls()
+        result.Init(op_options.Bytes, op_options.Pos)
+        return result
+
+    def _convert_stablehlo_convert(self, op):
+        """Convert STABLEHLO_CONVERT to Relax (astype).
+
+        Reads the output tensor dtype from the TFLite schema and applies
+        relax.op.astype.  This path is intentionally separate from the
+        generic _convert_stablehlo_unary helper because the output dtype
+        is operator-level metadata, not a Relax op parameter.
+        """
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 1, "input tensors length should be 1"
+
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1, "output tensors length should be 1"
+
+        in_expr = self.get_tensor_expr(input_tensors[0])
+        output_dtype = self.get_tensor_type_str(output_tensors[0].tensor.Type())
+        return self.bb.normalize(relax.op.astype(in_expr, output_dtype))
+
+    def _convert_stablehlo_clamp(self, op):
+        """Convert STABLEHLO_CLAMP to Relax.
+
+        StableHLO clamp(min, operand, max) → R.minimum(R.maximum(operand, min), max).
+        """
+        # NOTE: R.clip is not used here because it only accepts scalar PrimValue
+        # min/max, not tensor inputs.
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 3, "input tensors length should be 3"
+
+        assert len(self.get_output_tensors(op)) == 1
+
+        min_expr = self.get_tensor_expr(input_tensors[0])
+        operand_expr = self.get_tensor_expr(input_tensors[1])
+        max_expr = self.get_tensor_expr(input_tensors[2])
+
+        clamped = self.bb.normalize(relax.op.maximum(operand_expr, min_expr))
+        return self.bb.normalize(relax.op.minimum(clamped, max_expr))
+
+    def _convert_stablehlo_concatenate(self, op):
+        """Convert STABLEHLO_CONCATENATE to Relax."""
+        from tflite.StablehloConcatenateOptions import StablehloConcatenateOptions
+
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) >= 1, "input tensors length should be >= 1"
+        assert len(self.get_output_tensors(op)) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloConcatenateOptions)
+        dim = opts.Dimension()
+
+        in_exprs = [self.get_tensor_expr(t) for t in input_tensors]
+        return self.bb.normalize(relax.op.concat(in_exprs, axis=dim))
+
+    def _convert_stablehlo_broadcast_in_dim(self, op):
+        """Convert STABLEHLO_BROADCAST_IN_DIM to Relax."""
+        from tflite.StablehloBroadcastInDimOptions import StablehloBroadcastInDimOptions
+
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 1
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloBroadcastInDimOptions)
+        broadcast_dims = [int(d) for d in opts.BroadcastDimensionsAsNumpy()]
+
+        in_expr = self.get_tensor_expr(input_tensors[0])
+        input_shape = [int(d) for d in self.get_tensor_shape(input_tensors[0])]
+        output_shape = [int(d) for d in self.get_tensor_shape(output_tensors[0])]
+
+        # Map input dims to output dims via broadcast_dims, filling
+        # unmapped positions with 1 so broadcast_to covers them.
+        intermediate_shape = [1] * len(output_shape)
+        for i, d in enumerate(broadcast_dims):
+            intermediate_shape[d] = input_shape[i]
+
+        reshaped = self.bb.normalize(relax.op.reshape(in_expr, intermediate_shape))
+        return self.bb.normalize(relax.op.broadcast_to(reshaped, output_shape))
+
+    def _convert_stablehlo_iota(self, op):
+        """Convert STABLEHLO_IOTA to Relax (arange + broadcast)."""
+        from tflite.StablehloIotaOptions import StablehloIotaOptions
+
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloIotaOptions)
+        iota_dim = opts.IotaDimension()
+
+        output_tensor = output_tensors[0]
+        output_shape = [int(d) for d in self.get_tensor_shape(output_tensor)]
+        output_dtype = self.get_tensor_type_str(output_tensor.tensor.Type())
+
+        # arange along the iota dimension
+        size = output_shape[iota_dim]
+        arange_1d = self.bb.normalize(relax.op.arange(0, size, 1, output_dtype))
+
+        # reshape to [1, ..., size, ..., 1]
+        broadcast_shape = [1] * len(output_shape)
+        broadcast_shape[iota_dim] = size
+        arange_reshaped = self.bb.normalize(relax.op.reshape(arange_1d, broadcast_shape))
+
+        # broadcast to full output shape
+        return self.bb.normalize(relax.op.broadcast_to(arange_reshaped, output_shape))
+
+    def _convert_stablehlo_compare(self, op):
+        """Convert STABLEHLO_COMPARE to Relax binary comparison ops."""
+        from tflite.StablehloCompareOptions import StablehloCompareOptions
+        from tflite.StablehloComparisonDirection import StablehloComparisonDirection
+
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2
+        assert len(self.get_output_tensors(op)) == 1
+
+        from tflite.StablehloComparisonType import StablehloComparisonType
+
+        opts = self._get_stablehlo_options(op, StablehloCompareOptions)
+        direction = opts.ComparisonDirection()
+        compare_type = opts.CompareType()
+
+        # TOTALORDER compare is not expressible via Relax comparison ops.
+        if compare_type == StablehloComparisonType.STABLEHLO_COMPARISON_TYPE_FLOAT_TOTAL_ORDER:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_COMPARE with TOTALORDER comparison type is not supported"
+            )
+
+        _DIR = StablehloComparisonDirection
+        direction_map = {
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_EQ: relax.op.equal,
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_NE: relax.op.not_equal,
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_GE: relax.op.greater_equal,
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_GT: relax.op.greater,
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_LE: relax.op.less_equal,
+            _DIR.STABLEHLO_COMPARISON_DIRECTION_LT: relax.op.less,
+        }
+        relax_fn = direction_map.get(direction)
+        if relax_fn is None:
+            raise tvm.error.OpNotImplemented(
+                f"Unsupported StableHLO comparison direction: {direction}"
+            )
+
+        lhs = self.get_tensor_expr(input_tensors[0])
+        rhs = self.get_tensor_expr(input_tensors[1])
+        return self.bb.normalize(relax_fn(lhs, rhs))
+
+    def _convert_stablehlo_pad(self, op):
+        """Convert STABLEHLO_PAD to Relax (nn.pad).
+
+        Maps edge padding to R.nn.pad with constant mode.  Interior padding
+        (dilation) is not supported in the first version.
+        """
+        from tflite.StablehloPadOptions import StablehloPadOptions
+
+        input_tensors = self.get_input_tensors(op)
+        # operand + padding_value
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+        assert len(self.get_output_tensors(op)) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloPadOptions)
+        edge_low = [int(d) for d in opts.EdgePaddingLowAsNumpy()]
+        edge_high = [int(d) for d in opts.EdgePaddingHighAsNumpy()]
+        interior = [int(d) for d in opts.InteriorPaddingAsNumpy()]
+
+        if any(d != 0 for d in interior):
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_PAD with interior (dilation) padding is not supported"
+            )
+        if any(d < 0 for d in edge_low) or any(d < 0 for d in edge_high):
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_PAD with negative edge padding (crop) is not supported"
+            )
+
+        operand = self.get_tensor_expr(input_tensors[0])
+
+        # R.nn.pad only supports a static Python float pad_value.
+        pad_value_tensor = input_tensors[1]
+        if not self.has_expr(pad_value_tensor.tensor_idx):
+            pad_val = float(self.get_tensor_value(pad_value_tensor))
+        else:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_PAD with dynamic padding value is not supported"
+            )
+
+        # R.nn.pad with flat pad_width: [lo0, hi0, lo1, hi1, ...]
+        pad_width = []
+        for lo, hi in zip(edge_low, edge_high):
+            pad_width.extend([lo, hi])
+
+        return self.bb.normalize(
+            relax.op.nn.pad(operand, pad_width=pad_width, pad_value=pad_val)
+        )
+
+    def _convert_stablehlo_dynamic_slice(self, op):
+        """Convert STABLEHLO_DYNAMIC_SLICE to Relax (dynamic_strided_slice).
+
+        Start indices are assumed to be constant (non-dynamic) values stored
+        in the flatbuffer.  Truly dynamic (runtime) start indices require
+        Relax arithmetic to compute begin/end from scalar inputs and are not
+        yet supported.
+        """
+        from tflite.StablehloDynamicSliceOptions import StablehloDynamicSliceOptions
+
+        input_tensors = self.get_input_tensors(op)
+        # operand + N start-index scalars
+        assert len(input_tensors) >= 2
+        ndim = len(input_tensors) - 1
+        assert len(self.get_output_tensors(op)) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloDynamicSliceOptions)
+        slice_sizes = [int(d) for d in opts.SliceSizesAsNumpy()]
+        assert len(slice_sizes) == ndim
+
+        operand = self.get_tensor_expr(input_tensors[0])
+
+        # Build constant 1D tensors for begin, end, strides
+        # (assumes start values are constant in the flatbuffer)
+        # TODO: support dynamic start indices via Relax arithmetic
+        if any(self.has_expr(t.tensor_idx) for t in input_tensors[1:]):
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_DYNAMIC_SLICE with dynamic start indices is not supported"
+            )
+        start_vals = [int(self.get_tensor_value(t)) for t in input_tensors[1:]]
+        operand_shape = [int(d) for d in self.get_tensor_shape(input_tensors[0])]
+        for start, size, dim in zip(start_vals, slice_sizes, operand_shape):
+            if start < 0 or start + size > dim:
+                raise tvm.error.OpNotImplemented(
+                    "STABLEHLO_DYNAMIC_SLICE with out-of-bounds start indices is not supported"
+                )
+        end_vals = [s + sz for s, sz in zip(start_vals, slice_sizes)]
+        stride_vals = [1] * ndim
+
+        def _const_1d(values, dtype="int64"):
+            arr = np.array(values, dtype=dtype)
+            return self.bb.normalize(relax.const(arr, dtype=dtype))
+
+        begin = _const_1d(start_vals)
+        end = _const_1d(end_vals)
+        strides = _const_1d(stride_vals)
+
+        return self.bb.normalize(
+            relax.op.dynamic_strided_slice(operand, begin, end, strides)
+        )
+
+
+    def _convert_stablehlo_gather(self, op):
+        """Convert STABLEHLO_GATHER to Relax (take-equivalent subset only).
+
+        Only handles gather patterns equivalent to R.take along a single axis.
+        Multi-dimensional gathers, index_vector_dim != rank(indices)-1, and
+        non-trivial slice_sizes raise OpNotImplemented.
+        """
+        from tflite.StablehloGatherOptions import StablehloGatherOptions
+
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+        output_tensors = self.get_output_tensors(op)
+        assert len(output_tensors) == 1
+
+        opts = self._get_stablehlo_options(op, StablehloGatherOptions)
+        offset_dims = [int(d) for d in opts.OffsetDimsAsNumpy()]
+        collapsed_slice_dims = [int(d) for d in opts.CollapsedSliceDimsAsNumpy()]
+        start_index_map = [int(d) for d in opts.StartIndexMapAsNumpy()]
+        slice_sizes = [int(d) for d in opts.SliceSizesAsNumpy()]
+        index_vector_dim = int(opts.IndexVectorDim())
+
+        data_tensor, indices_tensor = input_tensors
+        data_shape = [int(d) for d in self.get_tensor_shape(data_tensor)]
+        indices_shape = [int(d) for d in self.get_tensor_shape(indices_tensor)]
+        output_shape = [int(d) for d in self.get_tensor_shape(output_tensors[0])]
+
+        if len(start_index_map) != 1:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER only supports one start_index_map entry"
+            )
+        axis = start_index_map[0]
+        if axis < 0 or axis >= len(data_shape):
+            raise tvm.error.OpNotImplemented(f"Unsupported STABLEHLO_GATHER axis: {axis}")
+        if collapsed_slice_dims != [axis]:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER only supports collapsed_slice_dims matching the gather axis"
+            )
+        if len(slice_sizes) != len(data_shape):
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER slice_sizes must match operand rank"
+            )
+        for i, (size, dim) in enumerate(zip(slice_sizes, data_shape)):
+            expected = 1 if i == axis else dim
+            if size != expected:
+                raise tvm.error.OpNotImplemented(
+                    "STABLEHLO_GATHER only supports take-equivalent slice_sizes"
+                )
+        if index_vector_dim != len(indices_shape) - 1:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER only supports trailing index_vector_dim"
+            )
+        if not indices_shape or indices_shape[index_vector_dim] != 1:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER only supports index vector size 1"
+            )
+
+        indices_batch_shape = indices_shape[:index_vector_dim]
+        expected_offset_dims = list(range(axis)) + list(
+            range(axis + len(indices_batch_shape), len(data_shape) + len(indices_batch_shape) - 1)
+        )
+        if offset_dims != expected_offset_dims:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER offset_dims do not match Relax take output layout"
+            )
+
+        expected_output_shape = (
+            data_shape[:axis] + indices_batch_shape + data_shape[axis + 1 :]
+        )
+        if output_shape != expected_output_shape:
+            raise tvm.error.OpNotImplemented(
+                "STABLEHLO_GATHER output shape does not match Relax take semantics"
+            )
+
+        data = self.get_tensor_expr(data_tensor)
+        indices = self.get_tensor_expr(indices_tensor)
+        indices = self.bb.normalize(relax.op.reshape(indices, indices_batch_shape))
+        return self.bb.normalize(relax.op.take(data, indices, axis=axis, mode="fast"))
+
 
     def convert_elu(self, op):
         """Convert TFLite ELU"""

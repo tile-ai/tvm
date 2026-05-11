@@ -3666,6 +3666,17 @@ _tfl_add_options = _get_tflite_schema_module("AddOptions")
 _tfl_buffer = _get_tflite_schema_module("Buffer")
 _tfl_conv2d_options = _get_tflite_schema_module("Conv2DOptions")
 _tfl_dilate_options = _get_tflite_schema_module("DilateOptions")
+
+# ── StableHLO BuiltinOptions2 schema modules ────────────────────────────
+_tfl_stablehlo_concat_opts = _get_tflite_schema_module("StablehloConcatenateOptions")
+_tfl_stablehlo_bcast_opts = _get_tflite_schema_module("StablehloBroadcastInDimOptions")
+_tfl_stablehlo_iota_opts = _get_tflite_schema_module("StablehloIotaOptions")
+_tfl_stablehlo_compare_opts = _get_tflite_schema_module("StablehloCompareOptions")
+_tfl_stablehlo_comp_dir = _get_tflite_schema_module("StablehloComparisonDirection")
+_tfl_stablehlo_comp_type = _get_tflite_schema_module("StablehloComparisonType")
+_tfl_stablehlo_pad_opts = _get_tflite_schema_module("StablehloPadOptions")
+_tfl_stablehlo_dyn_slice_opts = _get_tflite_schema_module("StablehloDynamicSliceOptions")
+_tfl_stablehlo_gather_opts = _get_tflite_schema_module("StablehloGatherOptions")
 _tfl_dimension_metadata = _get_tflite_schema_module("DimensionMetadata")
 _tfl_fully_connected_options = _get_tflite_schema_module("FullyConnectedOptions")
 _tfl_int32_vector = _get_tflite_schema_module("Int32Vector")
@@ -3836,6 +3847,1128 @@ def _finish_tflite_model(builder, *, subgraph, operator_codes, buffers):
 
     builder.Finish(model, b"TFL3")
     return bytes(builder.Output())
+
+
+def _load_model_from_buffer(model_bytes):
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(model_bytes, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(model_bytes, 0)
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+    return mod
+
+
+def _get_stablehlo_builtin_operator(builtin_name):
+    if not hasattr(_tfl_builtin_operator, builtin_name):
+        pytest.skip(f"TFLite schema does not provide BuiltinOperator.{builtin_name}")
+    return getattr(_tfl_builtin_operator, builtin_name)
+
+
+def _build_stablehlo_model(*, builtin_name, input_count):
+    """Build a minimal TFLite model containing one StableHLO builtin operator."""
+    builder = flatbuffers.Builder(1024)
+    shape = [2, 2]
+    output_tensor_idx = input_count
+    builtin_op = _get_stablehlo_builtin_operator(builtin_name)
+
+    tensors = [_build_tensor(builder, buffer_idx, shape) for buffer_idx in range(input_count + 1)]
+    stablehlo_op = _build_operator(
+        builder,
+        0,
+        list(range(input_count)),
+        [output_tensor_idx],
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[stablehlo_op],
+        inputs=list(range(input_count)),
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [_build_operator_code(builder, builtin_op)]
+    buffers = [_build_buffer(builder) for _ in range(input_count + 1)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=operator_codes, buffers=buffers
+    )
+
+
+def _build_stablehlo_typed_binary_model(*, builtin_name, tensor_type):
+    """Build a minimal TFLite StableHLO binary model with the requested tensor type."""
+    builder = flatbuffers.Builder(1024)
+    shape = [2, 2]
+    output_tensor_idx = 2
+    builtin_op = _get_stablehlo_builtin_operator(builtin_name)
+
+    tensors = [
+        _build_tensor(builder, buffer_idx, shape, tensor_type=tensor_type)
+        for buffer_idx in range(3)
+    ]
+    stablehlo_op = _build_operator(builder, 0, [0, 1], [output_tensor_idx])
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[stablehlo_op],
+        inputs=[0, 1],
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [_build_operator_code(builder, builtin_op)]
+    buffers = [_build_buffer(builder) for _ in range(3)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=operator_codes, buffers=buffers
+    )
+
+
+@pytest.mark.parametrize(
+    "builtin_name, relax_op",
+    [
+        ("STABLEHLO_ABS", R.abs),
+        ("STABLEHLO_COSINE", R.cos),
+        ("STABLEHLO_EXPONENTIAL", R.exp),
+        ("STABLEHLO_FLOOR", R.floor),
+        ("STABLEHLO_LOG", R.log),
+        ("STABLEHLO_LOGISTIC", R.sigmoid),
+        ("STABLEHLO_NEGATE", R.negative),
+        ("STABLEHLO_RSQRT", R.rsqrt),
+        ("STABLEHLO_TANH", R.tanh),
+    ],
+)
+def test_stablehlo_unary(builtin_name, relax_op):
+    """TFLite StableHLO unary elementwise operators."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_model(builtin_name=builtin_name, input_count=1)
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 2), dtype="float32")) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = relax_op(x)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+@pytest.mark.parametrize(
+    "builtin_name, relax_op",
+    [
+        ("STABLEHLO_ADD", R.add),
+        ("STABLEHLO_DIVIDE", R.divide),
+        ("STABLEHLO_MAXIMUM", R.maximum),
+        ("STABLEHLO_MINIMUM", R.minimum),
+        ("STABLEHLO_MULTIPLY", R.multiply),
+        ("STABLEHLO_POWER", R.power),
+        ("STABLEHLO_SUBTRACT", R.subtract),
+    ],
+)
+def test_stablehlo_binary(builtin_name, relax_op):
+    """TFLite StableHLO binary elementwise operators."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_model(builtin_name=builtin_name, input_count=2)
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"),
+            y: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = relax_op(x, y)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+@pytest.mark.parametrize(
+    "builtin_name, relax_op, dtype, tensor_type",
+    [
+        ("STABLEHLO_AND", R.logical_and, "bool", _tfl_tensor_type.BOOL),
+        ("STABLEHLO_OR", R.logical_or, "bool", _tfl_tensor_type.BOOL),
+        ("STABLEHLO_AND", R.bitwise_and, "int32", _tfl_tensor_type.INT32),
+        ("STABLEHLO_OR", R.bitwise_or, "int32", _tfl_tensor_type.INT32),
+        ("STABLEHLO_SHIFT_LEFT", R.left_shift, "int32", _tfl_tensor_type.INT32),
+    ],
+)
+def test_stablehlo_typed_binary(builtin_name, relax_op, dtype, tensor_type):
+    """TFLite StableHLO binary elementwise operators with non-float dtype requirements."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_typed_binary_model(
+            builtin_name=builtin_name, tensor_type=tensor_type
+        )
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype=dtype),
+            y: R.Tensor((2, 2), dtype=dtype),
+        ) -> R.Tensor((2, 2), dtype=dtype):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype=dtype) = relax_op(x, y)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+@pytest.mark.parametrize(
+    "builtin_name, relax_op",
+    [
+        ("STABLEHLO_SELECT", R.where),
+    ],
+)
+def test_stablehlo_ternary(builtin_name, relax_op):
+    """TFLite StableHLO ternary elementwise operators."""
+    builder = flatbuffers.Builder(1024)
+    shape = [2, 2]
+    builtin_op = _get_stablehlo_builtin_operator(builtin_name)
+
+    # First input (condition) must be bool for R.where
+    tensor_0 = _build_tensor(builder, 0, shape, tensor_type=_tfl_tensor_type.BOOL)
+    tensor_1 = _build_tensor(builder, 1, shape)
+    tensor_2 = _build_tensor(builder, 2, shape)
+    tensor_out = _build_tensor(builder, 3, shape)
+    tensors = [tensor_0, tensor_1, tensor_2, tensor_out]
+
+    stablehlo_op = _build_operator(
+        builder,
+        0,
+        [0, 1, 2],
+        [3],
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[stablehlo_op],
+        inputs=[0, 1, 2],
+        outputs=[3],
+    )
+    operator_codes = [_build_operator_code(builder, builtin_op)]
+    buffers = [_build_buffer(builder) for _ in range(4)]
+
+    mod = _load_model_from_buffer(
+        _finish_tflite_model(
+            builder, subgraph=subgraph, operator_codes=operator_codes, buffers=buffers
+        )
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            c: R.Tensor((2, 2), dtype="bool"),
+            x: R.Tensor((2, 2), dtype="float32"),
+            y: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 3})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = relax_op(c, x, y)
+                R.output(gv)
+            return gv
+
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+
+
+def _build_stablehlo_convert_model():
+    """STABLEHLO_CONVERT: float32 input -> int32 output."""
+    builder = flatbuffers.Builder(1024)
+    shape = [2, 2]
+
+    t_in = _build_tensor(builder, 0, shape, tensor_type=_tfl_tensor_type.FLOAT32)
+    t_out = _build_tensor(builder, 1, shape, tensor_type=_tfl_tensor_type.INT32)
+    tensors = [t_in, t_out]
+
+    op_code = _build_operator_code(
+        builder, _get_stablehlo_builtin_operator("STABLEHLO_CONVERT")
+    )
+    op = _build_operator(builder, 0, [0], [1])
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=[0],
+        outputs=[1],
+    )
+    buffers = [_build_buffer(builder) for _ in range(2)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def test_stablehlo_convert():
+    """TFLite StableHLO CONVERT (astype float32 -> int32)."""
+    mod = _load_model_from_buffer(_build_stablehlo_convert_model())
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 2), dtype="float32")) -> R.Tensor((2, 2), dtype="int32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="int32") = R.astype(x, dtype="int32")
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_stablehlo_clamp():
+    """TFLite StableHLO CLAMP (clip with min/operand/max order)."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_model(builtin_name="STABLEHLO_CLAMP", input_count=3)
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            m: R.Tensor((2, 2), dtype="float32"),
+            x: R.Tensor((2, 2), dtype="float32"),
+            M: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 3})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = R.minimum(R.maximum(x, m), M)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def _build_stablehlo_concat_model(dimension, num_inputs):
+    """STABLEHLO_CONCATENATE with given dimension and number of inputs."""
+    builder = flatbuffers.Builder(1024)
+    shape = [2, 2]
+
+    # Build concat options
+    _tfl_stablehlo_concat_opts.StablehloConcatenateOptionsStart(builder)
+    _tfl_stablehlo_concat_opts.StablehloConcatenateOptionsAddDimension(builder, dimension)
+    concat_opts = _tfl_stablehlo_concat_opts.StablehloConcatenateOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_CONCATENATE")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    if dimension == 0:
+        out_shape = [num_inputs * shape[0], shape[1]]
+    else:
+        out_shape = [shape[0], num_inputs * shape[1]]
+    tensors = [
+        _build_tensor(builder, i, shape) for i in range(num_inputs)
+    ] + [_build_tensor(builder, num_inputs, out_shape)]
+
+    op = _build_operator(
+        builder,
+        0,
+        list(range(num_inputs)),
+        [num_inputs],
+        builtin_options2_type=_tfl_builtin_options2.StablehloConcatenateOptions,
+        builtin_options2=concat_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=list(range(num_inputs)),
+        outputs=[num_inputs],
+    )
+    buffers = [_build_buffer(builder) for _ in range(num_inputs + 1)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+@pytest.mark.parametrize("dimension", [0, 1])
+def test_stablehlo_concatenate(dimension):
+    """TFLite StableHLO CONCATENATE with 2 inputs along given axis."""
+    num_inputs = 2
+    mod = _load_model_from_buffer(
+        _build_stablehlo_concat_model(dimension=dimension, num_inputs=num_inputs)
+    )
+
+    out_dim = (4, 2) if dimension == 0 else (2, 4)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"),
+            y: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor(out_dim, dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor(out_dim, dtype="float32") = R.concat((x, y), axis=dimension)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def _build_stablehlo_broadcast_in_dim_model(input_shape, broadcast_dims, output_shape):
+    """STABLEHLO_BROADCAST_IN_DIM with given broadcast dimensions."""
+    builder = flatbuffers.Builder(1024)
+
+    # Build broadcast dimensions vector
+    _tfl_stablehlo_bcast_opts.StablehloBroadcastInDimOptionsStartBroadcastDimensionsVector(
+        builder, len(broadcast_dims)
+    )
+    for d in reversed(broadcast_dims):
+        builder.PrependInt64(d)
+    dims_vec = builder.EndVector()
+
+    _tfl_stablehlo_bcast_opts.StablehloBroadcastInDimOptionsStart(builder)
+    _tfl_stablehlo_bcast_opts.StablehloBroadcastInDimOptionsAddBroadcastDimensions(
+        builder, dims_vec
+    )
+    bcast_opts = _tfl_stablehlo_bcast_opts.StablehloBroadcastInDimOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_BROADCAST_IN_DIM")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_in = _build_tensor(builder, 0, input_shape)
+    t_out = _build_tensor(builder, 1, output_shape)
+    tensors = [t_in, t_out]
+
+    op = _build_operator(
+        builder,
+        0,
+        [0],
+        [1],
+        builtin_options2_type=_tfl_builtin_options2.StablehloBroadcastInDimOptions,
+        builtin_options2=bcast_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=[0],
+        outputs=[1],
+    )
+    buffers = [_build_buffer(builder) for _ in range(2)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def test_stablehlo_broadcast_in_dim():
+    """TFLite StableHLO BROADCAST_IN_DIM: (3,) -> (2, 3) with dims=[1]."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_broadcast_in_dim_model(
+            input_shape=[3], broadcast_dims=[1], output_shape=[2, 3]
+        )
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((3,), dtype="float32")) -> R.Tensor((2, 3), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 3), dtype="float32") = R.broadcast_to(
+                    R.reshape(x, (1, 3)), (2, 3)
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def _build_stablehlo_iota_model(iota_dimension, output_shape):
+    """STABLEHLO_IOTA with given iota dimension and output shape."""
+    builder = flatbuffers.Builder(1024)
+
+    _tfl_stablehlo_iota_opts.StablehloIotaOptionsStart(builder)
+    _tfl_stablehlo_iota_opts.StablehloIotaOptionsAddIotaDimension(builder, iota_dimension)
+    iota_opts = _tfl_stablehlo_iota_opts.StablehloIotaOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_IOTA")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_out = _build_tensor(builder, 0, output_shape, tensor_type=_tfl_tensor_type.INT32)
+    tensors = [t_out]
+
+    op = _build_operator(
+        builder,
+        0,
+        [],
+        [0],
+        builtin_options2_type=_tfl_builtin_options2.StablehloIotaOptions,
+        builtin_options2=iota_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=[],
+        outputs=[0],
+    )
+    buffers = [_build_buffer(builder)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def test_stablehlo_iota():
+    """TFLite StableHLO IOTA: iota_dim=1, shape=(2, 3), dtype=int32."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_iota_model(iota_dimension=1, output_shape=[2, 3])
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main() -> R.Tensor((2, 3), dtype="int32"):
+            R.func_attr({"num_input": 0})
+            with R.dataflow():
+                gv: R.Tensor((2, 3), dtype="int32") = R.broadcast_to(
+                    R.reshape(R.arange(0, 3, 1, dtype="int32"), (1, 3)), (2, 3)
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def _build_stablehlo_compare_model(direction):
+    """STABLEHLO_COMPARE with given comparison direction."""
+    builder = flatbuffers.Builder(1024)
+
+    _tfl_stablehlo_compare_opts.StablehloCompareOptionsStart(builder)
+    _tfl_stablehlo_compare_opts.StablehloCompareOptionsAddComparisonDirection(builder, direction)
+    cmp_opts = _tfl_stablehlo_compare_opts.StablehloCompareOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_COMPARE")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    shape = [2, 2]
+    t_lhs = _build_tensor(builder, 0, shape)
+    t_rhs = _build_tensor(builder, 1, shape)
+    t_out = _build_tensor(builder, 2, shape, tensor_type=_tfl_tensor_type.BOOL)
+    tensors = [t_lhs, t_rhs, t_out]
+
+    op = _build_operator(
+        builder,
+        0,
+        [0, 1],
+        [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloCompareOptions,
+        builtin_options2=cmp_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=[0, 1],
+        outputs=[2],
+    )
+    buffers = [_build_buffer(builder) for _ in range(3)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+@pytest.mark.parametrize(
+    "direction_enum, relax_op",
+    [
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_EQ, R.equal),
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_NE, R.not_equal),
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_GE, R.greater_equal),
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_GT, R.greater),
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_LE, R.less_equal),
+        (_tfl_stablehlo_comp_dir.StablehloComparisonDirection.STABLEHLO_COMPARISON_DIRECTION_LT, R.less),
+    ],
+)
+def test_stablehlo_compare(direction_enum, relax_op):
+    """TFLite StableHLO COMPARE with various comparison directions."""
+    mod = _load_model_from_buffer(_build_stablehlo_compare_model(direction_enum))
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"),
+            y: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor((2, 2), dtype="bool"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="bool") = relax_op(x, y)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_stablehlo_compare_totalorder_unsupported():
+    """STABLEHLO_COMPARE with TOTALORDER type raises OpNotImplemented."""
+    builder = flatbuffers.Builder(1024)
+
+    _DIR = _tfl_stablehlo_comp_dir.StablehloComparisonDirection
+    _TYPE = _tfl_stablehlo_comp_type.StablehloComparisonType
+
+    _tfl_stablehlo_compare_opts.StablehloCompareOptionsStart(builder)
+    _tfl_stablehlo_compare_opts.StablehloCompareOptionsAddComparisonDirection(
+        builder, _DIR.STABLEHLO_COMPARISON_DIRECTION_EQ
+    )
+    _tfl_stablehlo_compare_opts.StablehloCompareOptionsAddCompareType(
+        builder, _TYPE.STABLEHLO_COMPARISON_TYPE_FLOAT_TOTAL_ORDER
+    )
+    cmp_opts = _tfl_stablehlo_compare_opts.StablehloCompareOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_COMPARE")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    shape = [2, 2]
+    t_lhs = _build_tensor(builder, 0, shape)
+    t_rhs = _build_tensor(builder, 1, shape)
+    t_out = _build_tensor(builder, 2, shape, tensor_type=_tfl_tensor_type.BOOL)
+    tensors = [t_lhs, t_rhs, t_out]
+
+    op = _build_operator(
+        builder,
+        0,
+        [0, 1],
+        [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloCompareOptions,
+        builtin_options2=cmp_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=tensors,
+        operators=[op],
+        inputs=[0, 1],
+        outputs=[2],
+    )
+    buffers = [_build_buffer(builder) for _ in range(3)]
+    buf = _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+
+    with pytest.raises(tvm.error.OpNotImplemented, match="TOTALORDER"):
+        from_tflite(tflite_model)
+
+
+def _stablehlo_gather_i64_vector(builder, start_vector_fn, values):
+    start_vector_fn(builder, len(values))
+    for value in reversed(values):
+        builder.PrependInt64(value)
+    return builder.EndVector()
+
+
+def _build_stablehlo_gather_model(
+    *,
+    data_shape,
+    indices_shape,
+    output_shape,
+    offset_dims,
+    collapsed_slice_dims,
+    start_index_map,
+    index_vector_dim,
+    slice_sizes,
+):
+    """Build a minimal STABLEHLO_GATHER TFLite model."""
+    builder = flatbuffers.Builder(1024)
+
+    offset_dims_vec = _stablehlo_gather_i64_vector(
+        builder,
+        _tfl_stablehlo_gather_opts.StablehloGatherOptionsStartOffsetDimsVector,
+        offset_dims,
+    )
+    collapsed_slice_dims_vec = _stablehlo_gather_i64_vector(
+        builder,
+        _tfl_stablehlo_gather_opts.StablehloGatherOptionsStartCollapsedSliceDimsVector,
+        collapsed_slice_dims,
+    )
+    start_index_map_vec = _stablehlo_gather_i64_vector(
+        builder,
+        _tfl_stablehlo_gather_opts.StablehloGatherOptionsStartStartIndexMapVector,
+        start_index_map,
+    )
+    slice_sizes_vec = _stablehlo_gather_i64_vector(
+        builder,
+        _tfl_stablehlo_gather_opts.StablehloGatherOptionsStartSliceSizesVector,
+        slice_sizes,
+    )
+
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsStart(builder)
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsAddOffsetDims(
+        builder, offset_dims_vec
+    )
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsAddCollapsedSliceDims(
+        builder, collapsed_slice_dims_vec
+    )
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsAddStartIndexMap(
+        builder, start_index_map_vec
+    )
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsAddIndexVectorDim(
+        builder, index_vector_dim
+    )
+    _tfl_stablehlo_gather_opts.StablehloGatherOptionsAddSliceSizes(
+        builder, slice_sizes_vec
+    )
+    gather_opts = _tfl_stablehlo_gather_opts.StablehloGatherOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_GATHER")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_data = _build_tensor(builder, 0, data_shape)
+    t_indices = _build_tensor(builder, 1, indices_shape, tensor_type=_tfl_tensor_type.INT32)
+    t_out = _build_tensor(builder, 2, output_shape)
+    op = _build_operator(
+        builder,
+        0,
+        [0, 1],
+        [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloGatherOptions,
+        builtin_options2=gather_opts,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[t_data, t_indices, t_out],
+        operators=[op],
+        inputs=[0, 1],
+        outputs=[2],
+    )
+    buffers = [_build_buffer(builder) for _ in range(3)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+@pytest.mark.parametrize(
+    "axis, offset_dims, slice_sizes, output_shape",
+    [
+        (0, [1], [1, 4], [2, 4]),
+        (1, [0], [3, 1], [3, 2]),
+    ],
+)
+def test_stablehlo_gather_take_equivalent(axis, offset_dims, slice_sizes, output_shape):
+    """TFLite StableHLO GATHER take-equivalent subset."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_gather_model(
+            data_shape=[3, 4],
+            indices_shape=[2, 1],
+            output_shape=output_shape,
+            offset_dims=offset_dims,
+            collapsed_slice_dims=[axis],
+            start_index_map=[axis],
+            index_vector_dim=1,
+            slice_sizes=slice_sizes,
+        )
+    )
+
+    out_shape = tuple(output_shape)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            data: R.Tensor((3, 4), dtype="float32"),
+            indices: R.Tensor((2, 1), dtype="int32"),
+        ) -> R.Tensor(out_shape, dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                reshaped: R.Tensor((2,), dtype="int32") = R.reshape(indices, (2,))
+                gv: R.Tensor(out_shape, dtype="float32") = R.take(
+                    data, reshaped, axis=axis, mode="fast"
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_stablehlo_gather_complex_unsupported():
+    """TFLite StableHLO GATHER with multi-dimensional start_index_map is unsupported."""
+    buf = _build_stablehlo_gather_model(
+        data_shape=[3, 4],
+        indices_shape=[2, 2],
+        output_shape=[2],
+        offset_dims=[],
+        collapsed_slice_dims=[0, 1],
+        start_index_map=[0, 1],
+        index_vector_dim=1,
+        slice_sizes=[1, 1],
+    )
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+
+    with pytest.raises(tvm.error.OpNotImplemented, match="start_index_map"):
+        from_tflite(tflite_model)
+
+def _pad_vector(builder, start_vector_fn, values):
+    """Build a FlatBuffers int64 vector for pad options."""
+    start_vector_fn(builder, len(values))
+    for v in reversed(values):
+        builder.PrependInt64(v)
+    return builder.EndVector()
+
+
+def _build_stablehlo_pad_model(edge_low, edge_high, interior):
+    """STABLEHLO_PAD with given padding vectors."""
+    builder = flatbuffers.Builder(1024)
+
+    lo_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingLowVector,
+        edge_low,
+    )
+    hi_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingHighVector,
+        edge_high,
+    )
+    int_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartInteriorPaddingVector,
+        interior,
+    )
+
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsStart(builder)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingLow(builder, lo_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingHigh(builder, hi_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddInteriorPadding(builder, int_vec)
+    pad_opts = _tfl_stablehlo_pad_opts.StablehloPadOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_PAD")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_in = _build_tensor(builder, 0, [3, 3])
+    # pad_value is a scalar tensor
+    t_pad_val = _build_tensor(builder, 1, [])
+    t_out = _build_tensor(builder, 2, [4, 4])
+    tensors = [t_in, t_pad_val, t_out]
+
+    op = _build_operator(
+        builder, 0, [0, 1], [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloPadOptions,
+        builtin_options2=pad_opts,
+    )
+    subgraph = _build_subgraph(
+        builder, tensors=tensors, operators=[op],
+        inputs=[0], outputs=[2],
+    )
+    buffers = [
+        _build_buffer(builder),
+        _build_buffer(builder, np.array([0.0], dtype=np.float32).tobytes()),
+        _build_buffer(builder),
+    ]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def test_stablehlo_pad():
+    """TFLite StableHLO PAD: edge_low=[1,0], edge_high=[0,1], interior=[0,0]."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_pad_model(edge_low=[1, 0], edge_high=[0, 1], interior=[0, 0])
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((3, 3), dtype="float32"),
+        ) -> R.Tensor((4, 4), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((4, 4), dtype="float32") = R.nn.pad(
+                    x, pad_width=[1, 0, 0, 1], pad_value=0.0
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_stablehlo_pad_interior_unsupported():
+    """STABLEHLO_PAD with interior padding raises OpNotImplemented."""
+    builder = flatbuffers.Builder(1024)
+
+    lo_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingLowVector,
+        [0, 0],
+    )
+    hi_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingHighVector,
+        [0, 0],
+    )
+    int_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartInteriorPaddingVector,
+        [1, 0],
+    )
+
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsStart(builder)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingLow(builder, lo_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingHigh(builder, hi_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddInteriorPadding(builder, int_vec)
+    pad_opts = _tfl_stablehlo_pad_opts.StablehloPadOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_PAD")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_in = _build_tensor(builder, 0, [3, 3])
+    t_pv = _build_tensor(builder, 1, [])
+    t_out = _build_tensor(builder, 2, [3, 3])
+    tensors = [t_in, t_pv, t_out]
+
+    op = _build_operator(
+        builder, 0, [0, 1], [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloPadOptions,
+        builtin_options2=pad_opts,
+    )
+    subgraph = _build_subgraph(
+        builder, tensors=tensors, operators=[op],
+        inputs=[0], outputs=[2],
+    )
+    buffers = [
+        _build_buffer(builder),
+        _build_buffer(builder, np.array([0.0], dtype=np.float32).tobytes()),
+        _build_buffer(builder),
+    ]
+    buf = _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+    with pytest.raises(tvm.error.OpNotImplemented, match="interior"):
+        from_tflite(tflite_model)
+
+
+def test_stablehlo_pad_negative_unsupported():
+    """STABLEHLO_PAD with negative edge padding raises OpNotImplemented."""
+    builder = flatbuffers.Builder(1024)
+
+    lo_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingLowVector,
+        [-1, 0],
+    )
+    hi_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartEdgePaddingHighVector,
+        [0, 0],
+    )
+    int_vec = _pad_vector(
+        builder,
+        _tfl_stablehlo_pad_opts.StablehloPadOptionsStartInteriorPaddingVector,
+        [0, 0],
+    )
+
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsStart(builder)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingLow(builder, lo_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddEdgePaddingHigh(builder, hi_vec)
+    _tfl_stablehlo_pad_opts.StablehloPadOptionsAddInteriorPadding(builder, int_vec)
+    pad_opts = _tfl_stablehlo_pad_opts.StablehloPadOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_PAD")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_in = _build_tensor(builder, 0, [3, 3])
+    t_pv = _build_tensor(builder, 1, [])
+    t_out = _build_tensor(builder, 2, [2, 3])
+    tensors = [t_in, t_pv, t_out]
+
+    op = _build_operator(
+        builder, 0, [0, 1], [2],
+        builtin_options2_type=_tfl_builtin_options2.StablehloPadOptions,
+        builtin_options2=pad_opts,
+    )
+    subgraph = _build_subgraph(
+        builder, tensors=tensors, operators=[op],
+        inputs=[0], outputs=[2],
+    )
+    buffers = [
+        _build_buffer(builder),
+        _build_buffer(builder, np.array([0.0], dtype=np.float32).tobytes()),
+        _build_buffer(builder),
+    ]
+    buf = _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+    with pytest.raises(tvm.error.OpNotImplemented, match="negative"):
+        from_tflite(tflite_model)
+
+
+def _build_stablehlo_dynamic_slice_model(slice_sizes, start_vals):
+    """STABLEHLO_DYNAMIC_SLICE with given slice sizes and start indices."""
+    builder = flatbuffers.Builder(1024)
+    ndim = len(slice_sizes)
+
+    # Build SliceSizes vector
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsStartSliceSizesVector(
+        builder, ndim
+    )
+    for v in reversed(slice_sizes):
+        builder.PrependInt64(v)
+    sizes_vec = builder.EndVector()
+
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsStart(builder)
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsAddSliceSizes(
+        builder, sizes_vec
+    )
+    dyn_opts = _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_DYNAMIC_SLICE")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    # operand + start indices + output
+    t_in = _build_tensor(builder, 0, [3, 3])
+    start_tensors = []
+    start_inputs = []
+    start_buffers = []
+    for i, sv in enumerate(start_vals):
+        bidx = 1 + i
+        start_tensors.append(
+            _build_tensor(builder, bidx, [], tensor_type=_tfl_tensor_type.INT32)
+        )
+        start_inputs.append(bidx)
+        start_buffers.append(
+            _build_buffer(builder, np.array([sv], dtype=np.int32).tobytes())
+        )
+    out_idx = 1 + ndim
+    t_out = _build_tensor(builder, out_idx, slice_sizes)
+    tensors = [t_in, *start_tensors, t_out]
+    op_inputs = [0, *start_inputs]
+
+    op = _build_operator(
+        builder, 0, op_inputs, [out_idx],
+        builtin_options2_type=_tfl_builtin_options2.StablehloDynamicSliceOptions,
+        builtin_options2=dyn_opts,
+    )
+    subgraph = _build_subgraph(
+        builder, tensors=tensors, operators=[op],
+        inputs=[0], outputs=[out_idx],
+    )
+    buffers = [_build_buffer(builder), *start_buffers, _build_buffer(builder)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def _build_stablehlo_dynamic_slice_with_dynamic_starts_model(slice_sizes):
+    """STABLEHLO_DYNAMIC_SLICE with runtime start-index inputs."""
+    builder = flatbuffers.Builder(1024)
+    ndim = len(slice_sizes)
+
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsStartSliceSizesVector(
+        builder, ndim
+    )
+    for v in reversed(slice_sizes):
+        builder.PrependInt64(v)
+    sizes_vec = builder.EndVector()
+
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsStart(builder)
+    _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsAddSliceSizes(
+        builder, sizes_vec
+    )
+    dyn_opts = _tfl_stablehlo_dyn_slice_opts.StablehloDynamicSliceOptionsEnd(builder)
+
+    builtin_op = _get_stablehlo_builtin_operator("STABLEHLO_DYNAMIC_SLICE")
+    op_code = _build_operator_code(builder, builtin_op)
+
+    t_in = _build_tensor(builder, 0, [3, 3])
+    start_tensors = [
+        _build_tensor(builder, 1 + i, [], tensor_type=_tfl_tensor_type.INT32)
+        for i in range(ndim)
+    ]
+    out_idx = 1 + ndim
+    t_out = _build_tensor(builder, out_idx, slice_sizes)
+    start_inputs = list(range(1, 1 + ndim))
+    tensors = [t_in, *start_tensors, t_out]
+    op_inputs = [0, *start_inputs]
+
+    op = _build_operator(
+        builder, 0, op_inputs, [out_idx],
+        builtin_options2_type=_tfl_builtin_options2.StablehloDynamicSliceOptions,
+        builtin_options2=dyn_opts,
+    )
+    subgraph = _build_subgraph(
+        builder, tensors=tensors, operators=[op],
+        inputs=op_inputs, outputs=[out_idx],
+    )
+    buffers = [_build_buffer(builder) for _ in range(out_idx + 1)]
+    return _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=[op_code], buffers=buffers
+    )
+
+
+def test_stablehlo_dynamic_slice():
+    """TFLite StableHLO DYNAMIC_SLICE: start=[0,1], sizes=[2,2] from (3,3)."""
+    mod = _load_model_from_buffer(
+        _build_stablehlo_dynamic_slice_model(
+            slice_sizes=[2, 2], start_vals=[0, 1]
+        )
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((3, 3), dtype="float32"),
+        ) -> R.Tensor(dtype="float32", ndim=2):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor(dtype="float32", ndim=2) = R.dynamic_strided_slice(
+                    x,
+                    R.const([0, 1], dtype="int64"),
+                    R.const([2, 3], dtype="int64"),
+                    R.const([1, 1], dtype="int64"),
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_stablehlo_dynamic_slice_dynamic_starts_unsupported():
+    """TFLite StableHLO DYNAMIC_SLICE with runtime starts is not supported yet."""
+    buf = _build_stablehlo_dynamic_slice_with_dynamic_starts_model(slice_sizes=[2, 2])
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+
+    with pytest.raises(tvm.error.OpNotImplemented, match="dynamic start"):
+        from_tflite(tflite_model)
+
+
+def test_stablehlo_dynamic_slice_out_of_bounds_unsupported():
+    """TFLite StableHLO DYNAMIC_SLICE with out-of-bounds starts is not supported."""
+    buf = _build_stablehlo_dynamic_slice_model(slice_sizes=[2, 2], start_vals=[0, 2])
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+
+    with pytest.raises(tvm.error.OpNotImplemented, match="out-of-bounds"):
+        from_tflite(tflite_model)
 
 
 def _build_csr_sparsity(
