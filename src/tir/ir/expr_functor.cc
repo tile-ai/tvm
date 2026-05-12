@@ -255,8 +255,7 @@ PrimExpr ExprMutator::VisitExpr_(const CastNode* op) {
   if (rbits.defined()) {
     rbits = this->VisitExpr(rbits.value());
   }
-  if (value.same_as(op->value) &&
-      (!rbits.defined() || rbits.value().same_as(op->rbits.value()))) {
+  if (value.same_as(op->value) && (!rbits.defined() || rbits.value().same_as(op->rbits.value()))) {
     return ffi::GetRef<PrimExpr>(op);
   } else {
     return Cast(op->dtype, value, op->round, op->sat, rbits);

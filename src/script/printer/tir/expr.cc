@@ -128,8 +128,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       ffi::Array<ExprDoc> kwargs_values;
       if (!cast->round.empty()) {
         kwargs_keys.push_back("round");
-        kwargs_values.push_back(
-            LiteralDoc::Str(cast->round, p->Attr("round")));
+        kwargs_values.push_back(LiteralDoc::Str(cast->round, p->Attr("round")));
       }
       if (!cast->sat) {
         kwargs_keys.push_back("sat");
@@ -137,8 +136,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       }
       if (cast->rbits.defined()) {
         kwargs_keys.push_back("rbits");
-        kwargs_values.push_back(
-            d->AsDoc<ExprDoc>(cast->rbits.value(), p->Attr("rbits")));
+        kwargs_values.push_back(d->AsDoc<ExprDoc>(cast->rbits.value(), p->Attr("rbits")));
       }
       return TIR(d, "Cast")->Call({dtype, value}, kwargs_keys, kwargs_values);
     });

@@ -278,8 +278,7 @@ Cast::Cast(DataType t, PrimExpr value, ffi::String round, bool sat,
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.Cast", [](DataType dtype, PrimExpr value, ffi::String round,
-                                       bool sat, ffi::Optional<PrimExpr> rbits,
-                                       Span span) {
+                                       bool sat, ffi::Optional<PrimExpr> rbits, Span span) {
     if (round.empty() && sat && !rbits.defined()) {
       return Cast(dtype, value, span);
     }
