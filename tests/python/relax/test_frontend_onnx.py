@@ -1597,6 +1597,55 @@ def test_clip_v6(max, min):
     check_correctness(model, opset=10)
 
 
+@pytest.mark.parametrize(
+    "min,max",
+    [
+        pytest.param(
+            np.array(0.0, dtype=np.float32),
+            np.array(6.0, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(0.0, dtype=np.float32),
+            np.array(np.nan, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(np.nan, dtype=np.float32),
+            np.array(6.0, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(np.nan, dtype=np.float32),
+            np.array(np.nan, dtype=np.float32),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "input",
+    [
+        np.array([0.5, -3.0, 4.5, 11.0, 7.0], dtype=np.float32),
+        np.array([0.5, -3.0, 4.5, 11.0, np.nan], dtype=np.float32),
+    ],
+)
+def test_clip_v13(input, min, max):
+    # Opset 13: tensor min/max. NaN bound => unbounded on that side (ORT); input NaN preserved.
+    clip_node = helper.make_node("Clip", ["input", "min", "max"], ["output"])
+    graph = helper.make_graph(
+        [clip_node],
+        "clip_v13_nan_max",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [5]),
+            helper.make_tensor_value_info("min", TensorProto.FLOAT, []),
+            helper.make_tensor_value_info("max", TensorProto.FLOAT, []),
+        ],
+        outputs=[helper.make_tensor_value_info("output", TensorProto.FLOAT, [5])],
+    )
+    model = helper.make_model(graph, producer_name="clip_v13_nan_max")
+    check_correctness(
+        model,
+        inputs={"input": input, "min": min, "max": max},
+        opset=13,
+    )
+
+
 def test_equal():
     equal_node = helper.make_node("Equal", ["a", "b"], ["output"])
 
