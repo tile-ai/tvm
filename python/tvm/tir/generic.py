@@ -129,7 +129,7 @@ def floordiv(lhs, rhs, span=None):
 _VALID_CAST_ROUNDING_MODES = {"", "rn", "rz", "rp", "rm", "rs"}
 
 
-def cast(src, dtype, rounding_mode="", satfinite=True, random_bits=None, span=None):
+def cast(src, dtype, round="", sat=True, rbits=None, span=None):
     """Generic cast operator.
 
     Parameters
@@ -138,13 +138,13 @@ def cast(src, dtype, rounding_mode="", satfinite=True, random_bits=None, span=No
         The source operand.
     dtype : str
         The target data type.
-    rounding_mode : str, optional
-        Rounding mode: "", "rn", "rz", "rp", "rm", "rs".
+    round : str, optional
+        Rounding mode (e.g. "rn", "rz", "rp", "rm", "rs").
         Empty string means use backend default.
-    satfinite : bool, optional
-        Whether to saturate to finite. Default is True.
-    random_bits : PrimExpr, optional
-        Random bits for stochastic rounding (rounding_mode="rs").
+    sat : bool, optional
+        Saturate to finite (True = PTX .satfinite, default).
+    rbits : PrimExpr, optional
+        Random bits operand for stochastic rounding (round="rs").
     span : Optional[Span]
         The location of this operator in the source.
 
@@ -153,17 +153,17 @@ def cast(src, dtype, rounding_mode="", satfinite=True, random_bits=None, span=No
     op : tvm.Expr
         The result Expr of cast operaton.
     """
-    if rounding_mode not in _VALID_CAST_ROUNDING_MODES:
+    if round not in _VALID_CAST_ROUNDING_MODES:
         raise ValueError(
-            f"Invalid rounding_mode '{rounding_mode}'. "
+            f"Invalid round '{round}'. "
             f"Must be one of: {sorted(_VALID_CAST_ROUNDING_MODES)}"
         )
-    if not isinstance(satfinite, bool):
+    if not isinstance(sat, bool):
         raise ValueError(
-            f"Invalid satfinite '{satfinite}'. Must be a bool (True for satfinite, False for no saturation)"
+            f"Invalid sat '{sat}'. Must be a bool (True for satfinite, False for no saturation)"
         )
-    if rounding_mode == "rs" and random_bits is None:
-        raise ValueError("random_bits is required when rounding_mode='rs' (stochastic rounding)")
-    if rounding_mode != "rs" and random_bits is not None:
-        raise ValueError("random_bits is only valid with rounding_mode='rs' (stochastic rounding)")
-    return _ffi_api._cast(dtype, src, rounding_mode, satfinite, random_bits, span)  # type: ignore
+    if round == "rs" and rbits is None:
+        raise ValueError("rbits is required when round='rs' (stochastic rounding)")
+    if round != "rs" and rbits is not None:
+        raise ValueError("rbits is only valid with round='rs' (stochastic rounding)")
+    return _ffi_api._cast(dtype, src, round, sat, rbits, span)  # type: ignore

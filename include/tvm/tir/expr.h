@@ -80,31 +80,32 @@ class StringImm : public PrimExpr {
  * Optional fields control hardware-level rounding and saturation behavior
  * for narrowing conversions (e.g., float32 → float8_e4m3).
  *
- * - rounding_mode: "", "rn", "rz", "rp", "rm", "rs" (stochastic).
- *   Empty string means use backend default (typically "rn").
- * - satfinite: bool. true means saturate to finite (default), false means no saturation.
- *   Empty string means use backend default (typically "satfinite" for FP8).
- * - random_bits: Required when rounding_mode is "rs" (stochastic rounding).
- *   Provides the random bits operand for the PTX cvt.rs instruction.
+ * - round: rounding mode string. "" means backend default (typically "rn").
+ *   Supported values include "rn", "rz", "rp", "rm", "rs" (stochastic), etc.
+ *   Maps to the rounding modifier of the PTX cvt instruction.
+ * - sat: saturation flag. true (default) saturates to finite (PTX .satfinite);
+ *   false disables saturation.
+ * - rbits: random bits operand for stochastic rounding (round="rs"). Feeds the
+ *   rbits operand of the PTX cvt.rs instruction.
  */
 class CastNode : public PrimExprNode {
  public:
   /*! \brief Original data type. */
   PrimExpr value;
-  /*! \brief Rounding mode: "", "rn", "rz", "rp", "rm", "rs". */
-  ffi::String rounding_mode;
-  /*! \brief Whether to saturate to finite (true = satfinite, false = no saturation). */
-  bool satfinite{true};
-  /*! \brief Random bits for stochastic rounding (rounding_mode="rs"). */
-  ffi::Optional<PrimExpr> random_bits;
+  /*! \brief Rounding mode: "", "rn", "rz", "rp", "rm", "rs", etc. */
+  ffi::String round;
+  /*! \brief Saturate to finite (true = PTX .satfinite, default; false = no saturation). */
+  bool sat{true};
+  /*! \brief Random bits operand for stochastic rounding (round="rs"). */
+  ffi::Optional<PrimExpr> rbits;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
     refl::ObjectDef<CastNode>()
         .def_ro("value", &CastNode::value)
-        .def_ro("rounding_mode", &CastNode::rounding_mode)
-        .def_ro("satfinite", &CastNode::satfinite)
-        .def_ro("random_bits", &CastNode::random_bits);
+        .def_ro("round", &CastNode::round)
+        .def_ro("sat", &CastNode::sat)
+        .def_ro("rbits", &CastNode::rbits);
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("tir.Cast", CastNode, PrimExprNode);
 };
@@ -116,8 +117,8 @@ class CastNode : public PrimExprNode {
 class Cast : public PrimExpr {
  public:
   TVM_DLL Cast(DataType dtype, PrimExpr value, Span span = Span());
-  TVM_DLL Cast(DataType dtype, PrimExpr value, ffi::String rounding_mode, bool satfinite,
-               ffi::Optional<PrimExpr> random_bits = std::nullopt, Span span = Span());
+  TVM_DLL Cast(DataType dtype, PrimExpr value, ffi::String round, bool sat,
+               ffi::Optional<PrimExpr> rbits = std::nullopt, Span span = Span());
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Cast, PrimExpr, CastNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CastNode);
 };

@@ -253,37 +253,37 @@ Cast::Cast(DataType t, PrimExpr value, Span span) {
   ObjectPtr<CastNode> node = ffi::make_object<CastNode>();
   node->dtype = t;
   node->value = std::move(value);
-  node->rounding_mode = "";
-  node->satfinite = true;
-  node->random_bits = std::nullopt;
+  node->round = "";
+  node->sat = true;
+  node->rbits = std::nullopt;
   node->span = std::move(span);
   data_ = std::move(node);
 }
 
-Cast::Cast(DataType t, PrimExpr value, ffi::String rounding_mode, bool satfinite,
-           ffi::Optional<PrimExpr> random_bits, Span span) {
+Cast::Cast(DataType t, PrimExpr value, ffi::String round, bool sat,
+           ffi::Optional<PrimExpr> rbits, Span span) {
   ICHECK(value.defined());
   ICHECK_EQ(t.get_lanes_or_vscale_factor(), value.dtype().get_lanes_or_vscale_factor());
   ICHECK(t.is_scalable_vector() == value.dtype().is_scalable_vector());
   ObjectPtr<CastNode> node = ffi::make_object<CastNode>();
   node->dtype = t;
   node->value = std::move(value);
-  node->rounding_mode = std::move(rounding_mode);
-  node->satfinite = satfinite;
-  node->random_bits = std::move(random_bits);
+  node->round = std::move(round);
+  node->sat = sat;
+  node->rbits = std::move(rbits);
   node->span = std::move(span);
   data_ = std::move(node);
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tir.Cast", [](DataType dtype, PrimExpr value, ffi::String rounding_mode,
-                                       bool satfinite, ffi::Optional<PrimExpr> random_bits,
+  refl::GlobalDef().def("tir.Cast", [](DataType dtype, PrimExpr value, ffi::String round,
+                                       bool sat, ffi::Optional<PrimExpr> rbits,
                                        Span span) {
-    if (rounding_mode.empty() && satfinite && !random_bits.defined()) {
+    if (round.empty() && sat && !rbits.defined()) {
       return Cast(dtype, value, span);
     }
-    return Cast(dtype, value, rounding_mode, satfinite, random_bits, span);
+    return Cast(dtype, value, round, sat, rbits, span);
   });
 }
 

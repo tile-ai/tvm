@@ -191,8 +191,8 @@ class ComputeLegalizer : public StmtExprMutator {
     if (op_val.same_as(op->value)) {
       return ffi::GetRef<PrimExpr>(op);
     } else {
-      if (!op->rounding_mode.empty() || !op->satfinite || op->random_bits.defined()) {
-        return Cast(op->dtype, op_val, op->rounding_mode, op->satfinite, op->random_bits);
+      if (!op->round.empty() || !op->sat || op->rbits.defined()) {
+        return Cast(op->dtype, op_val, op->round, op->sat, op->rbits);
       }
       return cast(op->dtype, op_val);
     }

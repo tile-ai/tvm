@@ -126,19 +126,19 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       ExprDoc value = d->AsDoc<ExprDoc>(cast->value, p->Attr("value"));
       ffi::Array<ffi::String> kwargs_keys;
       ffi::Array<ExprDoc> kwargs_values;
-      if (!cast->rounding_mode.empty()) {
-        kwargs_keys.push_back("rounding_mode");
+      if (!cast->round.empty()) {
+        kwargs_keys.push_back("round");
         kwargs_values.push_back(
-            LiteralDoc::Str(cast->rounding_mode, p->Attr("rounding_mode")));
+            LiteralDoc::Str(cast->round, p->Attr("round")));
       }
-      if (!cast->satfinite) {
-        kwargs_keys.push_back("satfinite");
-        kwargs_values.push_back(LiteralDoc::Boolean(false, p->Attr("satfinite")));
+      if (!cast->sat) {
+        kwargs_keys.push_back("sat");
+        kwargs_values.push_back(LiteralDoc::Boolean(false, p->Attr("sat")));
       }
-      if (cast->random_bits.defined()) {
-        kwargs_keys.push_back("random_bits");
+      if (cast->rbits.defined()) {
+        kwargs_keys.push_back("rbits");
         kwargs_values.push_back(
-            d->AsDoc<ExprDoc>(cast->random_bits.value(), p->Attr("random_bits")));
+            d->AsDoc<ExprDoc>(cast->rbits.value(), p->Attr("rbits")));
       }
       return TIR(d, "Cast")->Call({dtype, value}, kwargs_keys, kwargs_values);
     });
