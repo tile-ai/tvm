@@ -260,8 +260,7 @@ Cast::Cast(DataType t, PrimExpr value, Span span) {
   data_ = std::move(node);
 }
 
-Cast::Cast(DataType t, PrimExpr value, ffi::String round, bool sat,
-           ffi::Optional<PrimExpr> rbits, Span span) {
+Cast::Cast(DataType t, PrimExpr value, ffi::String round, bool sat, ffi::Optional<PrimExpr> rbits, Span span) {
   ICHECK(value.defined());
   ICHECK_EQ(t.get_lanes_or_vscale_factor(), value.dtype().get_lanes_or_vscale_factor());
   ICHECK(t.is_scalable_vector() == value.dtype().is_scalable_vector());
