@@ -695,8 +695,8 @@ PrimExpr IndexDataTypeNormalizer::VisitExpr_(const CastNode* op) {
   // When the dtype of this cast is not integer dtype, it means that this cast
   // has some other purpose, and we should not unwrap the cast.
   if (is_enabled_ && CanRewriteDType(op->dtype)) {
-    ICHECK(op->round.empty() && op->sat && !op->rbits.defined())
-        << "IndexDataTypeNormalizer does not support CastNode with rounding/saturation fields";
+    ICHECK(op->annotations.empty())
+        << "IndexDataTypeNormalizer does not support CastNode with annotations";
     PrimExpr value = IndexDataTypeNormalizer::VisitExpr(op->value);
     return value->dtype == target_data_type_ ? value : Cast(target_data_type_, value);
   }

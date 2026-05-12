@@ -671,15 +671,10 @@ class Cast(PrimExprWithOp):
     value : PrimExpr
         The value of the function.
 
-    round : str, optional
-        Rounding mode (e.g. "rn", "rz", "rp", "rm", "rs").
-        Empty string means use backend default.
-
-    sat : bool, optional
-        Saturate to finite (True = PTX .satfinite, default).
-
-    rbits : PrimExpr, optional
-        Random bits operand for stochastic rounding (round="rs").
+    annotations : Mapping[str, Object], optional
+        Backend-specific hints for the conversion (e.g. PTX rounding mode,
+        saturation flag, stochastic rbits operand). Mirrors the annotations
+        pattern on Call/For/Block/Allocate. Absent or empty means a plain cast.
 
     span : Optional[Span]
         The location of this expression in the source code.
@@ -687,11 +682,9 @@ class Cast(PrimExprWithOp):
 
     value: PrimExpr
 
-    def __init__(
-        self, dtype, value, round="", sat=True, rbits=None, span=None
-    ) -> None:
+    def __init__(self, dtype, value, annotations=None, span=None) -> None:
         self.__init_handle_by_constructor__(
-            _ffi_api.Cast, dtype, value, round, sat, rbits, span  # type: ignore
+            _ffi_api.Cast, dtype, value, annotations, span  # type: ignore
         )
 
 

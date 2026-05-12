@@ -2494,14 +2494,14 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const VarNode* op) {
 PrimExpr RewriteSimplifier::Impl::VisitExpr_(const CastNode* op) {
   PrimExpr ret = IRMutatorWithAnalyzer::VisitExpr_(op);
   op = ret.as<CastNode>();
-  if (op->round.empty() && op->sat && !op->rbits.defined()) {
+  if (op->annotations.empty()) {
     // Plain cast: go through the cast() factory for its constant folding,
     // same-dtype elimination, and broadcast/ramp push-down optimizations.
     return cast(op->dtype, op->value);
   }
-  // Rounding/saturation cast: ret is already rebuilt by ExprMutator with all
-  // fields preserved; skip the cast() factory, which takes only (dtype, value)
-  // and would drop round/sat/rbits.
+  // Cast carrying backend hints (e.g. rounding/saturation/rbits): ret is
+  // already rebuilt by ExprMutator with annotations preserved; skip the
+  // cast() factory, which takes only (dtype, value) and would drop them.
   return ret;
 }
 

@@ -138,13 +138,22 @@ class ExprDeepEqualChecker : private ExprFunctor<bool(const PrimExpr&, const Pri
   bool VisitExpr_(const CastNode* plhs, const PrimExpr& rhs) final {
     const auto* prhs = rhs.as<CastNode>();
     if (plhs->dtype != prhs->dtype) return false;
-    if (plhs->round != prhs->round) return false;
-    if (plhs->sat != prhs->sat) return false;
-    bool lhs_has_rb = plhs->rbits.defined();
-    bool rhs_has_rb = prhs->rbits.defined();
-    if (lhs_has_rb != rhs_has_rb) return false;
-    if (lhs_has_rb && !VisitExpr(plhs->rbits.value(), prhs->rbits.value()))
-      return false;
+    // Annotations carry backend hints (e.g. rounding mode, rbits operand)
+    // that can change the semantics of the conversion, so compare them here.
+    if (plhs->annotations.size() != prhs->annotations.size()) return false;
+    for (const auto& kv : plhs->annotations) {
+      auto it = prhs->annotations.find(kv.first);
+      if (it == prhs->annotations.end()) return false;
+      ObjectRef rv = (*it).second;
+      auto lopt = kv.second.as<PrimExpr>();
+      auto ropt = rv.as<PrimExpr>();
+      if (lopt.has_value() != ropt.has_value()) return false;
+      if (lopt.has_value()) {
+        if (!VisitExpr(lopt.value(), ropt.value())) return false;
+      } else {
+        if (!kv.second.same_as(rv)) return false;
+      }
+    }
     return VisitExpr(plhs->value, prhs->value);
   }
 

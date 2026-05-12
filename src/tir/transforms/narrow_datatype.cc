@@ -253,8 +253,8 @@ class NarrowDataTypeRewriter : public IndexDataTypeRewriter {
       const CastNode* new_op = e.as<CastNode>();
       ICHECK(new_op != nullptr) << "Expected type to be CastNode"
                                 << ", but get " << e->GetTypeKey();
-      ICHECK(new_op->round.empty() && new_op->sat && !new_op->rbits.defined())
-          << "narrow_datatype does not support CastNode with rounding/saturation fields";
+      ICHECK(new_op->annotations.empty())
+          << "narrow_datatype does not support CastNode with annotations";
       PrimExpr new_value = new_op->value;
       DataType cast_type = visitor_.vmap[op];
       if (new_value.dtype() != cast_type) {

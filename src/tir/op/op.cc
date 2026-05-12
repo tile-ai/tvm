@@ -1194,13 +1194,14 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("tir.nearbyint", tvm::nearbyint)
       .def("tir.trunc", tvm::trunc)
       .def("tir._cast",
-           [](DataType dtype, PrimExpr src, ffi::String round, bool sat,
-              ffi::Optional<PrimExpr> rbits, Span span) -> PrimExpr {
-             if (round.empty() && sat && !rbits.defined()) {
+           [](DataType dtype, PrimExpr src,
+              ffi::Optional<ffi::Map<ffi::String, ObjectRef>> annotations,
+              Span span) -> PrimExpr {
+             if (!annotations.defined() || annotations.value().empty()) {
                return tvm::cast(dtype, std::move(src), std::move(span));
              }
              ICHECK(src.defined());
-             return tir::Cast(dtype, src, round, sat, rbits, span);
+             return tir::Cast(dtype, src, annotations.value(), span);
            })
       .def("tir.reinterpret", tvm::reinterpret);
 }

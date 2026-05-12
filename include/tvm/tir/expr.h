@@ -77,35 +77,37 @@ class StringImm : public PrimExpr {
  * \brief Cast value from one data type to another.
  * \note The lanes of value should keep fixed.
  *
- * Optional fields control hardware-level rounding and saturation behavior
- * for narrowing conversions (e.g., float32 → float8_e4m3).
+ * An optional `annotations` map carries backend-specific hints for narrowing
+ * conversions (e.g., float32 -> float8_e4m3). This mirrors the annotations
+ * pattern on CallNode / ForNode / BlockNode / AllocateNode.
  *
- * - round: rounding mode string. "" means backend default (typically "rn").
- *   Supported values include "rn", "rz", "rp", "rm", "rs" (stochastic), etc.
- *   Maps to the rounding modifier of the PTX cvt instruction.
- * - sat: saturation flag. true (default) saturates to finite (PTX .satfinite);
- *   false disables saturation.
- * - rbits: random bits operand for stochastic rounding (round="rs"). Feeds the
- *   rbits operand of the PTX cvt.rs instruction.
+ * Conventions used by the CUDA backend (keys start with "tl." to avoid
+ * collisions with future TVM upstream annotations):
+ *
+ * - "tl.round" (StringImm): PTX rounding modifier, e.g. "rn", "rz", "rp",
+ *   "rm", "rs" (stochastic), "rna", etc. Absent key means backend default.
+ * - "tl.sat" (IntImm bool): saturation flag; absent/true means saturate to
+ *   finite (PTX .satfinite), false disables saturation.
+ * - "tl.rbits" (PrimExpr): random bits operand for stochastic rounding
+ *   ("tl.round" == "rs"); feeds the rbits operand of PTX cvt.rs.
  */
 class CastNode : public PrimExprNode {
  public:
   /*! \brief Original data type. */
   PrimExpr value;
-  /*! \brief Rounding mode: "", "rn", "rz", "rp", "rm", "rs", etc. */
-  ffi::String round;
-  /*! \brief Saturate to finite (true = PTX .satfinite, default; false = no saturation). */
-  bool sat{true};
-  /*! \brief Random bits operand for stochastic rounding (round="rs"). */
-  ffi::Optional<PrimExpr> rbits;
+  /*!
+   * \brief Additional annotations about the cast.
+   *
+   *  These annotations can be used to pass additional metadata
+   *  to lowering passes (e.g. hardware rounding / saturation hints).
+   */
+  ffi::Map<ffi::String, ObjectRef> annotations;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
     refl::ObjectDef<CastNode>()
         .def_ro("value", &CastNode::value)
-        .def_ro("round", &CastNode::round)
-        .def_ro("sat", &CastNode::sat)
-        .def_ro("rbits", &CastNode::rbits);
+        .def_ro("annotations", &CastNode::annotations);
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("tir.Cast", CastNode, PrimExprNode);
 };
@@ -117,8 +119,9 @@ class CastNode : public PrimExprNode {
 class Cast : public PrimExpr {
  public:
   TVM_DLL Cast(DataType dtype, PrimExpr value, Span span = Span());
-  TVM_DLL Cast(DataType dtype, PrimExpr value, ffi::String round, bool sat,
-               ffi::Optional<PrimExpr> rbits = std::nullopt, Span span = Span());
+  TVM_DLL Cast(DataType dtype, PrimExpr value,
+               ffi::Map<ffi::String, ObjectRef> annotations,
+               Span span = Span());
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Cast, PrimExpr, CastNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CastNode);
 };

@@ -126,17 +126,16 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       ExprDoc value = d->AsDoc<ExprDoc>(cast->value, p->Attr("value"));
       ffi::Array<ffi::String> kwargs_keys;
       ffi::Array<ExprDoc> kwargs_values;
-      if (!cast->round.empty()) {
-        kwargs_keys.push_back("round");
-        kwargs_values.push_back(LiteralDoc::Str(cast->round, p->Attr("round")));
-      }
-      if (!cast->sat) {
-        kwargs_keys.push_back("sat");
-        kwargs_values.push_back(LiteralDoc::Boolean(false, p->Attr("sat")));
-      }
-      if (cast->rbits.defined()) {
-        kwargs_keys.push_back("rbits");
-        kwargs_values.push_back(d->AsDoc<ExprDoc>(cast->rbits.value(), p->Attr("rbits")));
+      if (!cast->annotations.empty()) {
+        ffi::Array<ExprDoc> dict_keys;
+        ffi::Array<ExprDoc> dict_values;
+        for (const auto& kv : cast->annotations) {
+          dict_keys.push_back(LiteralDoc::Str(kv.first, p->Attr("annotations")->Attr(kv.first)));
+          dict_values.push_back(
+              d->AsDoc<ExprDoc>(kv.second, p->Attr("annotations")->Attr(kv.first)));
+        }
+        kwargs_keys.push_back("annotations");
+        kwargs_values.push_back(DictDoc(dict_keys, dict_values));
       }
       return TIR(d, "Cast")->Call({dtype, value}, kwargs_keys, kwargs_values);
     });

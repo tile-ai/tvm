@@ -152,6 +152,12 @@ def cast(src, dtype, round="", sat=True, rbits=None, span=None):
     -------
     op : tvm.Expr
         The result Expr of cast operaton.
+
+    Notes
+    -----
+    Internally, ``round``/``sat``/``rbits`` are stored as ``"tl.round"``,
+    ``"tl.sat"``, and ``"tl.rbits"`` keys in the CastNode's ``annotations``
+    map (mirroring the annotations pattern on Call/For/Block/Allocate).
     """
     if round not in _VALID_CAST_ROUNDING_MODES:
         raise ValueError(
@@ -166,4 +172,13 @@ def cast(src, dtype, round="", sat=True, rbits=None, span=None):
         raise ValueError("rbits is required when round='rs' (stochastic rounding)")
     if round != "rs" and rbits is not None:
         raise ValueError("rbits is only valid with round='rs' (stochastic rounding)")
-    return _ffi_api._cast(dtype, src, round, sat, rbits, span)  # type: ignore
+    # Local import to avoid a circular dependency with .expr at module load time.
+    from .expr import IntImm, StringImm
+    annotations = {}
+    if round:
+        annotations["tl.round"] = StringImm(round)
+    if not sat:
+        annotations["tl.sat"] = IntImm("bool", 0)
+    if rbits is not None:
+        annotations["tl.rbits"] = rbits
+    return _ffi_api._cast(dtype, src, annotations or None, span)  # type: ignore

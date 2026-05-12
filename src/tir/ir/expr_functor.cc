@@ -98,8 +98,12 @@ void ExprVisitor::VisitExpr_(const ReduceNode* op) {
 
 void ExprVisitor::VisitExpr_(const CastNode* op) {
   this->VisitExpr(op->value);
-  if (op->rbits.defined()) {
-    this->VisitExpr(op->rbits.value());
+  // Visit PrimExpr values inside annotations (e.g. "tl.rbits" for stochastic
+  // rounding casts).
+  for (const auto& kv : op->annotations) {
+    if (auto opt = kv.second.as<PrimExpr>()) {
+      this->VisitExpr(opt.value());
+    }
   }
 }
 
@@ -251,15 +255,30 @@ PrimExpr ExprMutator::VisitExpr_(const ReduceNode* op) {
 
 PrimExpr ExprMutator::VisitExpr_(const CastNode* op) {
   PrimExpr value = this->VisitExpr(op->value);
-  ffi::Optional<PrimExpr> rbits = op->rbits;
-  if (rbits.defined()) {
-    rbits = this->VisitExpr(rbits.value());
+
+  // Mutate PrimExpr values inside annotations (e.g. "tl.rbits" for
+  // stochastic rounding casts).
+  ffi::Map<ffi::String, ObjectRef> new_annotations;
+  bool annotations_changed = false;
+  for (const auto& kv : op->annotations) {
+    if (auto opt = kv.second.as<PrimExpr>()) {
+      PrimExpr new_val = this->VisitExpr(opt.value());
+      new_annotations.Set(kv.first, new_val);
+      if (!new_val.same_as(opt.value())) {
+        annotations_changed = true;
+      }
+    } else {
+      new_annotations.Set(kv.first, kv.second);
+    }
   }
-  if (value.same_as(op->value) && (!rbits.defined() || rbits.value().same_as(op->rbits.value()))) {
+
+  if (value.same_as(op->value) && !annotations_changed) {
     return ffi::GetRef<PrimExpr>(op);
-  } else {
-    return Cast(op->dtype, value, op->round, op->sat, rbits);
   }
+  if (op->annotations.empty()) {
+    return Cast(op->dtype, value);
+  }
+  return Cast(op->dtype, value, annotations_changed ? new_annotations : op->annotations);
 }
 
 PrimExpr ExprMutator::VisitExpr_(const NotNode* op) {
