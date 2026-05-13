@@ -170,14 +170,14 @@ class IRConvertSSA final : public StmtExprMutator {
           value = VisitExpr(ffi::GetRef<PrimExpr>(expr));
         } else if (auto* stmt = value.as<StmtNode>()) {
           value = VisitStmt(ffi::GetRef<Stmt>(stmt));
-        } else if (auto opt_arr = value.try_cast<ffi::Array<ObjectRef>>()) {
+        } else if (auto opt_arr = value.try_cast<ffi::Array<ffi::ObjectRef>>()) {
           // Handle container types like Array[...] that may contain Vars/Buffers/Exprs/Stmts
           auto arr = opt_arr.value();
           bool arr_changed = false;
-          std::vector<ObjectRef> rewritten;
+          std::vector<ffi::ObjectRef> rewritten;
           rewritten.reserve(arr.size());
-          for (const ObjectRef& elem : arr) {
-            ObjectRef new_elem = elem;
+          for (const ffi::ObjectRef& elem : arr) {
+            ffi::ObjectRef new_elem = elem;
             if (auto* e = elem.as<PrimExprNode>()) {
               new_elem = VisitExpr(ffi::GetRef<PrimExpr>(e));
             } else if (auto* s = elem.as<StmtNode>()) {
@@ -191,7 +191,7 @@ class IRConvertSSA final : public StmtExprMutator {
             rewritten.push_back(new_elem);
           }
           if (arr_changed) {
-            value = ffi::Array<ObjectRef>(rewritten);
+            value = ffi::Array<ffi::ObjectRef>(rewritten);
           }
         }
         made_change = made_change || !value.same_as(old_value);

@@ -381,7 +381,7 @@ class CUDAWrappedFunc {
         const char* err_str = cudaGetErrorString(last_err);
         // Clear the sticky error so subsequent CUDA calls are not poisoned.
         cudaGetLastError();
-        LOG(FATAL) << func_name_ << ": " << (err_name ? err_name : "unknown") << " - " << err_str;
+        TVM_FFI_THROW(InternalError) << func_name_ << ": " << (err_name ? err_name : "unknown") << " - " << err_str;
       }
     }
   }
@@ -409,31 +409,6 @@ class CUDAWrappedFunc {
   bool has_programmatic_dependent_launch_;
 };
 
-class CUDAPrepGlobalBarrier {
- public:
-  CUDAPrepGlobalBarrier(CUDAModuleNode* m, ffi::ObjectPtr<ffi::Object> sptr) : m_(m), sptr_(sptr) {
-    std::fill(pcache_.begin(), pcache_.end(), 0);
-  }
-
-  void operator()(const ffi::PackedArgs& args, ffi::Any* rv) const {
-    int device_id;
-    CUDA_CALL(cudaGetDevice(&device_id));
-    EnsureCurrentDeviceContext(device_id);
-    if (pcache_[device_id] == 0) {
-      pcache_[device_id] =
-          m_->GetGlobal(device_id, runtime::symbol::tvm_global_barrier_state, sizeof(unsigned));
-    }
-    CUDA_DRIVER_CALL(cuMemsetD32(pcache_[device_id], 0, 1));
-  }
-
- private:
-  // internal module
-  CUDAModuleNode* m_;
-  // the resource holder
-  ffi::ObjectPtr<ffi::Object> sptr_;
-  // mark as mutable, to enable lazy initialization
-  mutable std::array<CUdeviceptr, kMaxNumGPUs> pcache_;
-};
 
 
 ffi::Optional<ffi::Function> CUDAModuleNode::GetFunction(const ffi::String& name) {

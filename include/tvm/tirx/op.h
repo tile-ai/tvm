@@ -740,10 +740,10 @@ inline void CheckMathUnaryOpInputDType(const char* op_name, DataType dtype) {
       DataType bf16_dtype = x.dtype();                                   \
       DataType fp32_dtype(kDLFloat, 32, bf16_dtype.lanes());             \
       PrimExpr x_fp32 = tirx::Cast(fp32_dtype, {x}, span);               \
-      PrimExpr result_fp32 = tirx::Call(fp32_dtype, op, {x_fp32}, span); \
+      PrimExpr result_fp32 = tirx::Call(fp32_dtype, op, {x_fp32}, {}, span); \
       return tirx::Cast(bf16_dtype, {result_fp32}, span);                \
     } else {                                                             \
-      return tirx::Call(x.dtype(), op, {x}, span);                       \
+      return tirx::Call(x.dtype(), op, {x}, {}, span);                   \
     }                                                                    \
   }
 
@@ -782,7 +782,7 @@ TVM_DECLARE_INTRIN_UNARY(clz);
 #define TVM_DECLARE_INTRIN_BINARY(OpName)                              \
   inline PrimExpr OpName(PrimExpr x, PrimExpr y, Span span = Span()) { \
     static const Op& op = Op::Get("tirx." #OpName);                    \
-    return tirx::Call(x.dtype(), op, {x, y}, span);                    \
+    return tirx::Call(x.dtype(), op, {x, y}, {}, span);                    \
   }
 
 TVM_DECLARE_INTRIN_BINARY(atan2);

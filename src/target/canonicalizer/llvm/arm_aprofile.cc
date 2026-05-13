@@ -122,7 +122,7 @@ static ffi::Map<ffi::String, ffi::Any> GetFeatures(ffi::Map<ffi::String, ffi::An
           {"feature.has_sme", static_cast<bool>(has_feature("sme"))}};
 #endif
 
-  LOG(WARNING) << "Cannot parse Arm(R)-based target features for target " << target
+  DLOG(WARNING) << "Cannot parse Arm(R)-based target features for target " << target
                << " without LLVM support.";
   return {};
 }

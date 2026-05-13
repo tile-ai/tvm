@@ -148,7 +148,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
       iter_vars_.Set(iv->var, dom);
     } else if (op->attr_key == tirx::attr::tilelang_assume) {
       auto condition = Downcast<PrimExpr>(op->node);
-      analyzer_->Bind(condition, true);
+      constraint_scope_.Current().Emplace(analyzer_, condition);
     }
     return StmtExprMutator::VisitStmt_(op);
   });

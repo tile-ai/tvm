@@ -192,7 +192,7 @@ def call_intrin(dtype, func_name, *args, annotations=None, span=None):
     
     # Convert to TVM Map
     if annotations is not None:
-        annotations = {k: tir.const(v) if isinstance(v, (int, bool)) else v for k, v in annotations.items()}
+        annotations = {k: const(v) if isinstance(v, (int, bool)) else v for k, v in annotations.items()}
     return Call(dtype, func_name, args, annotations=annotations, span=span)
 
 

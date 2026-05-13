@@ -2000,7 +2000,7 @@ class Schedule(Object):
         assert buffer_index_type in ["read", "write"], "Invalid buffer_index_type"
         buffer_index_type_enum = 0 if buffer_index_type == "read" else 1
         return _ffi_api.ScheduleReIndex(  # type: ignore # pylint: disable=no-member
-            self, block, buffer_index, buffer_index_type_enum, skip_simplify
+            self, block, buffer_index, buffer_index_type_enum
         )
 
     ########## Schedule: Data movement ##########

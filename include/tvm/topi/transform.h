@@ -1313,7 +1313,7 @@ inline Tensor take(const Tensor& a, ffi::Variant<Tensor, PrimExpr> indices, int 
           PrimExpr in_bounds = idx >= 0 && idx < axis_dim;
           return tvm::if_then_else(
               in_bounds, a(real_indices),
-              tvm::tir::make_const(a->dtype, std::numeric_limits<float>::quiet_NaN()));
+              tvm::tirx::make_const(a->dtype, std::numeric_limits<float>::quiet_NaN()));
         },
         name, tag);
   }

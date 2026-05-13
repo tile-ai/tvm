@@ -54,6 +54,10 @@ constexpr const char* kUseDynamicSharedMemoryTag = "tirx.use_dyn_shared_memory";
 constexpr const char* kUseProgramaticDependentLaunch = "tirx.use_programtic_dependent_launch";
 /*! \brief A tag to specify whether or not use cooperative launch */
 constexpr const char* kUseCooperativeLaunch = "tirx.use_cooperative_launch";
+/*! \brief Cluster dimension tags for SM90+ cluster launch */
+constexpr const char* kClusterDimX = "tir.cluster_dim_x";
+constexpr const char* kClusterDimY = "tir.cluster_dim_y";
+constexpr const char* kClusterDimZ = "tir.cluster_dim_z";
 
 }  // namespace launch_param
 

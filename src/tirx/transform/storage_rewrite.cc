@@ -1320,10 +1320,6 @@ class VectorTypeAccessChecker : public StmtExprVisitor {
       var_info.element_dtype = value_dtype.element_of();
     }
 
-    for (int i = 0; i < static_cast<int>(indices.size()) - 1; i++) {
-      TVM_FFI_ICHECK(indices[i].dtype().is_scalar())
-          << "Only the last index of a buffer access may be a vector type.";
-    }
     int index_lanes = indices.size() ? indices.back().dtype().lanes() : 1;
 
     DataType access_dtype = value_dtype;

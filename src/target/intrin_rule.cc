@@ -205,7 +205,7 @@ TVM_REGISTER_OP("tirx.isfinite")
     .set_attr<FLegalize>("default.FLegalize", [](const PrimExpr& e) -> PrimExpr {
       const CallNode* call = e.as<CallNode>();
       TVM_FFI_ICHECK(call != nullptr);
-      return isfinite(call->args[0]);
+      return !isinf(call->args[0]) && !isnan(call->args[0]);
     });
 
 TVM_REGISTER_OP("tirx.isinf")

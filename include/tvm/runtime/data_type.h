@@ -109,7 +109,7 @@ class DataType {
       TVM_FFI_ICHECK_EQ(bits, 4);
     }
     if (code == kTensorFloat32) {
-      ICHECK_EQ(bits, 32);
+      TVM_FFI_ICHECK_EQ(bits, 32);
     }
   }
   /*! \return The type code. */

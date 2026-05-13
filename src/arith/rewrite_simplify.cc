@@ -2082,7 +2082,7 @@ PrimExpr RewriteSimplifier::Impl::ApplyRewriteRules(LT ret) {
 
     auto contains_floordiv = [](const PrimExpr& expr) -> bool {
       bool found = false;
-      PostOrderVisit(expr, [&found](const ObjectRef& obj) {
+      PostOrderVisit(expr, [&found](const ffi::ObjectRef& obj) {
         if (obj.as<FloorDivNode>()) {
           found = true;
         }

@@ -402,7 +402,7 @@ TVM_REGISTER_TARGET_KIND("hip", kDLROCM)
     .add_attr_option<int64_t>("max_shared_memory_per_block", 65536)
     .add_attr_option<int64_t>("thread_warp_size", 64)
     .set_default_keys({"hip", "gpu"})
-    .set_target_parser(UpdateROCmAttrs);
+    .set_target_canonicalizer(UpdateROCmAttrs);
 
 TVM_REGISTER_TARGET_KIND("opencl", kDLOpenCL)
     .add_attr_option<int64_t>("max_threads_per_block", refl::DefaultValue(256))

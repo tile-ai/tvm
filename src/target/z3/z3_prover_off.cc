@@ -1,6 +1,6 @@
 #include <tvm/arith/analyzer.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/op.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/op.h>
 
 #include "tvm/ffi/string.h"
 #include "tvm/ir/expr.h"
@@ -9,7 +9,7 @@
 
 namespace tvm::arith {
 
-using namespace tir;
+using namespace tirx;
 using namespace ffi;
 
 class Z3Prover::Impl {};

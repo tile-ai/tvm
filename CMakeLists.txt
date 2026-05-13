@@ -476,6 +476,8 @@ tvm_option(USE_Z3 "Build with Z3 SMT solver support" OFF)
 if (USE_Z3)
   find_package(Z3 REQUIRED)
   list(APPEND COMPILER_SRCS src/target/z3/z3_prover_on.cc)
+  include_directories(${Z3_INCLUDE_DIR})
+  list(APPEND TVM_LINKER_LIBS ${Z3_LIBRARY})
 else()
   list(APPEND COMPILER_SRCS src/target/z3/z3_prover_off.cc)
 endif()
@@ -551,12 +553,19 @@ else()
   target_link_libraries(tvm PUBLIC tvm_ffi_shared)
 endif()
 target_include_directories(tvm PUBLIC "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+target_link_libraries(tvm PRIVATE ${TVM_RUNTIME_LINKER_LIBS} ${TVM_LINKER_LIBS})
 set_property(TARGET tvm APPEND PROPERTY LINK_OPTIONS "${TVM_NO_UNDEFINED_SYMBOLS}")
 set_property(TARGET tvm APPEND PROPERTY LINK_OPTIONS "${TVM_VISIBILITY_FLAG}")
 set_target_properties(tvm PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)
+# Create compatibility symlinks so Python can find libtvm_runtime.so and
+# libtvm_compiler.so from the unified libtvm.so.
+add_custom_command(TARGET tvm POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_runtime.so"
+  COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_compiler.so"
 )
 
 # Place runtime/compiler/allvisible artifacts under build/lib/ to mirror the

@@ -58,7 +58,7 @@ DEFAULT_OP: dict[type, Callable[..., Any]] = {
     doc.Not: lambda a: not a,
     doc.UAdd: lambda a: +a,
     doc.USub: lambda a: -a,
-    doc.IfExp: tvm.tir.op.if_then_else,
+    doc.IfExp: tvm.tirx.op.if_then_else,
 }
 
 

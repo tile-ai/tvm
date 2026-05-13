@@ -23,7 +23,7 @@ import inspect
 import threading
 from collections.abc import Callable
 from numbers import Integral
-from typing import Any, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 # isort: off
 from typing import Literal

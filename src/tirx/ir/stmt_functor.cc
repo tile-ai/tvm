@@ -35,7 +35,6 @@ namespace tvm {
 namespace tirx {
 
 void StmtVisitor::VisitStmt_(const BindNode* op) {
-  // Bind has no body -- only visit the value expression.
   this->VisitExpr(op->value);
 }
 
@@ -249,7 +248,6 @@ class StmtMutator::Internal {
 };
 
 Stmt StmtMutator::VisitStmt_(const BindNode* op) {
-  // Bind has no body -- only mutate the value expression.
   PrimExpr value = this->VisitExpr(op->value);
   if (value.same_as(op->value)) {
     return ffi::GetRef<Stmt>(op);

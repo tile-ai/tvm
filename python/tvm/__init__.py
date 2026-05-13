@@ -51,9 +51,6 @@ from . import script
 # tvm.tirx — registers itself via tvm.script.register_dialect in its __init__
 from . import tirx
 
-# tvm.tir — backward compat alias for tirx, registers "tir" dialect
-from . import tir
-
 # tvm.s_tir
 from . import s_tir
 

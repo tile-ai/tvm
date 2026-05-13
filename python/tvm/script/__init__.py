@@ -68,6 +68,7 @@ imported here), so there is no circular dependency.
 import importlib
 import importlib.util
 import sys
+from pathlib import Path
 from typing import Any
 
 _DIALECT_REGISTRY: dict[str, str] = {}
@@ -164,8 +165,22 @@ class _DialectRedirectFinder:
         redirected = _redirect_target(fullname)
         if redirected is None:
             return None
+        # If a real file-based package exists for this name, let the normal
+        # import machinery handle it instead of redirecting.
+        parts = fullname.split(".")
+        pkg_dir = Path(__file__).parent
+        # Navigate from tvm/script/ to the subpath
+        for part in parts[2:]:  # skip "tvm.script"
+            pkg_dir = pkg_dir / part
+        if pkg_dir.is_dir() and (pkg_dir / "__init__.py").is_file():
+            return None
+        if pkg_dir.with_suffix(".py").is_file():
+            return None
         # Resolve the target module and alias it under the legacy name.
-        module = importlib.import_module(redirected)
+        try:
+            module = importlib.import_module(redirected)
+        except ModuleNotFoundError:
+            return None
         sys.modules[fullname] = module
         return importlib.util.spec_from_loader(fullname, _AliasLoader(module))
 

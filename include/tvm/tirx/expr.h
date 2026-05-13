@@ -738,7 +738,7 @@ class CallNode : public PrimExprNode {
    *  to lowering passes. For tile operators, this can include
    *  coalesced_width, disable_tma, eviction_policy, etc.
    */
-  ffi::Map<ffi::String, ObjectRef> annotations;
+  ffi::Map<ffi::String, ffi::ObjectRef> annotations;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
@@ -757,8 +757,10 @@ class CallNode : public PrimExprNode {
 class Call : public PrimExpr {
  public:
   TVM_DLL Call(DataType dtype, RelaxExpr op, ffi::Array<PrimExpr> args,
-               ffi::Map<ffi::String, ObjectRef> annotations = {},
+               ffi::Map<ffi::String, ffi::ObjectRef> annotations = {},
                Span span = Span());
+  Call(DataType dtype, RelaxExpr op, ffi::Array<PrimExpr> args, Span span)
+      : Call(dtype, std::move(op), std::move(args), {}, std::move(span)) {}
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Call, PrimExpr, CallNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CallNode);
 };

@@ -44,11 +44,15 @@ def package_lib_paths() -> list[Path]:
     mode; this function only returns the search path.
     """
     pkg = Path(__file__).parent  # python/tvm/
-    return [
+    paths = [
         pkg / "lib",  # wheel layout
         pkg.parent.parent / "build" / "lib",  # dev: <worktree>/build/lib
         pkg.parent.parent / "lib",  # dev: <worktree>/lib
     ]
+    if os.environ.get("TVM_LIBRARY_PATH"):
+        for p in os.environ["TVM_LIBRARY_PATH"].split(os.pathsep):
+            paths.append(Path(p))
+    return paths
 
 
 # Mirror of ``tvm_ffi.libinfo.{load_lib_ctypes,_find_library_by_basename}`` with

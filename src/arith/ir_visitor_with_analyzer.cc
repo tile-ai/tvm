@@ -81,7 +81,7 @@ void IRVisitorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
       analyzer_.Bind(iv->var, Range::FromMinExtent(IntImm(op->value->dtype, 0), op->value));
     } else if (op->attr_key == tirx::attr::tilelang_assume) {
       auto condition = Downcast<PrimExpr>(op->node);
-      analyzer_.Bind(condition, true);
+      constraint_scope_.Current().Emplace(&analyzer_, condition);
     }
     StmtExprVisitor::VisitStmt_(op);
   });

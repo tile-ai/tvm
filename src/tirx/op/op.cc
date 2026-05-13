@@ -949,7 +949,25 @@ PrimExpr isinf(PrimExpr x, Span span) {
 }
 
 // isfinite
-PrimExpr isfinite(PrimExpr x, Span span) { return !isinf(x, span) && !isnan(x, span); }
+PrimExpr isfinite(PrimExpr x, Span span) {
+  DataType t = DataType::Bool(x.dtype().lanes());
+  if (x.dtype().is_int() || x.dtype().is_uint()) {
+    return make_const(t, true, span);
+  } else if (x.dtype().is_float()) {
+    const FloatImmNode* fx = x.as<FloatImmNode>();
+    if (fx) {
+      return make_const(t, std::isfinite(fx->value), fx->span);
+    }
+    if (x.dtype().bits() == 32 || x.dtype().bits() == 64) {
+      static auto op = Op::Get("tirx.isfinite");
+      return tirx::Call(t, op, {x}, span);
+    }
+    return !isinf(x, span) && !isnan(x, span);
+  } else {
+    TVM_FFI_THROW(InternalError) << "Data type " << x.dtype()
+                                 << " not supported for finiteness ops. Skipping it...";
+  }
+}
 
 PrimExpr sum(PrimExpr source, ffi::Array<IterVar> rdom, ffi::Array<PrimExpr> init, Span span) {
   Var x("x", source.dtype(), span), y("y", source.dtype(), span);
@@ -1197,12 +1215,21 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   def_packed("tirx." #Node, [](ffi::PackedArgs args, ffi::Any* ret) {                          \
     bool lhs_is_int = args[0].type_index() == ffi::TypeIndex::kTVMFFIInt;                      \
     bool rhs_is_int = args[1].type_index() == ffi::TypeIndex::kTVMFFIInt;                      \
+    Span span = args[2].cast<Span>();                                                          \
     if (lhs_is_int) {                                                                          \
-      *ret = (Func(args[0].cast<int>(), args[1].cast<PrimExpr>(), args[2].cast<Span>()));      \
+      PrimExpr rhs = args[1].cast<PrimExpr>();                                                 \
+      PrimExpr lhs = rhs.dtype().is_uint()                                                     \
+                         ? tirx::make_const(rhs.dtype(), args[0].cast<uint64_t>(), span)       \
+                         : tirx::make_const(rhs.dtype(), args[0].cast<int64_t>(), span);       \
+      *ret = (Func(lhs, rhs, span));                                                           \
     } else if (rhs_is_int) {                                                                   \
-      *ret = (Func(args[0].cast<PrimExpr>(), args[1].cast<int>(), args[2].cast<Span>()));      \
+      PrimExpr lhs = args[0].cast<PrimExpr>();                                                 \
+      PrimExpr rhs = lhs.dtype().is_uint()                                                     \
+                         ? tirx::make_const(lhs.dtype(), args[1].cast<uint64_t>(), span)       \
+                         : tirx::make_const(lhs.dtype(), args[1].cast<int64_t>(), span);       \
+      *ret = (Func(lhs, rhs, span));                                                           \
     } else {                                                                                   \
-      *ret = (Func(args[0].cast<PrimExpr>(), args[1].cast<PrimExpr>(), args[2].cast<Span>())); \
+      *ret = (Func(args[0].cast<PrimExpr>(), args[1].cast<PrimExpr>(), span));                 \
     }                                                                                          \
   })
 

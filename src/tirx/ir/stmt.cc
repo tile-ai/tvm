@@ -57,7 +57,6 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 Bind::Bind(Var var, PrimExpr value, Span span) {
   TVM_FFI_ICHECK(value.defined());
   auto vdtype = value.dtype();
-  // It is still valid to bind a pointer type var to a value that is of type handle.
   if (var->type_annotation.as<PointerTypeNode>()) {
     TVM_FFI_ICHECK(vdtype.is_handle());
   } else {
@@ -351,11 +350,6 @@ BufferStore::BufferStore(Buffer buffer, PrimExpr value, ffi::Array<PrimExpr> ind
       << "Buffer " << buffer->name << " is " << buffer->shape.size()
       << "-dimensional, cannot be indexed with the " << indices.size()
       << "-dimensional indices provided.";
-
-  for (int i = 0; i < static_cast<int>(indices.size()) - 1; i++) {
-    TVM_FFI_ICHECK(indices[i].dtype().is_scalar())
-        << "Only the last index of a buffer access may be a vector type.";
-  }
 
   bool is_index_scalable = indices.empty() ? false : indices.back().dtype().is_scalable_vector();
   bool is_buffer_dtype_scalable = buffer->dtype.is_scalable_vector();
