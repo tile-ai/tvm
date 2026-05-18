@@ -76,6 +76,12 @@ def _find_library_by_basename(
     """
     if sys.platform.startswith("win32"):
         lib_dll_names = (f"{target_name}.dll",)
+        # TileLang's Windows wheel intentionally ships a unified tvm.dll that
+        # contains runtime, compiler, and TileLang registration objects. Loading
+        # copied aliases as separate DLLs would duplicate global state, so route
+        # split-library lookups to the same module on Windows.
+        if target_name in ("tvm_runtime", "tvm_compiler"):
+            lib_dll_names = lib_dll_names + ("tvm.dll",)
     elif sys.platform.startswith("darwin"):
         lib_dll_names = (f"lib{target_name}.dylib", f"lib{target_name}.so")
     else:
