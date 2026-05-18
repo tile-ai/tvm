@@ -37,8 +37,8 @@ namespace tirx {
 /*! \brief Generate surrounding loops automatically */
 class ScriptCompleter : public StmtMutator {
  public:
-  explicit ScriptCompleter(ffi::Map<Var, Buffer>* buffer_var_map)
-      : buffer_var_map_(buffer_var_map) {}
+  explicit ScriptCompleter(ffi::Map<Var, Buffer>* buffer_var_map, bool s_tir = false)
+      : buffer_var_map_(buffer_var_map), s_tir_(s_tir) {}
 
  private:
   ffi::Map<Var, Buffer>* buffer_var_map_;
@@ -81,13 +81,7 @@ class ScriptCompleter : public StmtMutator {
       mask = Downcast<IntImm>((*it).second)->value;
     }
     // ignore root block or blocks which already has reads/writes regions
-    if (mask != 0) {
-      auto n = CopyOnWrite(block.operator->());
-      n->annotations = op->annotations;
-      n->annotations.erase(s_tir::attr::script_parsing_detect_access);
-      if (is_root_block) {
-        return SBlock(n);
-      }
+    if (mask != 0 && s_tir_) {
       auto access_region = GetSBlockAccessRegion(block, *buffer_var_map_);
       const ffi::Array<BufferRegion>& reads = access_region[0];
       const ffi::Array<BufferRegion>& writes = access_region[1];
@@ -95,8 +89,13 @@ class ScriptCompleter : public StmtMutator {
       TVM_FFI_CHECK(opaque.empty(), ValueError)
           << "Can not auto detect buffer access region from tirx.Load, tirx.Store or "
              "direct access by buffer data. Please annotation the access region manually";
-      if (mask & 1) n->reads = reads;
-      if (mask & 2) n->writes = writes;
+      auto n = CopyOnWrite(block.operator->());
+      if (!is_root_block) {
+        if (mask & 1) n->reads = reads;
+        if (mask & 2) n->writes = writes;
+      }
+      n->annotations = op->annotations;
+      n->annotations.erase(s_tir::attr::script_parsing_detect_access);
       return SBlock(n);
     } else {
       return block;
@@ -120,9 +119,10 @@ class ScriptCompleter : public StmtMutator {
   }
 
   bool is_root_block_ = true;
+  bool s_tir_ = false;
 };
 
-PrimFunc ScriptComplete(PrimFunc func, const ffi::Array<Buffer>& root_allocates) {
+PrimFunc ScriptComplete(PrimFunc func, const ffi::Array<Buffer>& root_allocates, bool s_tir) {
   ffi::Map<Var, Buffer> buffer_var_map;
   for (const auto& pair : func->buffer_map) {
     const Buffer& buffer = pair.second;
@@ -151,13 +151,13 @@ PrimFunc ScriptComplete(PrimFunc func, const ffi::Array<Buffer>& root_allocates)
     return false;
   }();
 
-  if (should_insert_root) {
+  if (s_tir && should_insert_root) {
     SBlock root_block({}, {}, {}, "root", std::move(res), std::nullopt, root_allocates);
     res = SBlockRealize({}, Bool(true), std::move(root_block));
   }
 
   // generate surrounding loops automatically
-  ScriptCompleter script_completer(&buffer_var_map);
+  ScriptCompleter script_completer(&buffer_var_map, s_tir);
   res = script_completer(std::move(res));
 
   if (func->body.same_as(res)) {

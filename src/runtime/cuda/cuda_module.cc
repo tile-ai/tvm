@@ -276,7 +276,7 @@ class CUDAWrappedFunc {
       }
     }
     CUstream strm = static_cast<CUstream>(TVMFFIEnvGetStream(kDLCUDA, device_id));
-    CUresult result;
+    std::vector<CUlaunchAttribute> attrs;
 
     TVM_FFI_ICHECK(wl.grid_dim(0) > 0 && wl.grid_dim(1) > 0 && wl.grid_dim(2) > 0)
         << "CUDALaunch Error: grid dimension must be positive, but got"
@@ -285,28 +285,14 @@ class CUDAWrappedFunc {
         << ". A zero grid dimension is often caused by a dynamic shape"
         << " (e.g. num_tokens) being 0 at runtime.";
 
+    // 1) Cluster
     if (wl.use_cluster_launch()) {
-      // SM90+ cluster launch
-      CUlaunchConfig config{};
-      CUlaunchAttribute attribute[2]{};
-      attribute[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-      attribute[0].value.clusterDim.x = wl.cluster_dim[0];
-      attribute[0].value.clusterDim.y = wl.cluster_dim[1];
-      attribute[0].value.clusterDim.z = wl.cluster_dim[2];
-      attribute[1].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
-      attribute[1].value.programmaticStreamSerializationAllowed = 1;
-
-      config.attrs = attribute;
-      config.numAttrs = 2;
-      config.hStream = strm;
-      config.gridDimX = wl.grid_dim(0);
-      config.gridDimY = wl.grid_dim(1);
-      config.gridDimZ = wl.grid_dim(2);
-      config.blockDimX = wl.block_dim(0);
-      config.blockDimY = wl.block_dim(1);
-      config.blockDimZ = wl.block_dim(2);
-      config.sharedMemBytes = wl.dyn_shmem_size;
-
+      CUlaunchAttribute attr{};
+      attr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+      attr.value.clusterDim.x = wl.cluster_dim(0);
+      attr.value.clusterDim.y = wl.cluster_dim(1);
+      attr.value.clusterDim.z = wl.cluster_dim(2);
+      attrs.push_back(attr);
       // Set non-portable cluster size allowed attribute
       if (!cluster_attr_initialized_[device_id]) {
         CUresult attr_result = cuFuncSetAttribute(
@@ -318,35 +304,49 @@ class CUDAWrappedFunc {
         }
         cluster_attr_initialized_[device_id] = true;
       }
-
-      result = cuLaunchKernelEx(&config, fcache_[device_id], void_args, nullptr);
-    } else if (launch_param_config_.use_programtic_dependent_launch()) {
-      CUlaunchConfig config{};
-      CUlaunchAttribute attribute[1]{};
-      attribute[0].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
-      attribute[0].value.programmaticStreamSerializationAllowed = 1;
-
-      config.attrs = attribute;
-      config.numAttrs = 1;
-      config.hStream = strm;
-      config.gridDimX = wl.grid_dim(0);
-      config.gridDimY = wl.grid_dim(1);
-      config.gridDimZ = wl.grid_dim(2);
-      config.blockDimX = wl.block_dim(0);
-      config.blockDimY = wl.block_dim(1);
-      config.blockDimZ = wl.block_dim(2);
-      config.sharedMemBytes = wl.dyn_shmem_size;
-
-      result = cuLaunchKernelEx(&config, fcache_[device_id], void_args, nullptr);
-    } else if (launch_param_config_.use_cooperative_launch()) {
-      result = cuLaunchCooperativeKernel(fcache_[device_id], wl.grid_dim(0), wl.grid_dim(1),
-                                         wl.grid_dim(2), wl.block_dim(0), wl.block_dim(1),
-                                         wl.block_dim(2), wl.dyn_shmem_size, strm, void_args);
-    } else {
-      result = cuLaunchKernel(fcache_[device_id], wl.grid_dim(0), wl.grid_dim(1), wl.grid_dim(2),
-                              wl.block_dim(0), wl.block_dim(1), wl.block_dim(2), wl.dyn_shmem_size,
-                              strm, void_args, nullptr);
     }
+
+    // 1b) Preferred cluster (CUDA 12.8+, cudaLaunchAttributePreferredClusterDimension)
+    if (wl.preferred_cluster_dim(0) != 1 || wl.preferred_cluster_dim(1) != 1 ||
+        wl.preferred_cluster_dim(2) != 1) {
+      CUlaunchAttribute attr{};
+      attr.id = CU_LAUNCH_ATTRIBUTE_PREFERRED_CLUSTER_DIMENSION;
+      attr.value.clusterDim.x = wl.preferred_cluster_dim(0);
+      attr.value.clusterDim.y = wl.preferred_cluster_dim(1);
+      attr.value.clusterDim.z = wl.preferred_cluster_dim(2);
+      attrs.push_back(attr);
+    }
+
+    // 2) Programmatic stream serialization
+    if (launch_param_config_.use_programtic_dependent_launch()) {
+      CUlaunchAttribute attr{};
+      attr.id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
+      attr.value.programmaticStreamSerializationAllowed = 1;
+      attrs.push_back(attr);
+    }
+
+    // 3) Cooperative
+    if (launch_param_config_.use_cooperative_launch()) {
+      CUlaunchAttribute attr{};
+      attr.id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE;
+      attr.value.cooperative = 1;
+      attrs.push_back(attr);
+    }
+
+    // 4) Launch
+    CUlaunchConfig config{};
+    config.gridDimX = wl.grid_dim(0);
+    config.gridDimY = wl.grid_dim(1);
+    config.gridDimZ = wl.grid_dim(2);
+    config.blockDimX = wl.block_dim(0);
+    config.blockDimY = wl.block_dim(1);
+    config.blockDimZ = wl.block_dim(2);
+    config.sharedMemBytes = wl.dyn_shmem_size;
+    config.hStream = strm;
+    config.attrs = attrs.empty() ? nullptr : attrs.data();
+    config.numAttrs = static_cast<unsigned int>(attrs.size());
+
+    CUresult result = cuLaunchKernelEx(&config, fcache_[device_id], void_args, nullptr);
 
     if (result != CUDA_SUCCESS && result != CUDA_ERROR_DEINITIALIZED) {
       const char* msg;
