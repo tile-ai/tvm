@@ -21,7 +21,7 @@
 import numpy as np
 
 import tvm
-import tvm.testing
+import tvm_ffi
 
 
 # RPC test functions to be registered for unit-tests purposes
@@ -64,7 +64,7 @@ def _my_module(name):
     if name == "get_arr":
         return lambda: nd
     if name == "ref_count":
-        return lambda: tvm.testing.object_use_count(nd)
+        return lambda: tvm_ffi.get_global_func("testing.object_use_count")(nd)
     if name == "get_elem":
         return lambda idx: nd.numpy()[idx]
     if name == "get_arr_elem":
