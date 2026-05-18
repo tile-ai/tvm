@@ -242,9 +242,13 @@ class MetalWrappedFunc {
       int blockSize = wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2);
       auto maxTotalThreadsPerThreadgroup = scache_[device_id].maxTotalThreadsPerThreadgroup;
       TVM_FFI_ICHECK_LE(blockSize, maxTotalThreadsPerThreadgroup);
-      // Reuse the pending compute encoder to batch dispatches.
-      // The encoder is flushed on sync, copy, or buffer deallocation.
-      id<MTLComputeCommandEncoder> encoder = stream->GetPendingComputeEncoder(func_name_);
+      // [tilelang] Use standalone encoder instead of GetPendingComputeEncoder().
+      // MetalRawStream wraps torch's command buffer with a nil queue, so the
+      // batched dispatch path (GetOrCreatePendingCommandBuffer) produces nil
+      // encoder. We create a fresh encoder per dispatch and endEncoding
+      // immediately — torch owns the command buffer and handles commit/sync.
+      id<MTLCommandBuffer> cb = stream->GetCommandBuffer();
+      id<MTLComputeCommandEncoder> encoder = [cb computeCommandEncoder];
       [encoder setComputePipelineState:scache_[device_id]];
       for (size_t i = 0; i < num_buffer_args_; ++i) {
         void* buf = args[static_cast<int>(i)].cast<void*>();
@@ -259,8 +263,10 @@ class MetalWrappedFunc {
       MTLSize dimGrid = MTLSizeMake(wl.grid_dim(0), wl.grid_dim(1), wl.grid_dim(2));
       MTLSize dimBlock = MTLSizeMake(wl.block_dim(0), wl.block_dim(1), wl.block_dim(2));
       [encoder dispatchThreadgroups:dimGrid threadsPerThreadgroup:dimBlock];
-      // Dispatches are batched via the pending compute encoder; no explicit
-      // endEncoding or commit here — those happen on FlushCommandBuffer().
+      // [tilelang] endEncoding immediately since torch owns the command buffer.
+      // Upstream batched path defers this to FlushCommandBuffer(), but
+      // MetalRawStream does not support batching (nil queue).
+      [encoder endEncoding];
     };
   }
 
