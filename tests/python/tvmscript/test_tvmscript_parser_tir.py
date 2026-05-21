@@ -14,26 +14,27 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Unittests for tvm.script.parser.tir"""
+"""Unittests for tvm.script.parser.tirx"""
 
 import pytest
-import tvm.testing
 import tvm_ffi
-from tvm.script.parser import tir as T
-from tvm import ir, tir
+
+import tvm.testing
+from tvm import ir, tirx
+from tvm.script.parser import tirx as T
 
 
 def test_tir_buffer_proxy():
     buffer_0 = T.Buffer((128, 128), "float32")
     assert (
-        isinstance(buffer_0, tir.Buffer)
+        isinstance(buffer_0, tirx.Buffer)
         and list(buffer_0.shape) == [128, 128]
         and buffer_0.dtype == "float32"
     )
 
     buffer_1 = T.Buffer((64, 64, 64), "int32")
     assert (
-        isinstance(buffer_1, tir.Buffer)
+        isinstance(buffer_1, tirx.Buffer)
         and list(buffer_1.shape) == [64, 64, 64]
         and buffer_1.dtype == "int32"
     )
@@ -42,7 +43,7 @@ def test_tir_buffer_proxy():
 def test_tir_ptr_proxy():
     ptr_0 = T.handle("int32", "global")
     assert (
-        isinstance(ptr_0, tir.Var)
+        isinstance(ptr_0, tirx.Var)
         and ptr_0.dtype == "handle"
         and isinstance(ptr_0.type_annotation, ir.PointerType)
         and ptr_0.type_annotation.element_type == ir.PrimType("int32")
@@ -51,7 +52,7 @@ def test_tir_ptr_proxy():
 
     ptr_1 = T.handle("float32", "shared")
     assert (
-        isinstance(ptr_1, tir.Var)
+        isinstance(ptr_1, tirx.Var)
         and ptr_1.dtype == "handle"
         and isinstance(ptr_1.type_annotation, ir.PointerType)
         and ptr_1.type_annotation.element_type == ir.PrimType("float32")
@@ -66,7 +67,7 @@ def test_tir_func_name():
         B = T.match_buffer(b, [128, 128])
         C = T.match_buffer(c, [128, 128])
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vj, vk]
 
@@ -82,7 +83,7 @@ def test_tir_func_private_attrs():
         B = T.match_buffer(b, [128, 128])
         C = T.match_buffer(c, [128, 128])
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vj, vk]
 
@@ -99,7 +100,7 @@ def test_tir_func_private_manual_global_symbol_fail():
             B = T.match_buffer(b, [128, 128])
             C = T.match_buffer(c, [128, 128])
             for i, j, k in T.grid(128, 128, 128):
-                with T.block("update"):
+                with T.sblock("update"):
                     vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                     C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vj, vk]
 
@@ -153,7 +154,7 @@ def test_tir_macro_signature():
         B = T.match_buffer(b, [128, 128])
         C = T.match_buffer(c, [128, 128])
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 assign(i, j, k, t1=A, t2=B, t3=C)
 
     @T.prim_func(private=True)
@@ -162,7 +163,7 @@ def test_tir_macro_signature():
         B = T.match_buffer(b, [128, 128])
         C = T.match_buffer(c, [128, 128])
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vj, vk]
 
@@ -212,13 +213,13 @@ def test_tir_macro_non_hygienic():
 def test_tir_macro_in_class():
     class Object:
         def __init__(self, x: T.Buffer):
-            self.local_x = T.alloc_buffer(x.shape, x.dtype)
+            self.local_x = T.sblock_alloc_buffer(x.shape, x.dtype)
 
         @T.macro
         def load(self, x: T.Buffer):
             N, M = T.meta_var(self.local_x.shape)
             for i, j in T.grid(N, M):
-                with T.block("update"):
+                with T.sblock("update"):
                     vi, vj = T.axis.remap("SS", [i, j])
                     self.local_x[vi, vj] = x[vi, vj]
 
@@ -233,14 +234,14 @@ def test_tir_macro_in_class():
     @T.prim_func(private=True)
     def func_no_macro(a: T.handle):
         A = T.match_buffer(a, [128, 128])
-        local_a = T.alloc_buffer([128, 128])
+        local_a = T.sblock_alloc_buffer([128, 128])
         for i, j in T.grid(128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 vi, vj = T.axis.remap("SS", [i, j])
                 local_a[vi, vj] = A[vi, vj]
-        local_b = T.alloc_buffer([128, 128])
+        local_b = T.sblock_alloc_buffer([128, 128])
         for i, j in T.grid(128, 128):
-            with T.block("update"):
+            with T.sblock("update"):
                 vi, vj = T.axis.remap("SS", [i, j])
                 local_b[vi, vj] = local_a[vi, vj]
 
@@ -309,7 +310,7 @@ def test_tir_starred_for_loop():
         A = T.match_buffer(a, [*dims, 128], "int32")
         B = T.match_buffer(b, dims, "int32")
         for *spatial, reduction in T.grid(*A.shape):
-            with T.block("reduce"):
+            with T.sblock("reduce"):
                 with T.init():
                     B[spatial] = T.int32(0)
                 B[spatial] = B[spatial] + A[(*spatial, reduction)]
@@ -319,7 +320,7 @@ def test_tir_starred_for_loop():
         A = T.match_buffer(a, [128, 128, 128], "int32")
         B = T.match_buffer(b, [128, 128], "int32")
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("reduce"):
+            with T.sblock("reduce"):
                 with T.init():
                     B[i, j] = T.int32(0)
                 B[i, j] = B[i, j] + A[i, j, k]
@@ -497,8 +498,8 @@ def test_inferred_sinfo_with_dynamic_buffer():
         for i, j in T.grid(M, N):
             B[i * N + j] = A[i, j]
 
-    M = tvm.tir.Var("M", "int64")
-    N = tvm.tir.Var("N", "int64")
+    M = tvm.tirx.Var("M", "int64")
+    N = tvm.tirx.Var("N", "int64")
     expected = tvm.relax.FuncStructInfo(
         [
             tvm.relax.TensorStructInfo([M, N], "float32"),
@@ -517,7 +518,7 @@ def test_reinterpret_nop():
     def func(A: T.Buffer((32,), "float32"), B: T.Buffer((32,), "float32")) -> None:
         T.func_attr({"global_symbol": "main"})
         for i in T.serial(0, 32):
-            with T.block():
+            with T.sblock():
                 vi = T.axis.remap("S", [i])
                 B[vi] = T.reinterpret("float32", A[vi])
 
@@ -525,7 +526,7 @@ def test_reinterpret_nop():
     def expected(A: T.Buffer((32,), "float32"), B: T.Buffer((32,), "float32")) -> None:
         T.func_attr({"global_symbol": "main"})
         for i in T.serial(0, 32):
-            with T.block():
+            with T.sblock():
                 vi = T.axis.remap("S", [i])
                 B[vi] = A[vi]
 
@@ -580,27 +581,27 @@ def test_block_annotation_merge():
 
     @T.prim_func
     def func0():
-        with T.block():
-            T.block_attr({"key1": "block1"})
-            T.block_attr({"key2": "block2"})
+        with T.sblock():
+            T.sblock_attr({"key1": "block1"})
+            T.sblock_attr({"key2": "block2"})
             T.evaluate(0)
 
     assert _to_dict(func0.body.block.annotations) == {"key1": "block1", "key2": "block2"}
 
     @T.prim_func
     def func1():
-        with T.block():
-            T.block_attr({"key": {"key1": "block1"}})
-            T.block_attr({"key": {"key2": "block2"}})
+        with T.sblock():
+            T.sblock_attr({"key": {"key1": "block1"}})
+            T.sblock_attr({"key": {"key2": "block2"}})
             T.evaluate(0)
 
     assert _to_dict(func1.body.block.annotations) == {"key": {"key1": "block1", "key2": "block2"}}
 
     @T.prim_func
     def func2():
-        with T.block():
-            T.block_attr({"key1": "block1"})
-            T.block_attr({"key1": "block1"})
+        with T.sblock():
+            T.sblock_attr({"key1": "block1"})
+            T.sblock_attr({"key1": "block1"})
             T.evaluate(0)
 
     assert _to_dict(func2.body.block.annotations) == {"key1": "block1"}
@@ -609,28 +610,28 @@ def test_block_annotation_merge():
 
         @T.prim_func
         def func3():
-            with T.block():
-                T.block_attr({"key1": "block1"})
-                T.block_attr({"key1": "block2"})
+            with T.sblock():
+                T.sblock_attr({"key1": "block1"})
+                T.sblock_attr({"key1": "block2"})
                 T.evaluate(0)
 
 
 def test_alloc_inside_block():
     @T.prim_func(private=True)
     def func() -> None:
-        with T.block():
-            A = T.alloc_buffer([10], "float32")
+        with T.sblock():
+            A = T.sblock_alloc_buffer([10], "float32")
             for i in T.serial(0, 10):
-                B = T.alloc_buffer([10], "float32")
+                B = T.sblock_alloc_buffer([10], "float32")
                 for j in T.serial(0, 10):
                     B[j] = T.float32(j)
                     A[i] += B[j]
 
     @T.prim_func(private=True)
     def expected() -> None:
-        with T.block():
-            A = T.alloc_buffer([10], "float32")
-            B = T.alloc_buffer([10], "float32")
+        with T.sblock():
+            A = T.sblock_alloc_buffer([10], "float32")
+            B = T.sblock_alloc_buffer([10], "float32")
             for i, j in T.grid(10, 10):
                 B[j] = T.float32(j)
                 A[i] += B[j]
@@ -641,7 +642,7 @@ def test_alloc_inside_block():
 def test_tir_macro_block_name_suffix():
     @T.macro
     def operation(A, idx):
-        with T.block("op"):
+        with T.sblock("op"):
             v = T.axis.remap("S", [idx])
             A[v] = A[v] * T.float32(2)
 
@@ -657,13 +658,13 @@ def test_tir_macro_block_name_suffix():
     def expected(a: T.handle) -> None:
         A = T.match_buffer(a, [10])
         for i in T.serial(0, 10):
-            with T.block("op"):
+            with T.sblock("op"):
                 v = T.axis.remap("S", [i])
                 A[v] = A[v] * T.float32(2)
-            with T.block("op_1"):
+            with T.sblock("op_1"):
                 v = T.axis.remap("S", [i])
                 A[v] = A[v] * T.float32(2)
-            with T.block("op_2"):
+            with T.sblock("op_2"):
                 v = T.axis.remap("S", [i])
                 A[v] = A[v] * T.float32(2)
 

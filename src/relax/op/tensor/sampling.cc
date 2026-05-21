@@ -37,7 +37,8 @@ TVM_FFI_STATIC_INIT_BLOCK() { MultinomialFromUniformAttrs::RegisterReflection();
 /* relax.multinomial_from_uniform */
 
 Expr multinomial_from_uniform(Expr prob, Expr uniform_sample, Expr sample_indices, DataType dtype) {
-  ObjectPtr<MultinomialFromUniformAttrs> attrs = ffi::make_object<MultinomialFromUniformAttrs>();
+  ffi::ObjectPtr<MultinomialFromUniformAttrs> attrs =
+      ffi::make_object<MultinomialFromUniformAttrs>();
   attrs->dtype = dtype;
 
   static const Op& op = Op::Get("relax.multinomial_from_uniform");
@@ -122,8 +123,8 @@ StructInfo InferStructInfoMultinomialFromUniform(const Call& call, const BlockBu
                      << n << "` and the given sample_indices tensor has batch size `"
                      << sample_indices_shape->values[0] << "`");
   }
-  if (!tir::is_one(uniform_sample_shape->values[1]) ||
-      !tir::is_one(sample_indices_shape->values[1])) {
+  if (!tirx::is_one(uniform_sample_shape->values[1]) ||
+      !tirx::is_one(sample_indices_shape->values[1])) {
     ctx->ReportFatal(Diagnostic::Error(call)
                      << "Multinomial_from_uniform op requires the input uniform_sample and "
                         "sample_indices to be 2D tensors with the second dimension being 1. "

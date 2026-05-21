@@ -18,10 +18,9 @@
 """Backend kernels for cumsum operator."""
 
 import math
-from typing import Optional
 
-from tvm.script import tir as T
-from tvm.tir import PrimFunc
+from tvm.script import tirx as T
+from tvm.tirx import PrimFunc
 
 
 def _is_power_of_two(n: int):
@@ -34,7 +33,7 @@ def gpu_2d_continuous_cumsum(
     tx_len: int = 32,
     thread_elem: int = 4,
     in_dtype: str = "int32",
-    out_dtype: Optional[str] = None,
+    out_dtype: str | None = None,
 ) -> PrimFunc:
     """Generate GPU kernel for 2D continuous cumsum, i.e. The cumsum axis is -1
 
@@ -91,9 +90,9 @@ def gpu_2d_continuous_cumsum(
     ):
         for by in T.thread_binding(batch, thread="blockIdx.y"):
             for bx in T.thread_binding(T.ceildiv(cur_len, block_elem), thread="blockIdx.x"):
-                with T.block():
-                    local_buf = T.alloc_buffer((thread_elem,), out_dtype, scope="local")
-                    shared_buf = T.alloc_buffer((block_elem,), out_dtype, scope="shared")
+                with T.sblock():
+                    local_buf = T.sblock_alloc_buffer((thread_elem,), out_dtype, scope="local")
+                    shared_buf = T.sblock_alloc_buffer((block_elem,), out_dtype, scope="shared")
                     for ty in T.thread_binding(TY, thread="threadIdx.y"):
                         for tx in T.thread_binding(TX, thread="threadIdx.x"):
                             tx_idx = bx * block_elem + ty * warp_elem + tx * thread_elem
@@ -155,13 +154,12 @@ def gpu_2d_continuous_cumsum(
 
     @T.prim_func(private=True)
     def cumsum(var_a: T.handle, var_out: T.handle):
-        T.func_attr({"tir.is_scheduled": True})  # prevent further scheduling
+        T.func_attr({"tirx.is_scheduled": True})  # prevent further scheduling
         m, n = T.int64(), T.int64()
         A = T.match_buffer(var_a, [m, n], dtype=in_dtype)
         Out = T.match_buffer(var_out, [m, n], dtype=out_dtype)
         Tmp = T.alloc_buffer([m, n], dtype=out_dtype)
-        ceil_log2 = T.Cast("int64", T.ceil(T.log2(T.Cast("float32", n))))
-        total_rounds = ceil_log2 // LOG_BLOCK_N
+        total_rounds = T.Cast("int64", T.ceil(T.log2(T.Cast("float32", n)))) // LOG_BLOCK_N
 
         block_inclusive_inside_block(
             m, n, A, Out, Tmp, src_offset=T.int64(0), tmp_offset=T.int64(0)

@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: E402
 
 """
 .. _tir-creation:
@@ -21,8 +22,8 @@
 TensorIR Creation
 -----------------
 In this section, we will introduce the methods to write a TensorIR function
-in Apache TVM Unity. This tutorial presumes familiarity with the fundamental concepts of TensorIR.
-If not already acquainted, please refer to :ref:`tir-learning` initially.
+in Apache TVM. This tutorial presumes familiarity with the fundamental concepts of TensorIR.
+If not already acquainted, please refer to :ref:`tirx-learning` initially.
 
 .. note::
 
@@ -48,14 +49,14 @@ If not already acquainted, please refer to :ref:`tir-learning` initially.
 #
 # Standard Format
 # ***************
-# Let's take an example of ``mm_relu`` from :ref:`tir-learning`. Here is the complete
+# Let's take an example of ``mm_relu`` from :ref:`tirx-learning`. Here is the complete
 # format of the ir_module and in TVMScript:
 
-
 import numpy as np
+
 import tvm
 from tvm.script import ir as I
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 
 @I.ir_module
@@ -70,7 +71,7 @@ class MyModule:
         for i in range(128):
             for j in range(128):
                 for k in range(128):
-                    with T.block("Y"):
+                    with T.sblock("Y"):
                         vi = T.axis.spatial(128, i)
                         vj = T.axis.spatial(128, j)
                         vk = T.axis.reduce(128, k)
@@ -81,7 +82,7 @@ class MyModule:
                         Y[vi, vj] = Y[vi, vj] + A[vi, vk] * B[vk, vj]
         for i in range(128):
             for j in range(128):
-                with T.block("C"):
+                with T.sblock("C"):
                     vi = T.axis.spatial(128, i)
                     vj = T.axis.spatial(128, j)
                     T.reads(Y[vi, vj])
@@ -111,13 +112,13 @@ class ConciseModule:
     ):
         Y = T.alloc_buffer((128, 128), dtype="float32")
         for i, j, k in T.grid(128, 128, 128):
-            with T.block("Y"):
+            with T.sblock("Y"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 with T.init():
                     Y[vi, vj] = T.float32(0)
                 Y[vi, vj] = Y[vi, vj] + A[vi, vk] * B[vk, vj]
         for i, j in T.grid(128, 128):
-            with T.block("C"):
+            with T.sblock("C"):
                 vi, vj = T.axis.remap("SS", [i, j])
                 C[vi, vj] = T.max(Y[vi, vj], T.float32(0))
 
@@ -150,13 +151,13 @@ class ConciseModuleFromPython:
     ):
         Y = T.alloc_buffer((M, N), dtype)
         for i, j, k in T.grid(M, N, K):
-            with T.block("Y"):
+            with T.sblock("Y"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 with T.init():
                     Y[vi, vj] = T.cast(T.float32(0), dtype)
                 Y[vi, vj] = Y[vi, vj] + A[vi, vk] * B[vk, vj]
         for i, j in T.grid(M, N):
-            with T.block("C"):
+            with T.sblock("C"):
                 vi, vj = T.axis.remap("SS", [i, j])
                 C[vi, vj] = T.max(Y[vi, vj], T.cast(T.float32(0), dtype))
 
@@ -188,13 +189,13 @@ class DynamicShapeModule:
         C = T.match_buffer(c, [M, N], dtype)
         Y = T.alloc_buffer((M, N), dtype)
         for i, j, k in T.grid(M, N, K):
-            with T.block("Y"):
+            with T.sblock("Y"):
                 vi, vj, vk = T.axis.remap("SSR", [i, j, k])
                 with T.init():
                     Y[vi, vj] = T.cast(T.float32(0), dtype)
                 Y[vi, vj] = Y[vi, vj] + A[vi, vk] * B[vk, vj]
         for i, j in T.grid(M, N):
-            with T.block("C"):
+            with T.sblock("C"):
                 vi, vj = T.axis.remap("SS", [i, j])
                 C[vi, vj] = T.max(Y[vi, vj], T.cast(T.float32(0), dtype))
 
@@ -232,7 +233,7 @@ print(evaluate_dynamic_shape(dyn_shape_lib, m=64, n=64, k=128))
 #   Tensor Expression comprises two components within the TVM stack: the expression and the
 #   schedule. The expression is the domain-specific language embodying the computation pattern,
 #   precisely what we're addressing in this section. Conversely, the TE schedule is the legacy
-#   scheduling method, has been superseded by the TensorIR schedule in the TVM Unity stack.
+#   scheduling method, has been superseded by the TensorIR schedule in the current TVM stack.
 #
 # Create Static-Shape Functions
 # *****************************

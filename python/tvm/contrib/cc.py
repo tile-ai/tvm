@@ -15,13 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 """Util to invoke C/C++ compilers in the system."""
+
 import os
 import shutil
 import subprocess
 
 # pylint: disable=invalid-name
 import sys
-from typing import Dict
 
 from ..base import py_str
 from . import tar as _tar
@@ -179,7 +179,7 @@ def create_executable(output, objects, options=None, cc=None, cwd=None, ccache_e
         raise ValueError("Unsupported platform")
 
 
-def get_global_symbol_section_map(path, *, nm=None) -> Dict[str, str]:
+def get_global_symbol_section_map(path, *, nm=None) -> dict[str, str]:
     """Get global symbols from a library via nm -g
 
     Parameters

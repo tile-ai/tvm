@@ -22,11 +22,12 @@
  * \brief Modular set analysis
  */
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/builtin.h>
-#include <tvm/tir/expr_functor.h>
-#include <tvm/tir/op.h>
+#include <tvm/tirx/builtin.h>
+#include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op.h>
 
 #include <limits>
 #include <unordered_map>
@@ -37,7 +38,7 @@
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 TVM_FFI_STATIC_INIT_BLOCK() { ModularSetNode::RegisterReflection(); }
 
@@ -49,12 +50,8 @@ ModularSet::ModularSet(int64_t coeff, int64_t base) {
   data_ = std::move(node);
 }
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<ModularSetNode>([](const ObjectRef& node, ReprPrinter* p) {
-      auto* op = static_cast<const ModularSetNode*>(node.get());
-      p->stream << "ModularSet("
-                << "coeff=" << op->coeff << ", base=" << op->base << ')';
-    });
+// Pattern A (RM): auto-default repr from reflection produces
+// "arith.ModularSet(coeff=..., base=...)"
 
 ModularSet MakeModularSet(int64_t coeff, int64_t base) { return ModularSet(coeff, base); }
 
@@ -110,7 +107,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
     if (!allow_override) {
       auto it = var_map_.find(var);
       if (it != var_map_.end()) {
-        ICHECK(it->second == info)
+        TVM_FFI_ICHECK(it->second == info)
             << "Trying to update var \'" << var << "\'"
             << " with a different const bound: "
             << "original=" << ModularSet(it->second.coeff, it->second.base) << ", new=" << info;
@@ -137,7 +134,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
   }
 
   // Override visitor behaviors
-  Entry VisitExprDefault_(const Object* op) final { return Everything(); }
+  Entry VisitExprDefault_(const ffi::Object* op) final { return Everything(); }
 
   Entry VisitExpr_(const LetNode* op) final {
     auto it = var_map_.find(op->var);
@@ -186,7 +183,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
 
   Entry DivByConst(const PrimExpr& lhs, int64_t val, bool round_down) {
     Entry a = VisitExpr(lhs);
-    ICHECK_NE(val, 0);
+    TVM_FFI_ICHECK_NE(val, 0);
     if (a.coeff % val == 0) {
       if (a.base == 0) {
         // a c x  / c -> a x
@@ -237,7 +234,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
 
   Entry ModByConst(const PrimExpr& lhs, int64_t val, bool round_down) {
     Entry a = VisitExpr(lhs);
-    ICHECK_NE(val, 0);
+    TVM_FFI_ICHECK_NE(val, 0);
     int64_t coeff = ZeroAwareGCD(a.coeff, val);
     if (a.base % coeff == 0 ||
         (a.base > 0 && (round_down || parent_->CanProveGreaterEqual(lhs, 0)))) {
@@ -265,9 +262,9 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
   Entry VisitExpr_(const CallNode* op) final {
     // only special handle >> which can be
     // used for index calculation.
-    if (op->op.same_as(tir::builtin::shift_right())) {
+    if (op->op.same_as(tirx::builtin::shift_right())) {
       return VisitRightShift(op);
-    } else if (op->op.same_as(tir::builtin::bitwise_and())) {
+    } else if (op->op.same_as(tirx::builtin::bitwise_and())) {
       return VisitBitwiseAnd(op);
     } else {
       return Everything();

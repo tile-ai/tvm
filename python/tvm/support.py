@@ -15,44 +15,46 @@
 # specific language governing permissions and limitations
 # under the License.
 """Support infra of TVM."""
+
 import json
-import textwrap
-import ctypes
 import os
 import sys
+import textwrap
+
+import tvm_ffi
 
 import tvm
-import tvm_ffi
-from .runtime.module import Module
+
 from . import get_global_func
 
 tvm_ffi.init_ffi_api("support", __name__)
 
 
-def libinfo():
-    """Returns a dictionary containing compile-time info, including cmake flags and git commit hash
+def detect_active_modules() -> dict:
+    """Detect device-runtime modules linked into the current libtvm
+    by querying the FFI global function registry for
+    ``ffi.Module.create.<kind>`` registrations.
+
+    Probes a minimal set of key device runtimes (cuda, vulkan, opencl);
+    expand the list when a new caller needs it.
 
     Returns
     -------
-    info: Dict[str, str]
-        The dictionary of compile-time info.
+    active : dict[str, bool]
+        Mapping from runtime kind to whether it is registered in this build.
     """
-    get_lib_info_func = get_global_func("support.GetLibInfo", allow_missing=True)
-    if get_lib_info_func is not None:
-        lib_info = get_lib_info_func()
-        if lib_info is None:
-            return {}
-    else:
-        return {}
-    return dict(lib_info.items())
+    # Registry: "ffi.Module.create.<kind>" — per-backend device-module factory.
+    # Grep hint: grep -rn 'ffi.Module.create.' src/ python/
+    keys = ["cuda", "vulkan", "opencl"]
+    return {
+        k: get_global_func(f"ffi.Module.create.{k}", allow_missing=True) is not None for k in keys
+    }
 
 
 def describe():
     """
     Print out information about TVM and the current Python environment
     """
-    info = list((k, v) for k, v in libinfo().items())
-    info = dict(sorted(info, key=lambda x: x[0]))
     print("Python Environment")
     sys_version = sys.version.replace("\n", " ")
     uname = os.uname()
@@ -63,27 +65,5 @@ def describe():
         f"os.uname()     = {uname}",
     ]
     print(textwrap.indent("\n".join(lines), prefix="  "))
-    print("CMake Options:")
-    print(textwrap.indent(json.dumps(info, indent=2), prefix="  "))
-
-
-class FrontendTestModule(Module):
-    """A tvm.runtime.Module whose member functions are PackedFunc."""
-
-    def __init__(self, entry_name=None):
-        underlying_mod = get_global_func("testing.FrontendTestModule")()
-        handle = underlying_mod.handle
-
-        # Set handle to NULL to avoid cleanup in c++ runtime, transferring ownership.
-        # Both cython and ctypes FFI use c_void_p, so this is safe to assign here.
-        underlying_mod.handle = ctypes.c_void_p(0)
-
-        super(FrontendTestModule, self).__init__(handle)
-        if entry_name is not None:
-            self.entry_name = entry_name
-
-    def add_function(self, name, func):
-        self.get_function("__add_function")(name, func)
-
-    def __setitem__(self, key, value):
-        self.add_function(key, value)
+    print("Active Device Runtimes:")
+    print(textwrap.indent(json.dumps(detect_active_modules(), indent=2), prefix="  "))

@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=missing-docstring
+# ruff: noqa: F401
 import subprocess
 import tempfile
 from pathlib import Path
@@ -79,7 +80,7 @@ def _check_ir_equality(mod):
     # pylint: disable=import-outside-toplevel
     from tvm.script import ir as I
     from tvm.script import relax as R
-    from tvm.script import tir as T
+    from tvm.script import tirx as T
 
     # pylint: enable=import-outside-toplevel
 
@@ -128,9 +129,8 @@ def _compile_cc(src: Path, dst: Path):
     for include_path in find_include_path():
         cmd += ["-I", include_path]
     cmd += [
-        "-DDMLC_USE_FOPEN64=0",
-        "-DDMLC_USE_LOGGING_LIBRARY=<tvm/runtime/logging.h>",
         "-c",
+        "-std=c++17",
         "-fPIC",
         "-o",
         str(dst),

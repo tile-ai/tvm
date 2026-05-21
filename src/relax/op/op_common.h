@@ -26,8 +26,9 @@
 #define TVM_RELAX_OP_OP_COMMON_H_
 
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/relax/op_attr_types.h>
-#include <tvm/tir/data_layout.h>
+#include <tvm/s_tir/data_layout.h>
 
 #include <optional>
 #include <tuple>
@@ -146,7 +147,7 @@ std::tuple<ArgTypes...> GetArgStructInfo(const Call& call, const BlockBuilder& c
   // Unfortunately, because the `.add_argument()` calls in
   // TVM_REGISTER_OP occur during initialization of globals and are
   // not available at compile-time, this cannot be a static_assert.
-  ICHECK_EQ(n_input, sizeof...(ArgTypes))
+  TVM_FFI_ICHECK_EQ(n_input, sizeof...(ArgTypes))
       << "Internal error: " << op << " op defines " << n_input
       << " arguments in its TVM_REGISTER_OP() call, "
       << "but GetArgStructInfo was given " << sizeof...(ArgTypes) << " template arguments.";
@@ -211,7 +212,17 @@ inline StructInfo InferStructInfoUnary(const Call& call, const BlockBuilder& ctx
   }
   auto output_sinfo = ffi::make_object<TensorStructInfoNode>(*input_sinfo.get());
   output_sinfo->dtype = f_compute_out_dtype(input_sinfo);
-  return TensorStructInfo(output_sinfo);
+  if (call->sinfo_args.size() > 0) {
+    auto defined_sinfo = call->sinfo_args[0].as<TensorStructInfoNode>();
+    TVM_FFI_ICHECK(defined_sinfo);
+    auto shape = output_sinfo->GetShape();
+    TVM_FFI_ICHECK(shape.defined());
+    TVM_FFI_ICHECK(defined_sinfo->vdevice.has_value());
+    return TensorStructInfo(ShapeExpr(shape.value()), output_sinfo->dtype,
+                            defined_sinfo->vdevice.value());
+  } else {
+    return TensorStructInfo(output_sinfo);
+  }
 }
 
 /*!
@@ -276,10 +287,9 @@ inline std::optional<DataType> GetElementDType(const StructInfo& sinfo) {
     return tensor->dtype;
   } else {
     return std::nullopt;
-    LOG(FATAL) << "TypeError: "
-               << "Only PrimStructInfo and TensorStructInfo "
-               << "have an associated data type.  "
-               << "Cannot determine element type of " << sinfo;
+    TVM_FFI_THROW(TypeError) << "Only PrimStructInfo and TensorStructInfo "
+                             << "have an associated data type.  "
+                             << "Cannot determine element type of " << sinfo;
   }
 }
 
@@ -297,8 +307,7 @@ inline DataType InferBinaryArithOpOutDtype(const Call& call, const BlockBuilder&
                                            const StructInfo& rhs_sinfo) {
   auto opt_lhs_dtype = GetElementDType(lhs_sinfo);
   if (!opt_lhs_dtype) {
-    ctx->ReportFatal(Diagnostic::Error(call)
-                     << "TypeError: "
+    ctx->ReportFatal(Diagnostic::Error("TypeError", call)
                      << "Binary operators must have the same datatype for both operands.  "
                      << "However, " << call << " has argument " << call->args[0]
                      << " on the LHS, with struct info " << lhs_sinfo << ".   This is of type "
@@ -308,8 +317,7 @@ inline DataType InferBinaryArithOpOutDtype(const Call& call, const BlockBuilder&
 
   auto opt_rhs_dtype = GetElementDType(rhs_sinfo);
   if (!opt_rhs_dtype) {
-    ctx->ReportFatal(Diagnostic::Error(call)
-                     << "TypeError: "
+    ctx->ReportFatal(Diagnostic::Error("TypeError", call)
                      << "Binary operators must have the same datatype for both operands.  "
                      << "However, " << call << " has argument " << call->args[1]
                      << " on the RHS, with struct info " << rhs_sinfo << ".   This is of type "
@@ -320,8 +328,7 @@ inline DataType InferBinaryArithOpOutDtype(const Call& call, const BlockBuilder&
   if (lhs_dtype.is_void() || rhs_dtype.is_void()) {
     return DataType::Void();
   } else if (lhs_dtype != rhs_dtype && !lhs_dtype.is_bool() && !rhs_dtype.is_bool()) {
-    ctx->ReportFatal(Diagnostic::Error(call)
-                     << "TypeError: "
+    ctx->ReportFatal(Diagnostic::Error("TypeError", call)
                      << "Binary operators must have the same datatype for both operands.  "
                      << "However, " << call << " uses datatype " << lhs_dtype
                      << " on the LHS (StructInfo of " << lhs_sinfo << "), and datatype "
@@ -371,8 +378,7 @@ inline ffi::Optional<VDevice> InferBinaryArithOpOutVDevice(const Call& call,
   }
 
   if (lhs_vdevice.value() != rhs_vdevice.value()) {
-    ctx->ReportFatal(Diagnostic::Error(call)
-                     << "TypeErorr: "
+    ctx->ReportFatal(Diagnostic::Error("TypeError", call)
                      << "Binary operators with Tensor arguments "
                      << "must have the same VDevice for both operands.  "
                      << "However, " << call << " has a LHS on VDevice " << lhs_vdevice
@@ -455,15 +461,16 @@ inline ffi::Array<IntImm> ConvertIntImmToInt64(const ffi::Array<IntImm>& int_imm
  * \return The completed padding.
  * \throws Throws error if the input padding length is neither 1 or 2.
  */
-inline ffi::Array<IntImm> GetCompletePadding1D(ffi::Array<IntImm> padding) {
+inline ffi::Array<int64_t> GetCompletePadding1D(ffi::Array<int64_t> padding) {
   if (padding.size() == 1) {
     return {padding[0], padding[0]};
   } else if (padding.size() == 2) {
     return padding;
   }
-  LOG(FATAL) << "The input padding length is expected to be either 1 or 2. However, the given "
-                "padding is "
-             << padding;
+  TVM_FFI_THROW(InternalError)
+      << "The input padding length is expected to be either 1 or 2. However, the given "
+         "padding is "
+      << padding;
   throw;
 }
 
@@ -476,7 +483,7 @@ inline ffi::Array<IntImm> GetCompletePadding1D(ffi::Array<IntImm> padding) {
  * \return The completed padding.
  * \throws Throws error if the input padding length is neither 1, 2 or 4.
  */
-inline ffi::Array<IntImm> GetCompletePadding2D(ffi::Array<IntImm> padding) {
+inline ffi::Array<int64_t> GetCompletePadding2D(ffi::Array<int64_t> padding) {
   if (padding.size() == 1) {
     return {padding[0], padding[0], padding[0], padding[0]};
   } else if (padding.size() == 2) {
@@ -484,9 +491,10 @@ inline ffi::Array<IntImm> GetCompletePadding2D(ffi::Array<IntImm> padding) {
   } else if (padding.size() == 4) {
     return padding;
   }
-  LOG(FATAL) << "The input padding length is expected to be either 1, 2 or 4. However, the given "
-                "padding is "
-             << padding;
+  TVM_FFI_THROW(InternalError)
+      << "The input padding length is expected to be either 1, 2 or 4. However, the given "
+         "padding is "
+      << padding;
   throw;
 }
 
@@ -501,7 +509,7 @@ inline ffi::Array<IntImm> GetCompletePadding2D(ffi::Array<IntImm> padding) {
  * \return The completed padding.
  * \throws Throws error if the input padding length is neither 1, 3 or 6.
  */
-inline ffi::Array<IntImm> GetCompletePadding3D(ffi::Array<IntImm> padding) {
+inline ffi::Array<int64_t> GetCompletePadding3D(ffi::Array<int64_t> padding) {
   if (padding.size() == 1) {
     return {padding[0], padding[0], padding[0], padding[0], padding[0], padding[0]};
   } else if (padding.size() == 3) {
@@ -509,29 +517,30 @@ inline ffi::Array<IntImm> GetCompletePadding3D(ffi::Array<IntImm> padding) {
   } else if (padding.size() == 6) {
     return padding;
   }
-  LOG(FATAL) << "The input padding length is expected to be either 1, 3 or 6. However, the given "
-                "padding is "
-             << padding;
+  TVM_FFI_THROW(InternalError)
+      << "The input padding length is expected to be either 1, 3 or 6. However, the given "
+         "padding is "
+      << padding;
   throw;
 }
 
 /*!
  * \brief Check if the given tensor layout can be converted to the given target layout.
- * If convertible, return the tensor layout and the bijective conversion in tir::Layout and
- * tir::BijectiveLayout accordingly.
+ * If convertible, return the tensor layout and the bijective conversion in tirx::Layout and
+ * tirx::BijectiveLayout accordingly.
  * \param call The context Call to the operator.
  * \param ctx The error reporting context.
  * \param tensor_layout The tensor layout to be checked
  * \param tgt_layout The target layout to be matched
  * \param tensor_name The name of the input tensor
- * \return The tensor layout and the bijective conversion in tir::Layout and tir::BijectiveLayout
+ * \return The tensor layout and the bijective conversion in tirx::Layout and tirx::BijectiveLayout
  * accordingly.
  */
-inline std::pair<tir::Layout, tir::BijectiveLayout> CheckTensorLayout(
+inline std::pair<tirx::Layout, tirx::BijectiveLayout> CheckTensorLayout(
     const Call& call, const BlockBuilder& ctx, const ffi::String& tensor_layout,
     const ffi::String& tgt_layout, const ffi::String& tensor_name) {
-  tir::Layout _tensor_layout(tensor_layout, DataType::Int(64));
-  tir::BijectiveLayout tensor2tgt(_tensor_layout, tir::Layout(tgt_layout, DataType::Int(64)));
+  tirx::Layout _tensor_layout(tensor_layout, DataType::Int(64));
+  tirx::BijectiveLayout tensor2tgt(_tensor_layout, tirx::Layout(tgt_layout, DataType::Int(64)));
   if (!tensor2tgt.defined()) {
     ctx->ReportFatal(Diagnostic::Error(call) << call->op << " requires the given " << tensor_name
                                              << " layout to be convertible from " << tgt_layout
@@ -553,7 +562,7 @@ inline std::pair<tir::Layout, tir::BijectiveLayout> CheckTensorLayout(
 inline ffi::Optional<ShapeExpr> CheckNdimPerLayoutAndGetShape(const Call& call,
                                                               const BlockBuilder& ctx,
                                                               const TensorStructInfo& sinfo,
-                                                              const tir::Layout& layout) {
+                                                              const tirx::Layout& layout) {
   if (!sinfo->IsUnknownNdim() && sinfo->ndim != static_cast<int>(layout.ndim())) {
     ctx->ReportFatal(Diagnostic::Error(call)
                      << "In " << call->op << ", layout " << layout << " requires the input to be "
@@ -568,7 +577,8 @@ inline ffi::Optional<ShapeExpr> CheckNdimPerLayoutAndGetShape(const Call& call,
 
 Expr MakeVMAllocStorage(Expr size, PrimValue runtime_device_index, DataTypeImm dtype,
                         StringImm storage_scope = StringImm("global"));
-Expr MakeVMAllocTensor(Expr storage, PrimValue offset, Expr shape, DataTypeImm dtype);
+Expr MakeVMAllocTensor(Expr storage, PrimValue offset, Expr shape, DataTypeImm dtype,
+                       PrimValue runtime_device_index);
 
 Expr MakeAllocTensor(Expr shape, DataTypeImm dtype, PrimValue runtime_device_index,
                      StringImm storage_scope = StringImm("global"));

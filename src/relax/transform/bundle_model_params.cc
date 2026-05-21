@@ -22,12 +22,13 @@
  * \brief Lift local functions into global functions.
  */
 
+#include <tvm/ffi/cast.h>
+#include <tvm/ffi/error.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/transform.h>
-#include <tvm/runtime/logging.h>
 
 #include "utils.h"
 
@@ -45,8 +46,8 @@ class ModelParamBundler : public ExprMutator {
     if (!opt_num_input) return func;
     auto signed_num_input = opt_num_input.value()->value;
 
-    ICHECK_GE(signed_num_input, 0);
-    ICHECK_LE(signed_num_input, func->params.size())
+    TVM_FFI_ICHECK_GE(signed_num_input, 0);
+    TVM_FFI_ICHECK_LE(signed_num_input, func->params.size())
         << "Function was declared to have " << signed_num_input << " runtime inputs, "
         << "but only has " << func->params.size() << " parameters total.";
     size_t num_input = signed_num_input;

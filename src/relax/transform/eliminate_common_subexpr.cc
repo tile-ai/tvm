@@ -24,11 +24,15 @@
  *
  * Currently it removes common subexpressions within a Function.
  */
+#include <tvm/ffi/cast.h>
+#include <tvm/ffi/extra/structural_equal.h>
+#include <tvm/ffi/extra/structural_hash.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/transform.h>
 #include <tvm/relax/utils.h>
+#include <tvm/runtime/logging.h>
 
 #include "../../support/utils.h"
 
@@ -58,7 +62,7 @@ struct ReplacementKey {
   }
 
   friend bool operator==(const ReplacementKey& a, const ReplacementKey& b) {
-    tvm::StructuralEqual eq;
+    ffi::StructuralEqual eq;
     return eq(a.bound_value, b.bound_value) && eq(a.match_cast, b.match_cast);
   }
 };
@@ -76,7 +80,7 @@ struct ReplacementKey {
 template <>
 struct std::hash<tvm::relax::ReplacementKey> {
   std::size_t operator()(const tvm::relax::ReplacementKey& key) const {
-    tvm::StructuralHash hasher;
+    tvm::ffi::StructuralHash hasher;
     return tvm::support::HashCombine(hasher(key.bound_value), hasher(key.match_cast));
   }
 };
@@ -114,8 +118,8 @@ class CommonSubexprEliminator : public ExprMutator {
       } else if (auto match_cast = binding.as<MatchCastNode>()) {
         return MatchCast(binding->var, bound_value, match_cast->struct_info);
       } else {
-        LOG(FATAL) << "Binding must be either VarBinding or MatchCast, "
-                   << "but was " << binding->GetTypeKey();
+        TVM_FFI_THROW(InternalError) << "Binding must be either VarBinding or MatchCast, "
+                                     << "but was " << binding->GetTypeKey();
       }
     }();
 

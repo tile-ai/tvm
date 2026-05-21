@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F401
 import sys
 
 import numpy as np
@@ -25,7 +26,7 @@ from tvm import relax
 from tvm.relax.frontend import nn
 from tvm.script import ir as I
 from tvm.script import relax as R
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 try:
     import triton
@@ -63,7 +64,7 @@ def test_tir_triton_integration():
             x = T.match_buffer(x_handle, (m,), "float32")
             y = T.match_buffer(y_handle, (m,), "float32")
             output = T.match_buffer(output_handle, (m,), "float32")
-            with T.block("root"):
+            with T.sblock("root"):
                 T.reads(x[0:m], y[0:m])
                 T.writes(output[0:m])
                 BLOCK_SIZE = T.meta_var(64)
@@ -93,7 +94,7 @@ def test_tir_triton_integration():
             x = T.match_buffer(x_handle, (m,))
             y = T.match_buffer(y_handle, (m,))
             output = T.match_buffer(output_handle, (m,))
-            with T.block("root"):
+            with T.sblock("root"):
                 T.reads(x[0:m], y[0:m])
                 T.writes(output[0:m])
                 T.call_packed(

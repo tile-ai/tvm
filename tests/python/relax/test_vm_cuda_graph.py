@@ -14,16 +14,17 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
-import tvm
-import tvm.testing
-
-from tvm import relax
-from tvm.script import tir as T, relax as R, ir as I
+# ruff: noqa: E501
 
 import numpy as np
 import pytest
 
+import tvm
+import tvm.testing
+from tvm import relax
+from tvm.script import ir as I
+from tvm.script import relax as R
+from tvm.script import tirx as T
 
 # fmt: off
 
@@ -51,10 +52,10 @@ class Module:
     @T.prim_func
     def add(A: T.Buffer((16, 16), "float32"), B: T.Buffer((16, 16), "float32")):
         T.func_attr({"global_symbol": "add"})
-        with T.block("root"):
+        with T.sblock("root"):
             for i in T.thread_binding(16, thread="threadIdx.x"):
                 for j in range(16):
-                    with T.block("update"):
+                    with T.sblock("update"):
                         vi, vj = T.axis.remap("SS", [i, j])
                         B[vi, vj] = A[vi, vj] + T.float32(1)
 
@@ -155,7 +156,7 @@ def test_capture_error_is_recoverable():
         Module = tvm.ir.transform.Sequential(
             [
                 tvm.relax.transform.LegalizeOps(),
-                tvm.tir.transform.DefaultGPUSchedule(),
+                tvm.s_tir.transform.DefaultGPUSchedule(),
                 tvm.relax.transform.RemovePurityChecking(),
                 tvm.relax.transform.CallTIRRewrite(),
                 tvm.relax.transform.StaticPlanBlockMemory(),

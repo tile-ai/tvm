@@ -20,10 +20,10 @@
 /*!
  * \file Use external cblas library call.
  */
+#include <tvm/ffi/error.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/runtime/logging.h>
 
 extern "C" {
 #include <dnnl.h>
@@ -51,7 +51,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed("tvm.contrib.dnnl.matmul", [](ffi::PackedArgs args, ffi::Any* ret) {
     auto A = args[0].cast<DLTensor*>();
-    ICHECK(TypeMatch(A->dtype, kDLFloat, 32));
+    TVM_FFI_ICHECK(TypeMatch(A->dtype, kDLFloat, 32));
     CallGemm(args, ret, DNNLSgemmOp());
   });
 }

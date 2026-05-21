@@ -26,6 +26,7 @@
 
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/topi/transform.h>
 
 #include <algorithm>
@@ -45,7 +46,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 /* relax.take */
 
 Expr take(Expr x, Expr indices, ffi::Optional<int64_t> axis, ffi::String mode) {
-  ObjectPtr<TakeAttrs> attrs = ffi::make_object<TakeAttrs>();
+  ffi::ObjectPtr<TakeAttrs> attrs = ffi::make_object<TakeAttrs>();
   attrs->axis = std::move(axis);
   attrs->mode = std::move(mode);
 
@@ -84,8 +85,7 @@ StructInfo InferStructInfoTake(const Call& call, const BlockBuilder& ctx) {
   }();
 
   if (indices_sinfo->IsUnknownDtype()) {
-    // TODO(tvm-team): Do we have an equivalent of `ctx->ReportFatal` for warning?
-    LOG(WARNING) << "Data type of indice has not been specified. Assume it has an integer type.";
+    LOG(WARNING) << "Data type of indices has not been specified. Assume it has an integer type.";
   } else if (!(indices_sinfo->dtype.is_int() || indices_sinfo->dtype.is_uint())) {
     ctx->ReportFatal(Diagnostic::Error(call)
                      << "Take op requires the input indices to have integer dtype. However, the "
@@ -149,7 +149,7 @@ Expr strided_slice(Expr x, Expr axes, Expr begin, Expr end, ffi::Optional<Expr> 
       size_t length = tuple->fields.size();
       if (known_length.has_value()) {
         const auto& prev = known_length.value();
-        CHECK_EQ(length, std::get<size_t>(prev))
+        TVM_FFI_ICHECK_EQ(length, std::get<size_t>(prev))
             << "The strided_slice operator requires that "
             << "the axes, begin, end, and strides tuples are all the same length.  "
             << "However, the " << std::get<const char*>(prev) << " argument ("
@@ -165,7 +165,7 @@ Expr strided_slice(Expr x, Expr axes, Expr begin, Expr end, ffi::Optional<Expr> 
   check_tuple("end", end);
   if (strides.defined()) check_tuple("strides", strides.value());
 
-  ObjectPtr<StridedSliceAttrs> attrs = ffi::make_object<StridedSliceAttrs>();
+  ffi::ObjectPtr<StridedSliceAttrs> attrs = ffi::make_object<StridedSliceAttrs>();
   attrs->assume_inbound = assume_inbound;
 
   ffi::Array<Expr> args = {x, axes, begin, end};
@@ -216,9 +216,9 @@ ffi::Optional<ffi::Array<PrimType>> UnpackTupleOfPrimValue(ffi::Optional<StructI
   if (sinfo.as<ObjectStructInfoNode>()) return std::nullopt;
 
   auto tuple = sinfo.as<TupleStructInfoNode>();
-  CHECK(tuple) << "TypeError: "
-               << "The struct info " << sinfo << " cannot contain a tuple whose elements are "
-               << PrimType::ContainerType::_type_key;
+  TVM_FFI_CHECK(tuple, TypeError) << "The struct info " << sinfo
+                                  << " cannot contain a tuple whose elements are "
+                                  << PrimType::ContainerType::_type_key;
 
   ffi::Array<PrimType> output;
   for (size_t i = 0; i < tuple->fields.size(); i++) {
@@ -227,11 +227,10 @@ ffi::Optional<ffi::Array<PrimType>> UnpackTupleOfPrimValue(ffi::Optional<StructI
     if (field.as<ObjectStructInfoNode>()) return std::nullopt;
 
     auto prim_sinfo = field.as<PrimStructInfoNode>();
-    CHECK(prim_sinfo) << "TypeError: "
-                      << "The struct info " << sinfo
-                      << " cannot contain a tuple whose elements are "
-                      << PrimType::ContainerType::_type_key << ", because element " << i
-                      << " has struct info " << field;
+    TVM_FFI_CHECK(prim_sinfo, TypeError)
+        << "The struct info " << sinfo << " cannot contain a tuple whose elements are "
+        << PrimType::ContainerType::_type_key << ", because element " << i << " has struct info "
+        << field;
 
     if (!prim_sinfo->value.defined()) return std::nullopt;
 
@@ -276,7 +275,7 @@ ffi::Optional<ffi::Array<PrimType>> UnpackTupleOfPrimValue(ffi::Optional<Expr> e
 
 StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx) {
   size_t n_args = call->args.size();
-  CHECK(4 <= n_args && n_args <= 5)
+  TVM_FFI_ICHECK(4 <= n_args && n_args <= 5)
       << "Operator " << call->op << " accepts either three arguments (data, axes, begin, end) "
       << " or four arguments (data, axes, begin, end, strides), "
       << "but received " << n_args << " in expression " << call;
@@ -304,7 +303,8 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
     }
   }();
 
-  CHECK(IsBaseOf(relax::TensorStructInfo(DataType::Void(), kUnknownNDim), GetStructInfo(data)))
+  TVM_FFI_ICHECK(
+      IsBaseOf(relax::TensorStructInfo(DataType::Void(), kUnknownNDim), GetStructInfo(data)))
       << "Operator " << call->op << " requires the first argument to be a tensor.  "
       << "However, in expression " << call << ", the first argument " << data << " has struct info "
       << GetStructInfo(data);
@@ -327,10 +327,11 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
   auto check_tuple = [&](const char* name, Expr expr) {
     auto sinfo = GetStructInfo(expr);
 
-    CHECK(is_base_of_tuple_of_int64(sinfo)) << "Operator " << call->op << " requires the " << name
-                                            << " argument to be a tuple of int64 PrimValues.  "
-                                            << "However, in expression " << call << ", the " << name
-                                            << " argument " << expr << " has struct info " << sinfo;
+    TVM_FFI_ICHECK(is_base_of_tuple_of_int64(sinfo))
+        << "Operator " << call->op << " requires the " << name
+        << " argument to be a tuple of int64 PrimValues.  "
+        << "However, in expression " << call << ", the " << name << " argument " << expr
+        << " has struct info " << sinfo;
   };
   check_tuple("axes", call->args[1]);
   check_tuple("begin", call->args[2]);
@@ -362,7 +363,7 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
     if (!opt_begin_tuple) return std::nullopt;
     auto begin_tuple = opt_begin_tuple.value();
 
-    CHECK_EQ(axes_tuple.size(), begin_tuple.size())
+    TVM_FFI_ICHECK_EQ(axes_tuple.size(), begin_tuple.size())
         << "For operator " << call->op << ", "
         << "the number of axes provided must match the number of 'begin' indices.  "
         << "However, there are " << axes_tuple.size() << " axes specified (" << axes_tuple
@@ -372,7 +373,7 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
     if (!opt_end_tuple) return std::nullopt;
     auto end_tuple = opt_end_tuple.value();
 
-    CHECK_EQ(axes_tuple.size(), end_tuple.size())
+    TVM_FFI_ICHECK_EQ(axes_tuple.size(), end_tuple.size())
         << "For operator " << call->op << ", "
         << "the number of axes provided must match the number of 'end' indices.  "
         << "However, there are " << axes_tuple.size() << " axes specified (" << axes_tuple
@@ -388,7 +389,7 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
       strides_tuple = ffi::Array<PrimExpr>(axes_tuple.size(), IntImm(DataType::Int(64), 1));
     }
 
-    CHECK_EQ(axes_tuple.size(), strides_tuple.size())
+    TVM_FFI_ICHECK_EQ(axes_tuple.size(), strides_tuple.size())
         << "For operator " << call->op << ", "
         << "when the optional 'strides' argument is provided, "
         << "the number of axes provided must match the number of strides provided.  "
@@ -439,16 +440,17 @@ StructInfo InferStructInfoStridedSlice(const Call& call, const BlockBuilder& ctx
 InferLayoutOutput InferLayoutStridedSlice(
     const Call& call, const ffi::Map<ffi::String, ffi::Array<ffi::String>>& desired_layouts,
     const VarLayoutMap& var_layout_map) {
-  ICHECK(NoDesiredLayout(call, desired_layouts));
+  TVM_FFI_ICHECK(NoDesiredLayout(call, desired_layouts));
 
   const auto* attrs = call->attrs.as<StridedSliceAttrs>();
-  ICHECK(attrs != nullptr) << "Invalid Call";
+  TVM_FFI_ICHECK(attrs != nullptr) << "Invalid Call";
 
   const auto* tensor_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[0]);
-  CHECK(tensor_sinfo) << "Invalid Call";
-  CHECK(!tensor_sinfo->IsUnknownNdim()) << "Layout inference only supports known dimensionality, "
-                                        << "but expression " << call << " has argument "
-                                        << call->args[0] << " of unknown dimensionality.";
+  TVM_FFI_ICHECK(tensor_sinfo) << "Invalid Call";
+  TVM_FFI_ICHECK(!tensor_sinfo->IsUnknownNdim())
+      << "Layout inference only supports known dimensionality, "
+      << "but expression " << call << " has argument " << call->args[0]
+      << " of unknown dimensionality.";
   LayoutDecision existing_layout = GetLayoutDecision(var_layout_map, call->args[0]);
   // Can't handle sub indexed layouts.
   if (existing_layout->layout.ndim() != existing_layout->layout.ndim_primal()) {
@@ -456,10 +458,10 @@ InferLayoutOutput InferLayoutStridedSlice(
   }
 
   auto opt_axes_tuple = UnpackTupleOfPrimValue<Integer>(GetStructInfo(call->args[1]));
-  CHECK(opt_axes_tuple) << "Layout inference of " << call->op
-                        << " requires slices to be along static axes.  "
-                        << "However, expression " << call << " slices along non-static axes "
-                        << call->args[1];
+  TVM_FFI_ICHECK(opt_axes_tuple) << "Layout inference of " << call->op
+                                 << " requires slices to be along static axes.  "
+                                 << "However, expression " << call
+                                 << " slices along non-static axes " << call->args[1];
   ffi::Array<Integer> axes_tuple = opt_axes_tuple.value();
 
   ffi::Array<Expr> new_axes;
@@ -501,7 +503,7 @@ StructInfo InferStructInfoDynStridedSlice(const Call& call, const BlockBuilder& 
   const auto* end_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[2]);
   const auto* strides_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[3]);
 
-  ICHECK(data_sinfo);
+  TVM_FFI_ICHECK(data_sinfo);
   if (data_sinfo->IsUnknownNdim()) {
     LOG(WARNING) << "When data rank is unknown, dynamic strided slice assumes begin/end/strides "
                     "tensors are well-formed. It could produce runtime error when this assumption "
@@ -516,25 +518,26 @@ StructInfo InferStructInfoDynStridedSlice(const Call& call, const BlockBuilder& 
 
   int n_axis = data_sinfo->ndim;
   auto diag_def = [&](const TensorStructInfoNode* sinfo, ffi::String name) {
-    ICHECK(sinfo) << "Dynamic strided slice requires the input " << name
-                  << " to be have the struct info. Please try normalizing the inputs.";
-    CHECK_EQ(sinfo->ndim, 1) << "Dynamic strided slice requires " << name
-                             << " to be 1d tensor (list of values).";
+    TVM_FFI_ICHECK(sinfo) << "Dynamic strided slice requires the input " << name
+                          << " to be have the struct info. Please try normalizing the inputs.";
+    TVM_FFI_ICHECK_EQ(sinfo->ndim, 1)
+        << "Dynamic strided slice requires " << name << " to be 1d tensor (list of values).";
     const auto* shape = sinfo->shape.as<ShapeExprNode>();
-    ICHECK(shape) << "Dynamic strided slice requires the input " << name
-                  << " to have well-defined shape.";
+    TVM_FFI_ICHECK(shape) << "Dynamic strided slice requires the input " << name
+                          << " to have well-defined shape.";
     // NOTE(tvm-team): This strong restriction seems necessary for now until we have a generic
     // solution in converting 1d Tensor with unknown num_elem to ffi::Array<PrimExpr>.
     const auto* num_elem = shape->values[0].as<IntImmNode>();
-    ICHECK(num_elem) << "Dynamic strided slice requires the input " << name
-                     << " to have a known integer shape value.";
-    CHECK_EQ(num_elem->value, n_axis) << "Dynamic strided slice requires the number of indices in "
-                                      << name << " to equal the number of axes.";
+    TVM_FFI_ICHECK(num_elem) << "Dynamic strided slice requires the input " << name
+                             << " to have a known integer shape value.";
+    TVM_FFI_ICHECK_EQ(num_elem->value, n_axis)
+        << "Dynamic strided slice requires the number of indices in " << name
+        << " to equal the number of axes.";
     if (sinfo->IsUnknownDtype()) {
       LOG(WARNING) << "Dynamic strided slice assumes " << name
                    << " to be int64 when it is not specified.";
     } else {
-      CHECK(sinfo->dtype == DataType::Int(64))
+      TVM_FFI_ICHECK(sinfo->dtype == DataType::Int(64))
           << "Dynamic strided_slice expects the input " << name
           << "values to be all int64. However, " << name << " has dtype " << sinfo->dtype << ".";
     }
@@ -549,7 +552,24 @@ StructInfo InferStructInfoDynStridedSlice(const Call& call, const BlockBuilder& 
   return TensorStructInfo(data_sinfo->dtype, n_axis, data_sinfo->vdevice);
 }
 
-// TODO(tvm-team): Register FRelaxInferLayout, TMixedPrecisionPolicy
+InferLayoutOutput InferLayoutDynStridedSlice(
+    const Call& call, const ffi::Map<ffi::String, ffi::Array<ffi::String>>& desired_layouts,
+    const VarLayoutMap& var_layout_map) {
+  TVM_FFI_ICHECK(NoDesiredLayout(call, desired_layouts));
+
+  const auto* tensor_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[0]);
+  TVM_FFI_ICHECK(tensor_sinfo) << "Invalid Call";
+  TVM_FFI_ICHECK(!tensor_sinfo->IsUnknownNdim())
+      << "Layout inference only supports known dimensionality, "
+      << "but expression " << call << " has argument " << call->args[0]
+      << " of unknown dimensionality.";
+  int ndim = tensor_sinfo->ndim;
+  // Since begin/end/strides are dynamic tensors, we cannot transform
+  // them at compile time. Fall back to the initial layout.
+  LayoutDecision initial = LayoutDecision(InitialLayout(ndim));
+  return InferLayoutOutput({initial}, {initial}, Attrs());
+}
+
 TVM_REGISTER_OP("relax.dynamic_strided_slice")
     .set_num_inputs(4)
     .add_argument("x", "Tensor", "The source tensor to be sliced.")
@@ -557,7 +577,10 @@ TVM_REGISTER_OP("relax.dynamic_strided_slice")
     .add_argument("end", "Tensor", "Indices indicating end of the slice.")
     .add_argument("strides", "Tensor", "The stride values.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoDynStridedSlice)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<FRelaxInferLayout>("FRelaxInferLayout", InferLayoutDynStridedSlice)
+    .set_attr<TMixedPrecisionPolicy>("TMixedPrecisionPolicy", MixedPrecisionPolicyKind::kFollow)
+    .set_attr<Bool>("FPurity", Bool(true))
+    .set_attr<Bool>("FDataDependent", Bool(true));
 
 }  // namespace relax
 }  // namespace tvm

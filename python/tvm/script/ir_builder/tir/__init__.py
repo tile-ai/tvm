@@ -1,20 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-"""Package tvm.script.ir_builder.tir"""
-from .ir import *  # pylint: disable=wildcard-import,redefined-builtin
-from .ir import boolean as bool  # pylint: disable=redefined-builtin
-from .ir import buffer as Buffer
+"""Backward-compatibility shim: tvm.script.ir_builder.tir -> tvm.tirx.script.builder"""
+from tvm.tirx.script.builder import *  # noqa: F401,F403
+from tvm.tirx.script.builder import ir  # noqa: F401
+from tvm.tirx.script.builder import _ffi_api  # noqa: F401
+from tvm.tirx.script.builder.frame import *  # noqa: F401,F403
+from tvm.tirx.script.builder.utils import buffer_proxy, frame_scope, seq_scope  # noqa: F401

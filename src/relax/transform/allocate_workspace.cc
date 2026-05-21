@@ -23,6 +23,7 @@
  * satisfy their temporary storage requirement.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/name_supply.h>
 #include <tvm/relax/expr.h>
@@ -85,7 +86,7 @@ class ExternFunctionRewriter : ExprMutator {
         // Append the workspace argument to this call. The callee should have been updated to accept
         // a workspace as the last parameter.
         auto new_args = call_node->args;
-        ICHECK(workspace_var_param_.defined());
+        TVM_FFI_ICHECK(workspace_var_param_.defined());
         new_args.push_back(workspace_var_param_);
         return Call(new_op, new_args, call_node->attrs, call_node->sinfo_args, call_node->span);
       }
@@ -171,7 +172,7 @@ class WorkspaceProvider : ExprMutator {
     if (auto gv = new_op.as<GlobalVar>()) {
       if (new_gvars_.count(gv.value())) {
         auto new_args = call_node->args;
-        ICHECK(workspace_var_main_.defined());
+        TVM_FFI_ICHECK(workspace_var_main_.defined());
         new_args.push_back(workspace_var_main_);
         return Call(new_op, new_args, call_node->attrs, call_node->sinfo_args, call_node->span);
       }
@@ -189,7 +190,7 @@ class WorkspaceProvider : ExprMutator {
    * the new ones that are transformed to take an additional workspace parameter. This is only
    * needed since the struct info of the global variables changes between transformation. */
   std::unordered_map<const GlobalVarNode*, GlobalVar> gvar_map_;
-  std::unordered_set<GlobalVar, ObjectPtrHash, ObjectPtrEqual> new_gvars_;
+  std::unordered_set<GlobalVar, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> new_gvars_;
 };
 
 }  // namespace relax

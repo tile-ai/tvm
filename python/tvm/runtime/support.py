@@ -90,7 +90,7 @@ def derived_object(cls: Type[T]) -> Type[T]:
     -------
     .. code-block:: python
 
-        @register_object("meta_schedule.PyRunner")
+        @register_object("s_tir.meta_schedule.PyRunner")
         class _PyRunner(meta_schedule.Runner):
             def __init__(self, f_run: Callable = None):
                 self.__init_handle_by_constructor__(_ffi_api.RunnerPyRunner, f_run)
@@ -134,30 +134,30 @@ def derived_object(cls: Type[T]) -> Type[T]:
     assert isinstance(cls.__base__, type)
     if hasattr(cls, "_type") and cls._type == "TVMDerivedObject":  # type: ignore
         raise TypeError(
-            (
-                f"Inheritance from a decorated object `{cls.__name__}` is not allowed. "
-                f"Please inherit from `{cls.__name__}._cls`."
-            )
+            f"Inheritance from a decorated object `{cls.__name__}` is not allowed. "
+            f"Please inherit from `{cls.__name__}._cls`."
         )
-    assert hasattr(
-        cls, "_tvm_metadata"
-    ), "Please use the user-facing method overriding class, i.e., PyRunner."
+    assert hasattr(cls, "_tvm_metadata"), (
+        "Please use the user-facing method overriding class, i.e., PyRunner."
+    )
 
     base = cls.__base__
     metadata = getattr(base, "_tvm_metadata")
     fields = metadata.get("fields", [])
     methods = metadata.get("methods", [])
+
     base_cls = metadata["cls"]
-    derived_slots = (
-        ("_inst",)
-        if hasattr(base_cls, "__weakref__") or getattr(base_cls, "__weakrefoffset__", 0)
-        else ("_inst", "__weakref__")
-    )
+    slots = []
+    if getattr(base_cls, "__dictoffset__", 0) == 0:
+        slots.append("__dict__")
+    if getattr(base_cls, "__weakrefoffset__", 0) == 0:
+        slots.append("__weakref__")
 
     class TVMDerivedObject(base_cls):  # type: ignore
         """The derived object to avoid cyclic dependency."""
 
-        __slots__ = derived_slots
+        __slots__ = tuple(slots)
+
         _cls = cls
         _type = "TVMDerivedObject"
 
@@ -184,7 +184,7 @@ def derived_object(cls: Type[T]) -> Type[T]:
                 # return self._inst.__getattribute__(name)
                 result = self._inst.__getattribute__(name)
             except AttributeError:
-                result = super(TVMDerivedObject, self).__getattr__(name)
+                result = super().__getattr__(name)
 
             if inspect.ismethod(result):
 
@@ -201,13 +201,13 @@ def derived_object(cls: Type[T]) -> Type[T]:
             if name not in ["_inst", "key", "handle"]:
                 self._inst.__setattr__(name, value)
             else:
-                super(TVMDerivedObject, self).__setattr__(name, value)
+                super().__setattr__(name, value)
 
     functools.update_wrapper(TVMDerivedObject.__init__, cls.__init__)  # type: ignore
     TVMDerivedObject.__name__ = cls.__name__
     TVMDerivedObject.__doc__ = cls.__doc__
     TVMDerivedObject.__module__ = cls.__module__
     for key, value in cls.__dict__.items():
-        if isinstance(value, (classmethod, staticmethod)):
+        if isinstance(value, classmethod | staticmethod):
             setattr(TVMDerivedObject, key, value)
     return TVMDerivedObject

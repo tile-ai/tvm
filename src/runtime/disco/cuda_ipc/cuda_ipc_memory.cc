@@ -77,7 +77,7 @@ class CUDAIPCMemoryAllocator final : public memory::PooledAllocator {
 
   CUDAIPCMemory GetIPCMemoryFromDevicePtr(void* ptr) const {
     auto it = ipc_memory_map_.find(ptr);
-    CHECK(it != ipc_memory_map_.end())
+    TVM_FFI_ICHECK(it != ipc_memory_map_.end())
         << "The given pointer's CUDAIPCMemory object does not exist. Please use global function "
            "\"cuda_ipc.alloc_storage\" to allocate the CUDAIPCMemory object first.";
     return it->second;
@@ -101,7 +101,7 @@ class CUDAIPCMemoryAllocator final : public memory::PooledAllocator {
         dev, barrier_ptr_size, alignment, DataType::UInt(32), /*reset_memory_to_zero=*/true);
 
     // Create the CUDAIPCMemory object.
-    ObjectPtr<CUDAIPCMemoryObj> ipc_memory = ffi::make_object<CUDAIPCMemoryObj>();
+    ffi::ObjectPtr<CUDAIPCMemoryObj> ipc_memory = ffi::make_object<CUDAIPCMemoryObj>();
     nccl::CCLThreadLocalContext* nccl_ctx = nccl::CCLThreadLocalContext::Get();
     ipc_memory->remote_data = data_comm_ptrs;
     ipc_memory->barrier_in = barrier_in_comm_ptrs;
@@ -114,11 +114,11 @@ class CUDAIPCMemoryAllocator final : public memory::PooledAllocator {
   }
 
   void DeviceFreeDataSpace(Device dev, void* ptr) final {
-    ICHECK(dev.device_type == kDLCUDA);
+    TVM_FFI_ICHECK(dev.device_type == kDLCUDA);
     CUDA_CALL(cudaSetDevice(dev.device_id));
     nccl::CCLThreadLocalContext* ctx = nccl::CCLThreadLocalContext::Get();
     auto it = ipc_memory_map_.find(ptr);
-    ICHECK(it != ipc_memory_map_.end());
+    TVM_FFI_ICHECK(it != ipc_memory_map_.end());
     FreeIPCMemory(it->second->remote_data, ctx->worker->worker_id);
     FreeIPCMemory(it->second->barrier_in, ctx->worker->worker_id);
     FreeIPCMemory(it->second->barrier_out, ctx->worker->worker_id);
@@ -144,7 +144,7 @@ class CUDAIPCMemoryAllocator final : public memory::PooledAllocator {
                                                       DLDataType type_hint,
                                                       bool reset_memory_to_zero) {
     // Alloc local buffer
-    ICHECK(dev.device_type == kDLCUDA);
+    TVM_FFI_ICHECK(dev.device_type == kDLCUDA);
     void* ptr;
     CUDA_CALL(cudaSetDevice(dev.device_id));
     CUDA_CALL(cudaMalloc(&ptr, size));

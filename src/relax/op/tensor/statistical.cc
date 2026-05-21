@@ -55,7 +55,7 @@ StructInfo InferStructInfoStatistical(const Call& call, const BlockBuilder& ctx)
     out_ndim = kUnknownNDim;
   } else {
     out_ndim = data_sinfo->ndim - axes.size();
-    ICHECK_GE(out_ndim, 0);
+    TVM_FFI_ICHECK_GE(out_ndim, 0);
   }
 
   // The inference rule for reduction operator output shapes:
@@ -87,20 +87,20 @@ StructInfo InferStructInfoStatistical(const Call& call, const BlockBuilder& ctx)
       out_shape.push_back(IntImm(DataType::Int(64), /*value=*/1));
     }
   }
-  ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
+  TVM_FFI_ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
   return TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype, data_sinfo->vdevice);
 }
 
 InferLayoutOutput InferLayoutStatistical(
     const Call& call, const ffi::Map<ffi::String, ffi::Array<ffi::String>>& desired_layouts,
     const VarLayoutMap& var_layout_map) {
-  ICHECK(NoDesiredLayout(call, desired_layouts));
+  TVM_FFI_ICHECK(NoDesiredLayout(call, desired_layouts));
 
   const auto* attrs = call->attrs.as<StatisticalAttrs>();
-  ICHECK(attrs != nullptr) << "Invalid Call";
+  TVM_FFI_ICHECK(attrs != nullptr) << "Invalid Call";
   const auto* tensor_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[0]);
-  ICHECK(tensor_sinfo != nullptr) << "Invalid Call";
-  ICHECK(!tensor_sinfo->IsUnknownNdim()) << "Only support known ndim";
+  TVM_FFI_ICHECK(tensor_sinfo != nullptr) << "Invalid Call";
+  TVM_FFI_ICHECK(!tensor_sinfo->IsUnknownNdim()) << "Only support known ndim";
   int ndim = tensor_sinfo->ndim;
 
   ffi::Array<Integer> axis;
@@ -145,7 +145,7 @@ InferLayoutOutput InferLayoutStatistical(
     output_layout.push_back(output_layout_ref[i]);
   }
 
-  ObjectPtr<StatisticalAttrs> new_attrs = ffi::make_object<StatisticalAttrs>(*attrs);
+  ffi::ObjectPtr<StatisticalAttrs> new_attrs = ffi::make_object<StatisticalAttrs>(*attrs);
   new_attrs->axis = new_axis;
   return InferLayoutOutput({exisiting_layout},
                            {attrs->keepdims ? exisiting_layout : Layout(output_layout)},
@@ -178,6 +178,68 @@ StructInfo InferStructInfoScan(const Call& call, const BlockBuilder& ctx) {
   } else {
     return TensorStructInfo(out_type, data_sinfo->ndim, data_sinfo->vdevice);
   }
+}
+
+StructInfo InferStructInfoStatisticalExtension(const Call& call, const BlockBuilder& ctx) {
+  TensorStructInfo data_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
+  const auto* attrs = call->attrs.as<StatisticalAttrs>();
+
+  std::vector<int> axes;
+  if (!data_sinfo->IsUnknownNdim() && attrs->axis.defined()) {
+    axes = NormalizeAxes(call, ctx, data_sinfo->ndim, attrs->axis.value());
+  }
+
+  int out_ndim;
+  if (attrs->keepdims) {
+    out_ndim = data_sinfo->ndim;
+  } else if (!attrs->axis.defined()) {
+    out_ndim = 0;
+  } else if (data_sinfo->IsUnknownNdim()) {
+    out_ndim = kUnknownNDim;
+  } else {
+    out_ndim = data_sinfo->ndim - axes.size();
+    TVM_FFI_ICHECK_GE(out_ndim, 0);
+  }
+
+  // The inference rule for median operator output shapes:
+  // - axes is None || len(axes) > 1, keepdims is false -> return the zero-rank shape;
+  // - axes is None || len(axes) > 1, keepdims is true -> return the shape whose ndim
+  // is the same as input and every value is 1.
+  // - len(axes) == 1, keepdims is false -> the returned shape does not contain the input axis.
+  // - len(axes) == 1, keepdims is true -> the returned shape has value 1 at the positions of the
+  // input axis
+  const auto* data_shape = data_sinfo->shape.as<ShapeExprNode>();
+  if (data_shape == nullptr) {
+    if (!attrs->axis.defined() && attrs->keepdims && out_ndim != kUnknownNDim) {
+      return TensorStructInfo(
+          ShapeExpr(ffi::Array<PrimExpr>(out_ndim, IntImm(DataType::Int(64), /*value=*/1))),
+          data_sinfo->dtype, data_sinfo->vdevice);
+    }
+    if (out_ndim == 0) {
+      return TensorStructInfo(ShapeExpr(ffi::Array<PrimExpr>()), data_sinfo->dtype,
+                              data_sinfo->vdevice);
+    }
+    return TupleStructInfo({TensorStructInfo(data_sinfo->dtype, out_ndim, data_sinfo->vdevice),
+                            TensorStructInfo(DataType::Int(64), out_ndim, data_sinfo->vdevice)});
+  }
+
+  ffi::Array<PrimExpr> out_shape;
+  out_shape.reserve(out_ndim);
+  for (int i = 0; i < data_sinfo->ndim; ++i) {
+    if (attrs->axis.defined() && std::find(axes.begin(), axes.end(), i) == axes.end()) {
+      out_shape.push_back(data_shape->values[i]);
+    } else if (attrs->keepdims) {
+      out_shape.push_back(IntImm(DataType::Int(64), /*value=*/1));
+    }
+  }
+  TVM_FFI_ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
+
+  if (!attrs->axis.defined() || axes.size() > 1)
+    return TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype, data_sinfo->vdevice);
+  else
+    return TupleStructInfo(
+        {TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype, data_sinfo->vdevice),
+         TensorStructInfo(ShapeExpr(out_shape), DataType::Int(64), data_sinfo->vdevice)});
 }
 
 /* relax.cumprod */
@@ -225,6 +287,26 @@ TVM_REGISTER_OP("relax.cumsum")
     .set_num_inputs(1)
     .add_argument("data", "Tensor", "The input tensor.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoScan)
+    .set_attr<Bool>("FPurity", Bool(true));
+
+/* relax.median */
+Expr median(Expr data, ffi::Optional<ffi::Array<Integer>> axis, bool keepdims) {
+  ffi::ObjectPtr<StatisticalAttrs> attrs = ffi::make_object<StatisticalAttrs>();
+  attrs->axis = std::move(axis);
+  attrs->keepdims = keepdims;
+  static const Op& op = Op::Get("relax.median");
+  return Call(op, {std::move(data)}, Attrs{attrs}, {});
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.median", median);
+}
+
+TVM_REGISTER_OP("relax.median")
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoStatisticalExtension)
     .set_attr<Bool>("FPurity", Bool(true));
 
 RELAX_REGISTER_STATISTICAL_OP_INTERFACE(max);

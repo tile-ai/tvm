@@ -156,7 +156,7 @@ StructInfo InferStructInfoWhere(const Call& call, const BlockBuilder& ctx) {
       }
       return TensorStructInfo(output_dtype, output_ndim);
     }
-    ICHECK_EQ(static_cast<int>(broadcasted_shape.value().size()), output_ndim);
+    TVM_FFI_ICHECK_EQ(static_cast<int>(broadcasted_shape.value().size()), output_ndim);
     if (vdev.defined()) {
       return TensorStructInfo(ShapeExpr(broadcasted_shape.value()), output_dtype, vdev);
     }
@@ -206,7 +206,7 @@ StructInfo InferStructInfoArgmaxArgmin(const Call& call, const BlockBuilder& ctx
     out_ndim = kUnknownNDim;
   } else {
     out_ndim = data_sinfo->ndim - 1;
-    ICHECK_GE(out_ndim, 0);
+    TVM_FFI_ICHECK_GE(out_ndim, 0);
   }
 
   DataType out_dtype = DataType::Int(64);
@@ -243,25 +243,25 @@ StructInfo InferStructInfoArgmaxArgmin(const Call& call, const BlockBuilder& ctx
       out_shape.push_back(IntImm(out_dtype, /*value=*/1));
     }
   }
-  ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
+  TVM_FFI_ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
   return TensorStructInfo(ShapeExpr(out_shape), out_dtype, data_sinfo->vdevice);
 }
 
-#define RELAX_REGISTER_ARGMAX_ARGMIN_OP(OpName)                                    \
-  Expr OpName(Expr x, ffi::Optional<int64_t> axis, bool keepdims) {                \
-    ObjectPtr<ArgmaxArgminAttrs> attrs = ffi::make_object<ArgmaxArgminAttrs>();    \
-    attrs->axis = std::move(axis);                                                 \
-    attrs->keepdims = std::move(keepdims);                                         \
-    static const Op& op = Op::Get("relax." #OpName);                               \
-    return Call(op, {std::move(x)}, Attrs(attrs));                                 \
-  }                                                                                \
-  TVM_FFI_STATIC_INIT_BLOCK() {                                                    \
-    tvm::ffi::reflection::GlobalDef().def("relax.op." #OpName, OpName);            \
-  }                                                                                \
-  TVM_REGISTER_OP("relax." #OpName)                                                \
-      .set_num_inputs(1)                                                           \
-      .add_argument("x", "Tensor", "The input data tensor")                        \
-      .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoArgmaxArgmin) \
+#define RELAX_REGISTER_ARGMAX_ARGMIN_OP(OpName)                                      \
+  Expr OpName(Expr x, ffi::Optional<int64_t> axis, bool keepdims) {                  \
+    ffi::ObjectPtr<ArgmaxArgminAttrs> attrs = ffi::make_object<ArgmaxArgminAttrs>(); \
+    attrs->axis = std::move(axis);                                                   \
+    attrs->keepdims = std::move(keepdims);                                           \
+    static const Op& op = Op::Get("relax." #OpName);                                 \
+    return Call(op, {std::move(x)}, Attrs(attrs));                                   \
+  }                                                                                  \
+  TVM_FFI_STATIC_INIT_BLOCK() {                                                      \
+    tvm::ffi::reflection::GlobalDef().def("relax.op." #OpName, OpName);              \
+  }                                                                                  \
+  TVM_REGISTER_OP("relax." #OpName)                                                  \
+      .set_num_inputs(1)                                                             \
+      .add_argument("x", "Tensor", "The input data tensor")                          \
+      .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoArgmaxArgmin)   \
       .set_attr<Bool>("FPurity", Bool(true));
 
 RELAX_REGISTER_ARGMAX_ARGMIN_OP(argmax);

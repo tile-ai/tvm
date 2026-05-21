@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: E402
 
 """
 .. _deploy_export_and_load_executable:
@@ -60,6 +61,8 @@ except ImportError:  # pragma: no cover
 # We start with a small PyTorch MLP so the example remains lightweight. The
 # model is exported to a :py:class:`torch.export.ExportedProgram` and then
 # translated into a Relax ``IRModule``.
+
+import tvm_ffi
 
 import tvm
 from tvm import relax
@@ -173,7 +176,7 @@ if RUN_EXAMPLE:
     # TVM returns Array objects for tuple outputs, access via indexing.
     # For models imported from PyTorch, outputs are typically tuples (even for single outputs).
     # For ONNX models, outputs may be a single Tensor directly.
-    if isinstance(tvm_output, tvm.ir.Array) and len(tvm_output) > 0:
+    if isinstance(tvm_output, tvm_ffi.Array) and len(tvm_output) > 0:
         result_tensor = tvm_output[0]
     else:
         result_tensor = tvm_output
@@ -262,23 +265,25 @@ if RUN_EXAMPLE:
 #
 #    # Step 6: Extract result (output may be tuple or single Tensor)
 #    # PyTorch models typically return tuples, ONNX models may return a single Tensor
-#    if isinstance(tvm_output, tvm.ir.Array) and len(tvm_output) > 0:
-#        result_tensor = tvm_output[0]
+#    if isinstance(output, tvm_ffi.Array) and len(output) > 0:
+#        result_tensor = output[0]
 #    else:
-#        result_tensor = tvm_output
+#        result_tensor = output
 #
-#    print("Prediction shape:", result.shape)
-#    print("Predicted class:", np.argmax(result.numpy()))
+#    print("Prediction shape:", result_tensor.shape)
+#    print("Predicted class:", np.argmax(result_tensor.numpy()))
 #
 # **Running on GPU:**
 # To run on GPU instead of CPU, make the following changes:
 #
 # 1. **Compile for GPU** (earlier in the tutorial, around line 112):
+#
 #    .. code-block:: python
 #
 #       TARGET = tvm.target.Target("cuda")  # Change from "llvm" to "cuda"
 #
 # 2. **Use GPU device in the script**:
+#
 #    .. code-block:: python
 #
 #       device = tvm.cuda(0)  # Use CUDA device instead of CPU
@@ -334,7 +339,7 @@ if RUN_EXAMPLE:
 #    from tvm import relax
 #
 #    # Step 1: Cross-compile for ARM target (on local machine)
-#    TARGET = tvm.target.Target("llvm -mtriple=aarch64-linux-gnu")
+#    TARGET = tvm.target.Target({"kind": "llvm", "mtriple": "aarch64-linux-gnu"})
 #    executable = tvm.compile(built_mod, target=TARGET)
 #    executable.export_library("mlp_arm.so")
 #

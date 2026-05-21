@@ -19,24 +19,26 @@
 
 /*!
  * \file cuda_module.cc
+ * \brief CUDAModuleNode — runtime-side, plugin-only.  Reachable from C++ only
+ *        through the FFI registry keys "ffi.Module.create.cuda" and
+ *        "ffi.Module.load_from_bytes.cuda".  No exported header — codegen-side
+ *        construction goes through src/target/cuda/cuda_fallback_module.h.
  */
-#include "cuda_module.h"
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <dmlc/memory_io.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 
 #include <array>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-#include "../file_utils.h"
-#include "../meta_data.h"
+#include "../../support/bytes_io.h"
+#include "../metadata.h"
 #include "../pack_args.h"
 #include "../thread_storage_scope.h"
 #include "cuda_common.h"
@@ -53,24 +55,31 @@ inline void EnsureCurrentDeviceContext(int device_id) {
 
 }  // namespace
 
+// Maximum number of GPU supported in CUDAModule (file-local).
+static constexpr const int kMaxNumGPUs = 32;
+
 // Module to support thread-safe multi-GPU execution.
 // cuModule is a per-GPU module
 // The runtime will contain a per-device module table
 // The modules will be lazily loaded
 class CUDAModuleNode : public ffi::ModuleObj {
  public:
-  explicit CUDAModuleNode(std::string data, std::string fmt,
-                          std::unordered_map<std::string, FunctionInfo> fmap,
-                          std::string cuda_source)
-      : data_(data), fmt_(fmt), fmap_(fmap), cuda_source_(cuda_source) {
+  CUDAModuleNode(ffi::Bytes code, ffi::String fmt, ffi::Map<ffi::String, FunctionInfo> fmap,
+                 ffi::Map<ffi::String, ffi::String> source)
+      : code_(code), fmt_(fmt), fmap_(fmap), source_(source) {
     std::fill(module_.begin(), module_.end(), nullptr);
   }
   // destructor
   ~CUDAModuleNode() {
     for (size_t i = 0; i < module_.size(); ++i) {
       if (module_[i] != nullptr) {
-        CUDA_CALL(cudaSetDevice(static_cast<int>(i)));
-        CUDA_DRIVER_CALL(cuModuleUnload(module_[i]));
+        cudaError_t set_err = cudaSetDevice(static_cast<int>(i));
+        if (set_err != cudaSuccess && set_err != cudaErrorCudartUnloading) {
+          continue;
+        }
+        CUresult result = cuModuleUnload(module_[i]);
+        // Ignore errors during cleanup - context may be shutting down
+        (void)result;
       }
     }
   }
@@ -84,38 +93,42 @@ class CUDAModuleNode : public ffi::ModuleObj {
 
   ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final;
 
-  void WriteToFile(const ffi::String& file_name, const ffi::String& format) const final {
-    std::string fmt = GetFileFormat(file_name, format);
-    std::string meta_file = GetMetaFilePath(file_name);
-    if (fmt == "cu") {
-      ICHECK_NE(cuda_source_.length(), 0);
-      SaveMetaDataToFile(meta_file, fmap_);
-      SaveBinaryToFile(file_name, cuda_source_);
-    } else {
-      ICHECK_EQ(fmt, fmt_) << "Can only save to format=" << fmt_;
-      SaveMetaDataToFile(meta_file, fmap_);
-      SaveBinaryToFile(file_name, data_);
-    }
-  }
-
   ffi::Bytes SaveToBytes() const final {
+    // Format: [fmt][fmap][code].  Source map is in-memory inspection only and
+    // is NEVER serialized — it is lost on save/load round-trip (matches
+    // upstream behavior; the receiver rebuilds source from code bytes if
+    // possible).  CUDAFallbackModuleNode::SaveToBytes (in
+    // src/target/cuda/cuda_fallback_module.cc) MUST mirror this format
+    // byte-for-byte; see one-way comment there.
     std::string buffer;
-    dmlc::MemoryStringStream ms(&buffer);
-    dmlc::Stream* stream = &ms;
-    stream->Write(fmt_);
-    stream->Write(fmap_);
-    stream->Write(data_);
-    return ffi::Bytes(buffer);
+    support::BytesOutStream stream(&buffer);
+    stream.Write(fmt_);
+    stream.Write(fmap_);
+    stream.Write(code_);
+    return ffi::Bytes(std::move(buffer));
   }
 
   ffi::String InspectSource(const ffi::String& format) const final {
-    if (format == fmt_) return data_;
-    if (cuda_source_.length() != 0) {
-      return cuda_source_;
-    } else {
-      if (fmt_ == "ptx") return data_;
-      return "";
+    // For known compiled formats, return code as string when format matches.
+    if (format == fmt_) {
+      return ffi::String(code_.data(), code_.size());
     }
+    // Look up the source map for an exact match (e.g. "cuda" returns the
+    // original C++ source, populated by codegen at construction time).
+    if (auto it = source_.find(format); it != source_.end()) {
+      return (*it).second;
+    }
+    // Empty-format (`mod.get_source()`) — prefer the `cuda` source if present,
+    // else fall back to code-as-string when fmt_ is textual.
+    if (format.empty()) {
+      if (auto it = source_.find("cuda"); it != source_.end()) {
+        return (*it).second;
+      }
+      if (fmt_ == "ptx" || fmt_ == "cuda") {
+        return ffi::String(code_.data(), code_.size());
+      }
+    }
+    return ffi::String();
   }
 
   // get a CUfunction from primary context in device_id
@@ -124,7 +137,7 @@ class CUDAModuleNode : public ffi::ModuleObj {
     EnsureCurrentDeviceContext(device_id);
     // must recheck under the lock scope
     if (module_[device_id] == nullptr) {
-      CUDA_DRIVER_CALL(cuModuleLoadData(&(module_[device_id]), data_.c_str()));
+      CUDA_DRIVER_CALL(cuModuleLoadData(&(module_[device_id]), code_.data()));
       static auto nvshmem_init_hook = ffi::Function::GetGlobal("runtime.nvshmem.cumodule_init");
       if (nvshmem_init_hook.has_value()) {
         (*nvshmem_init_hook)(static_cast<void*>(module_[device_id]));
@@ -135,7 +148,8 @@ class CUDAModuleNode : public ffi::ModuleObj {
     if (result != CUDA_SUCCESS) {
       const char* msg;
       cuGetErrorName(result, &msg);
-      LOG(FATAL) << "CUDAError: cuModuleGetFunction " << func_name << " failed with error: " << msg;
+      TVM_FFI_THROW(CUDAError) << "cuModuleGetFunction " << func_name
+                               << " failed with error: " << msg;
     }
     return func;
   }
@@ -145,7 +159,7 @@ class CUDAModuleNode : public ffi::ModuleObj {
     EnsureCurrentDeviceContext(device_id);
     // must recheck under the lock scope
     if (module_[device_id] == nullptr) {
-      CUDA_DRIVER_CALL(cuModuleLoadData(&(module_[device_id]), data_.c_str()));
+      CUDA_DRIVER_CALL(cuModuleLoadData(&(module_[device_id]), code_.data()));
       static auto nvshmem_init_hook = ffi::Function::GetGlobal("runtime.nvshmem.cumodule_init");
       if (nvshmem_init_hook.has_value()) {
         (*nvshmem_init_hook)(static_cast<void*>(module_[device_id]));
@@ -153,26 +167,57 @@ class CUDAModuleNode : public ffi::ModuleObj {
     }
     CUdeviceptr global;
     size_t nbytes;
-
-    CUresult result = cuModuleGetGlobal(&global, &nbytes, module_[device_id], global_name.c_str());
-    ICHECK_EQ(nbytes, expect_nbytes);
+    CUresult result =
+        cuModuleGetGlobal(&global, &nbytes, module_[device_id], global_name.c_str());
     if (result != CUDA_SUCCESS) {
       const char* msg;
       cuGetErrorName(result, &msg);
-      LOG(FATAL) << "CUDAError: cuModuleGetGlobal " << global_name << " failed with error: " << msg;
+      TVM_FFI_THROW(CUDAError) << "cuModuleGetGlobal " << global_name
+                               << " failed with error: " << msg;
     }
+    TVM_FFI_ICHECK_EQ(nbytes, expect_nbytes);
     return global;
   }
 
+  /*!
+   * \brief JIT-compile raw CUDA C++ source to PTX/cubin/fatbin via the Python
+   *        compile callback.  Called from BOTH the
+   *        "ffi.Module.create.cuda" lambda (when the codegen hands us
+   *        fmt=="cuda") AND from LoadFromBytes (when the saved-on-disk fmt is
+   *        "cuda" — the cross-compile receiver path).
+   *
+   * \param source Raw CUDA C++ source (text).
+   * \return Compiled binary bytes.  Determination of the compiled format
+   *         (ptx vs cubin vs fatbin) is left to the caller (heuristic on
+   *         first byte: '/' → ptx-text, otherwise binary).
+   */
+  static ffi::Bytes JitCompileFromSource(const ffi::String& source) {
+    // Registry: "tvm_callback_cuda_compile" — Python-side nvcc/nvrtc wrapper.
+    // Grep hint: grep -rn 'tvm_callback_cuda_compile' src/ python/
+    auto fcompile = ffi::Function::GetGlobal("tvm_callback_cuda_compile");
+    TVM_FFI_CHECK(fcompile.has_value(), RuntimeError)
+        << "fmt=='cuda' requires tvm_callback_cuda_compile to be registered. "
+        << "Import tvm.contrib.nvcc.";
+    return (*fcompile)(source).cast<ffi::Bytes>();
+  }
+
+  /*! \brief Pick the compiled format from the JIT output's first byte. */
+  static ffi::String DetermineCompiledFormat(const ffi::Bytes& compiled) {
+    if (compiled.size() > 0 && compiled.data()[0] == '/') {
+      return ffi::String("ptx");
+    }
+    return ffi::String("cubin");
+  }
+
  private:
-  // the binary data
-  std::string data_;
-  // The format
-  std::string fmt_;
+  // The binary data (compiled PTX/cubin/fatbin, or raw CUDA source if fmt == "cuda").
+  ffi::Bytes code_;
+  // The format of code_.
+  ffi::String fmt_;
   // function information table.
-  std::unordered_map<std::string, FunctionInfo> fmap_;
-  // The cuda source.
-  std::string cuda_source_;
+  ffi::Map<ffi::String, FunctionInfo> fmap_;
+  // In-memory source map for InspectSource — never serialized.
+  ffi::Map<ffi::String, ffi::String> source_;
   // the internal modules per GPU, to be lazily initialized.
   std::array<CUmodule, kMaxNumGPUs> module_;
   // internal mutex when updating the module
@@ -183,8 +228,8 @@ class CUDAModuleNode : public ffi::ModuleObj {
 class CUDAWrappedFunc {
  public:
   // initialize the CUDA function.
-  void Init(CUDAModuleNode* m, ObjectPtr<Object> sptr, const std::string& func_name,
-            size_t num_void_args, const std::vector<std::string>& launch_param_tags) {
+  void Init(CUDAModuleNode* m, ffi::ObjectPtr<ffi::Object> sptr, const std::string& func_name,
+            size_t num_void_args, const ffi::Array<ffi::String>& launch_param_tags) {
     m_ = m;
     sptr_ = sptr;
     func_name_ = func_name;
@@ -223,8 +268,8 @@ class CUDAWrappedFunc {
         CUresult attr_set = cuFuncSetAttribute(
             fcache_[device_id], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, wl.dyn_shmem_size);
         if (attr_set != CUDA_SUCCESS) {
-          LOG(FATAL) << "Failed to set the allowed dynamic shared memory size to "
-                     << wl.dyn_shmem_size;
+          TVM_FFI_THROW(InternalError)
+              << "Failed to set the allowed dynamic shared memory size to " << wl.dyn_shmem_size;
         }
         dyn_smem_last_[device_id] = wl.dyn_shmem_size;
         dyn_smem_initialized_[device_id] = true;
@@ -233,7 +278,7 @@ class CUDAWrappedFunc {
     CUstream strm = static_cast<CUstream>(TVMFFIEnvGetStream(kDLCUDA, device_id));
     CUresult result;
 
-    ICHECK(wl.grid_dim(0) > 0 && wl.grid_dim(1) > 0 && wl.grid_dim(2) > 0)
+    TVM_FFI_ICHECK(wl.grid_dim(0) > 0 && wl.grid_dim(1) > 0 && wl.grid_dim(2) > 0)
         << "CUDALaunch Error: grid dimension must be positive, but got"
         << " grid=(" << wl.grid_dim(0) << "," << wl.grid_dim(1) << "," << wl.grid_dim(2) << ")"
         << " in kernel " << func_name_
@@ -269,7 +314,7 @@ class CUDAWrappedFunc {
         if (attr_result != CUDA_SUCCESS) {
           const char* msg;
           cuGetErrorName(attr_result, &msg);
-          LOG(FATAL) << "Failed to set cluster attribute for " << func_name_ << ": " << msg;
+          TVM_FFI_THROW(InternalError) << "Failed to set cluster attribute for " << func_name_ << ": " << msg;
         }
         cluster_attr_initialized_[device_id] = true;
       }
@@ -311,15 +356,15 @@ class CUDAWrappedFunc {
          << " grid=(" << wl.grid_dim(0) << "," << wl.grid_dim(1) << "," << wl.grid_dim(2) << "), "
          << " block=(" << wl.block_dim(0) << "," << wl.block_dim(1) << "," << wl.block_dim(2)
          << ")"
-         << " dyn_smem_bytes=" << wl.dyn_shmem_size;
-      std::string cuda = m_->InspectSource("");
+         << " dyn_smem_bytes=" << wl.dyn_shmem_size << "\n";
+      ffi::String cuda = m_->InspectSource("");
       if (cuda.length() != 0) {
         os << "// func_name=" << func_name_ << "\n"
            << "// CUDA Source\n"
            << "// -----------\n"
            << cuda;
       }
-      LOG(FATAL) << os.str();
+      TVM_FFI_THROW(InternalError) << os.str();
     }
 
     // Check for asynchronous CUDA errors that cuLaunchKernel's return value
@@ -336,7 +381,7 @@ class CUDAWrappedFunc {
         const char* err_str = cudaGetErrorString(last_err);
         // Clear the sticky error so subsequent CUDA calls are not poisoned.
         cudaGetLastError();
-        LOG(FATAL) << func_name_ << ": " << (err_name ? err_name : "unknown") << " - " << err_str;
+        TVM_FFI_THROW(InternalError) << func_name_ << ": " << (err_name ? err_name : "unknown") << " - " << err_str;
       }
     }
   }
@@ -345,7 +390,7 @@ class CUDAWrappedFunc {
   // internal module
   CUDAModuleNode* m_;
   // the resource holder
-  ObjectPtr<Object> sptr_;
+  ffi::ObjectPtr<ffi::Object> sptr_;
   // The name of the function.
   std::string func_name_;
   // Device function cache per device.
@@ -364,82 +409,70 @@ class CUDAWrappedFunc {
   bool has_programmatic_dependent_launch_;
 };
 
-class CUDAPrepGlobalBarrier {
- public:
-  CUDAPrepGlobalBarrier(CUDAModuleNode* m, ObjectPtr<Object> sptr) : m_(m), sptr_(sptr) {
-    std::fill(pcache_.begin(), pcache_.end(), 0);
-  }
 
-  void operator()(const ffi::PackedArgs& args, ffi::Any* rv) const {
-    int device_id;
-    CUDA_CALL(cudaGetDevice(&device_id));
-    EnsureCurrentDeviceContext(device_id);
-    if (pcache_[device_id] == 0) {
-      pcache_[device_id] =
-          m_->GetGlobal(device_id, runtime::symbol::tvm_global_barrier_state, sizeof(unsigned));
-    }
-    CUDA_DRIVER_CALL(cuMemsetD32(pcache_[device_id], 0, 1));
-  }
-
- private:
-  // internal module
-  CUDAModuleNode* m_;
-  // the resource holder
-  ObjectPtr<Object> sptr_;
-  // mark as mutable, to enable lazy initialization
-  mutable std::array<CUdeviceptr, kMaxNumGPUs> pcache_;
-};
 
 ffi::Optional<ffi::Function> CUDAModuleNode::GetFunction(const ffi::String& name) {
-  ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
-  ICHECK_EQ(sptr_to_self.get(), this);
-  if (name == symbol::tvm_prepare_global_barrier) {
-    return ffi::Function(CUDAPrepGlobalBarrier(this, sptr_to_self));
-  }
-  auto it = fmap_.find(name);
-  if (it == fmap_.end()) return ffi::Function();
-  const FunctionInfo& info = it->second;
+  ffi::ObjectPtr<ffi::Object> sptr_to_self = ffi::GetObjectPtr<ffi::Object>(this);
+  TVM_FFI_ICHECK_EQ(sptr_to_self.get(), this);
+  auto opt_info = fmap_.Get(name);
+  if (!opt_info.has_value()) return ffi::Function();
+  FunctionInfo info = opt_info.value();
   CUDAWrappedFunc f;
-  f.Init(this, sptr_to_self, name, info.arg_types.size(), info.launch_param_tags);
-  return PackFuncVoidAddr(f, info.arg_types, info.arg_extra_tags);
+  f.Init(this, sptr_to_self, name, info->arg_types.size(), info->launch_param_tags);
+  return PackFuncVoidAddr(f, info->arg_types, info->arg_extra_tags);
 }
 
-ffi::Module CUDAModuleCreate(std::string data, std::string fmt,
-                             std::unordered_map<std::string, FunctionInfo> fmap,
-                             std::string cuda_source) {
-  auto n = ffi::make_object<CUDAModuleNode>(data, fmt, fmap, cuda_source);
+// Construct a CUDAModuleNode from in-memory payload.  When fmt == "cuda" the
+// code is raw CUDA C++ source — JIT-compile via the Python callback, then
+// re-tag with the resulting compiled format ("ptx" / "cubin").
+static ffi::Module CUDAModuleCreateImpl(ffi::Bytes code, ffi::String fmt,
+                                        ffi::Map<ffi::String, FunctionInfo> fmap,
+                                        ffi::Map<ffi::String, ffi::String> source) {
+  if (fmt == "cuda") {
+    // Stash the CUDA source for InspectSource before we replace `code` with
+    // the JIT output.
+    if (source.find("cuda") == source.end()) {
+      source.Set("cuda", ffi::String(code.data(), code.size()));
+    }
+    ffi::Bytes compiled =
+        CUDAModuleNode::JitCompileFromSource(ffi::String(code.data(), code.size()));
+    fmt = CUDAModuleNode::DetermineCompiledFormat(compiled);
+    code = std::move(compiled);
+  }
+  auto n = ffi::make_object<CUDAModuleNode>(code, fmt, fmap, source);
   return ffi::Module(n);
 }
 
-// Load module from module.
-ffi::Module CUDAModuleLoadFile(const std::string& file_name, const ffi::String& format) {
-  std::string data;
-  std::unordered_map<std::string, FunctionInfo> fmap;
-  std::string fmt = GetFileFormat(file_name, format);
-  std::string meta_file = GetMetaFilePath(file_name);
-  LoadBinaryFromFile(file_name, &data);
-  LoadMetaDataFromFile(meta_file, &fmap);
-  return CUDAModuleCreate(data, fmt, fmap, std::string());
-}
-
-ffi::Module CUDAModuleLoadFromBytes(const ffi::Bytes& bytes) {
-  dmlc::MemoryFixedSizeStream ms(const_cast<char*>(bytes.data()), bytes.size());
-  dmlc::Stream* stream = &ms;
-  std::string data;
-  std::unordered_map<std::string, FunctionInfo> fmap;
-  std::string fmt;
-  stream->Read(&fmt);
-  stream->Read(&fmap);
-  stream->Read(&data);
-  return CUDAModuleCreate(data, fmt, fmap, std::string());
+static ffi::Module CUDAModuleLoadFromBytes(const ffi::Bytes& bytes) {
+  support::BytesInStream stream(bytes);
+  ffi::String fmt;
+  ffi::Map<ffi::String, FunctionInfo> fmap;
+  ffi::Bytes code;
+  stream.Read(&fmt);
+  TVM_FFI_ICHECK(stream.Read(&fmap));
+  stream.Read(&code);
+  // Source map is not serialized — it is lost on save/load round-trip.
+  // If the receiver wants InspectSource("cuda") to work, the saved bytes must
+  // have been written with fmt=="cuda" so the JIT path below re-stuffs the
+  // source map with the original C++ source.
+  return CUDAModuleCreateImpl(std::move(code), std::move(fmt), std::move(fmap),
+                              ffi::Map<ffi::String, ffi::String>());
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
+  // Registry: "ffi.Module.create.cuda" — codegen-time CUDA module factory.
+  // Used by src/target/cuda/cuda_fallback_module.h:CUDAModuleCreateWithFallback.
+  // Registry: "ffi.Module.load_from_bytes.cuda" — disk loader.  Only this
+  // (real) module registers a loader; the fallback module is codegen-time only.
   refl::GlobalDef()
-      .def("ffi.Module.load_from_file.cuda", CUDAModuleLoadFile)
-      .def("ffi.Module.load_from_file.ptx", CUDAModuleLoadFile)
-      .def("ffi.Module.load_from_bytes.cuda", CUDAModuleLoadFromBytes);
+      .def("ffi.Module.load_from_bytes.cuda", CUDAModuleLoadFromBytes)
+      .def("ffi.Module.create.cuda",
+           [](ffi::Bytes code, ffi::String fmt, ffi::Map<ffi::String, FunctionInfo> fmap,
+              ffi::Map<ffi::String, ffi::String> source) {
+             return CUDAModuleCreateImpl(std::move(code), std::move(fmt), std::move(fmap),
+                                         std::move(source));
+           });
 }
 }  // namespace runtime
 }  // namespace tvm

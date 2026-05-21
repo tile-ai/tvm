@@ -14,23 +14,27 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F401, F841
 """Test PopenPoolExecutor."""
-import pytest
+
 import os
-import psutil
 import time
-from tvm.contrib.popen_pool import PopenWorker, PopenPoolExecutor
+
+import psutil
+import pytest
+
+from tvm.contrib.popen_pool import PopenPoolExecutor, PopenWorker
 from tvm.testing import (
     identity_after,
     terminate_self,
-    initializer,
+)
+from tvm.testing.popen_pool import (
     after_initializer,
-    register_ffi,
-    call_py_ffi,
     call_cpp_ffi,
     call_cpp_py_ffi,
-    fast_summation,
-    slow_summation,
+    call_py_ffi,
+    initializer,
+    register_ffi,
     timeout_job,
 )
 
@@ -80,13 +84,15 @@ def test_popen_worker_recycles():
 
 
 def test_popen_pool_executor():
+    import tvm_ffi
+
     import tvm
 
     pool = PopenPoolExecutor(max_workers=2, timeout=0.01)
     value1 = pool.submit(identity_after, 1, 100)
     value2 = pool.submit(terminate_self)
     value3 = pool.submit(identity_after, 3, 0)
-    value4 = pool.submit(tvm.runtime.String, "xyz")
+    value4 = pool.submit(tvm_ffi.core.String, "xyz")
 
     with pytest.raises(TimeoutError):
         value1.result()
@@ -145,12 +151,12 @@ def test_popen_ffi():
     proc.send(call_py_ffi, initargs)
     assert proc.recv() == initargs[0]
 
-    # call cpp function via ffi
+    # call cpp function (testing.echo) via ffi
     initargs = [1]
     proc.send(call_cpp_ffi, initargs)
     assert proc.recv() == initargs[0]
 
-    # call python function from cpp function via ffi
+    # call python function from ffi registry via cross-language dispatch
     initargs = [2]
     proc.send(call_cpp_py_ffi, initargs)
     assert proc.recv() == initargs[0]

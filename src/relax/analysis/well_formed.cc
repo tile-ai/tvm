@@ -64,6 +64,7 @@
  *    17. If the kForcePure attribute is set for a function,
  *        that function's is_pure field must be true.
  */
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
@@ -71,8 +72,11 @@
 #include <tvm/relax/op_attr_types.h>
 #include <tvm/relax/struct_info_functor.h>
 #include <tvm/relax/utils.h>
-#include <tvm/tir/expr_functor.h>
+#include <tvm/runtime/logging.h>
+#include <tvm/tirx/expr_functor.h>
 
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace tvm {
@@ -84,7 +88,7 @@ namespace relax {
 /*! \brief Helper to implement well formed check.*/
 class WellFormedChecker : public relax::ExprVisitor,
                           public relax::StructInfoVisitor,
-                          public tir::ExprVisitor {
+                          public tirx::ExprVisitor {
  public:
   static bool Check(ffi::Variant<IRModule, Function> obj, bool check_struct_info) {
     WellFormedChecker well_formed_checker =
@@ -95,6 +99,7 @@ class WellFormedChecker : public relax::ExprVisitor,
         // visit relax.Function
         if (auto* n = it.second.as<FunctionNode>()) {
           Function func = ffi::GetRef<Function>(n);
+          well_formed_checker.func_name_map_[n] = it.first->name_hint;
           well_formed_checker.CheckGlobalVarAndGsymbolConsistency(it.first, func);
           well_formed_checker.VisitExpr(func);
         }
@@ -102,8 +107,8 @@ class WellFormedChecker : public relax::ExprVisitor,
     } else if (const auto* func = obj.as<FunctionNode>()) {
       well_formed_checker.VisitExpr(ffi::GetRef<Expr>(func));
     } else {
-      LOG(FATAL) << "Unreachable, "
-                 << "variant did not contain any of the allowed types";
+      TVM_FFI_THROW(InternalError) << "Unreachable, "
+                                   << "variant did not contain any of the allowed types";
     }
     return well_formed_checker.well_formed_;
   }
@@ -113,8 +118,8 @@ class WellFormedChecker : public relax::ExprVisitor,
       : mod_(std::move(mod)), check_struct_info_(check_struct_info), cur_visited_func_(nullptr) {}
 
   using relax::ExprVisitor::VisitExpr_;
-  using tir::ExprVisitor::VisitExpr;
-  using tir::ExprVisitor::VisitExpr_;
+  using tirx::ExprVisitor::VisitExpr;
+  using tirx::ExprVisitor::VisitExpr_;
 
   // Possible mode of visitor
   enum class VisitMode {
@@ -132,6 +137,15 @@ class WellFormedChecker : public relax::ExprVisitor,
   void Malformed(Diagnostic diag) {
     well_formed_ = false;
     LOG(WARNING) << "This IR is not well formed: " << diag->message;
+  }
+
+  /*! \brief Get the name of a function for use in error messages. */
+  std::string FuncName(const FunctionNode* func) const {
+    auto it = func_name_map_.find(func);
+    if (it != func_name_map_.end()) {
+      return "\"" + it->second + "\"";
+    }
+    return "(anonymous function)";
   }
 
   void CheckGlobalVarAndGsymbolConsistency(GlobalVar var, Function func) {
@@ -238,7 +252,7 @@ class WellFormedChecker : public relax::ExprVisitor,
 
     // first populate defs in params
     WithMode(VisitMode::kMatchVarDef, [&]() {
-      ICHECK(mode_ == VisitMode::kMatchVarDef);
+      TVM_FFI_ICHECK(mode_ == VisitMode::kMatchVarDef);
       for (Var param : op->params) {
         relax::StructInfoVisitor::VisitStructInfo(GetStructInfo(param));
       }
@@ -256,11 +270,12 @@ class WellFormedChecker : public relax::ExprVisitor,
     for (Var param : op->params) {
       this->VisitVarDef(param);
 
-      if (param_var_func_map_.count(param) == 1) {
-        // TODO(relax-team): Complete this error info after we integrate printer
+      auto it = param_var_func_map_.find(param);
+      if (it != param_var_func_map_.end()) {
         Malformed(Diagnostic::Error(param->span)
-                  << "Relax variable " << param
-                  << " is repeatedly used as parameters in function.");
+                  << "Relax variable " << param << " is used as a parameter in both function "
+                  << FuncName(it->second) << " and function " << FuncName(cur_visited_func_)
+                  << ".");
       }
       param_var_func_map_.insert({param, cur_visited_func_});
     }
@@ -422,7 +437,7 @@ class WellFormedChecker : public relax::ExprVisitor,
     }
 
     std::unordered_set<Var> previous_var_set = var_set_;
-    std::unordered_set<tir::Var> previous_symbolic_var_set = symbolic_var_set_;
+    std::unordered_set<tirx::Var> previous_symbolic_var_set = symbolic_var_set_;
     this->VisitSeqExpr(op->true_branch.get());
     var_set_ = previous_var_set;
     symbolic_var_set_ = previous_symbolic_var_set;
@@ -436,7 +451,7 @@ class WellFormedChecker : public relax::ExprVisitor,
   void VisitExpr_(const ShapeExprNode* op) final {
     for (PrimExpr expr : op->values) {
       // check if the symbolic vars in the expr are defined, e.g, 2 * m
-      tir::ExprVisitor::VisitExpr(expr);
+      tirx::ExprVisitor::VisitExpr(expr);
       if (!expr.dtype().is_int()) {
         Malformed(Diagnostic::Error(expr)
                   << "Shape expressions must be of integer type, but got " << expr.dtype());
@@ -469,7 +484,7 @@ class WellFormedChecker : public relax::ExprVisitor,
       is_lambda = true;
       recur_vars_.insert(binding->var);
     }
-    if (binding->value->IsInstance<tir::PrimFuncNode>()) {
+    if (binding->value->IsInstance<tirx::PrimFuncNode>()) {
       Malformed(Diagnostic::Error(binding->value) << "Inline PrimFunc is disallowed in Relax IR.");
     } else {
       this->VisitExpr(binding->value);
@@ -536,8 +551,8 @@ class WellFormedChecker : public relax::ExprVisitor,
     CheckStructInfo(var);
   }
 
-  void VisitExpr_(const tir::VarNode* op) final {
-    tir::Var var = ffi::GetRef<tir::Var>(op);
+  void VisitExpr_(const tirx::VarNode* op) final {
+    tirx::Var var = ffi::GetRef<tirx::Var>(op);
     // default mode, check defined.
     if (symbolic_var_set_.count(var) == 0) {
       this->Malformed(Diagnostic::Error(var) << "Symbolic Var " << var << " is not defined.");
@@ -551,10 +566,9 @@ class WellFormedChecker : public relax::ExprVisitor,
     // check across functions presence
     auto it = symbolic_var_func_map_.find(var);
     if (it != symbolic_var_func_map_.end() && it->second != cur_visited_func_) {
-      // TODO(relax-team): Complete this error info after we integrate printer
       Malformed(Diagnostic::Error(var->span)
-                << "Symbolic Var " << var
-                << " presents in different functions in the same Module.");
+                << "Symbolic Var " << var << " is present in both function " << FuncName(it->second)
+                << " and function " << FuncName(cur_visited_func_) << " in the same Module.");
     }
     symbolic_var_func_map_.insert({var, cur_visited_func_});
   }
@@ -562,7 +576,7 @@ class WellFormedChecker : public relax::ExprVisitor,
   void VisitStructInfo_(const FuncStructInfoNode* op) final {
     if (op->params.defined()) {
       WithMode(VisitMode::kMatchVarDef, [&]() {
-        ICHECK(mode_ == VisitMode::kMatchVarDef);
+        TVM_FFI_ICHECK(mode_ == VisitMode::kMatchVarDef);
         for (StructInfo param : op->params.value()) {
           this->VisitStructInfo(param);
         }
@@ -593,14 +607,14 @@ class WellFormedChecker : public relax::ExprVisitor,
   void VisitStructInfoExprField(const PrimExpr& expr) final {
     if (mode_ == VisitMode::kMatchVarDef) {
       // populate symbolic var in first occurrence
-      if (auto* op = expr.as<tir::VarNode>()) {
-        auto var = ffi::GetRef<tir::Var>(op);
+      if (auto* op = expr.as<tirx::VarNode>()) {
+        auto var = ffi::GetRef<tirx::Var>(op);
         if (symbolic_var_set_.count(var) == 0) {
           symbolic_var_set_.insert(var);
         }
       }
     } else {
-      tir::ExprVisitor::VisitExpr(expr);
+      tirx::ExprVisitor::VisitExpr(expr);
     }
   }
 
@@ -632,15 +646,17 @@ class WellFormedChecker : public relax::ExprVisitor,
   bool is_dataflow_;
   // Current visited function.
   const FunctionNode* cur_visited_func_;
+  // Map from function pointer to its global name (for error messages).
+  std::unordered_map<const FunctionNode*, std::string> func_name_map_;
   // Current visit mode.
   VisitMode mode_ = VisitMode::kDefault;
   // set of context variables.
   std::unordered_set<Var> var_set_;
   std::unordered_set<Var> recur_vars_;
-  std::unordered_set<DataflowVar, ObjectPtrHash, ObjectPtrEqual> dataflow_var_set_;
-  std::unordered_set<tir::Var> symbolic_var_set_;
+  std::unordered_set<DataflowVar, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> dataflow_var_set_;
+  std::unordered_set<tirx::Var> symbolic_var_set_;
   std::unordered_map<Var, const FunctionNode*> param_var_func_map_;
-  std::unordered_map<tir::Var, const FunctionNode*> symbolic_var_func_map_;
+  std::unordered_map<tirx::Var, const FunctionNode*> symbolic_var_func_map_;
 
   tvm::OpAttrMap<FNormalize> op_map_normalize_ = Op::GetAttrMap<FNormalize>("FNormalize");
   tvm::OpAttrMap<FValidate> op_map_validate_ = Op::GetAttrMap<FValidate>("FValidate");

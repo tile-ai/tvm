@@ -116,7 +116,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
               int batch_dims = args[2].cast<int>();
               *rv = take(args[0].cast<te::Tensor>(), args[1].cast<te::Tensor>(), batch_dims, mode);
             } else {
-              ICHECK_EQ(args.size(), 5) << "topi.take expects 4 or 5 arguments";
+              TVM_FFI_ICHECK_EQ(args.size(), 5) << "topi.take expects 4 or 5 arguments";
               int batch_dims = args[2].cast<int>();
               int axis = args[3].cast<int>();
               auto mode = args[4].cast<std::string>();
@@ -156,6 +156,11 @@ TVM_FFI_STATIC_INIT_BLOCK() {
                   [](ffi::PackedArgs args, ffi::Any* rv) {
                     *rv = tile(args[0].cast<te::Tensor>(), args[1].cast<ffi::Array<Integer>>());
                   })
+      .def_packed("topi.dyn_tile",
+                  [](ffi::PackedArgs args, ffi::Any* rv) {
+                    *rv = dyn_tile(args[0].cast<te::Tensor>(), args[1].cast<ffi::Array<PrimExpr>>(),
+                                   args[2].cast<int>());
+                  })
       .def_packed("topi.gather",
                   [](ffi::PackedArgs args, ffi::Any* rv) {
                     *rv = gather(args[0].cast<te::Tensor>(), args[1].cast<int>(),
@@ -192,7 +197,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
                                      args[2].cast<bool>(), args[3].cast<bool>());
                         break;
                       default:
-                        ICHECK(0) << "topi.matmul expects 2, 3 or 4 arguments";
+                        TVM_FFI_ICHECK(0) << "topi.matmul expects 2, 3 or 4 arguments";
                     }
                   })
       .def_packed("topi.tensordot",

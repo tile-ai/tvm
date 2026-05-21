@@ -1,9 +1,11 @@
 #include <tvm/arith/analyzer.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/builtin.h>
+#include <tvm/runtime/logging.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/builtin.h>
 #include "z3++.h"
 
+#include <map>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -12,17 +14,17 @@
 #include "tvm/ffi/object.h"
 #include "tvm/ffi/string.h"
 #include "tvm/ir/expr.h"
-#include "tvm/node/structural_equal.h"
-#include "tvm/node/structural_hash.h"
+#include <tvm/ffi/extra/structural_equal.h>
+#include <tvm/ffi/extra/structural_hash.h>
 #include "tvm/runtime/data_type.h"
-#include "tvm/tir/analysis.h"
-#include "tvm/tir/expr_functor.h"
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr_functor.h>
 #include "tvm/arith/analyzer.h"
-#include "tvm/tir/op_attr_types.h"
+#include <tvm/tirx/op_attr_types.h>
 
 namespace tvm::arith {
 
-using namespace tir;
+using namespace tirx;
 using namespace ffi;
 
 namespace {
@@ -264,9 +266,9 @@ public:
     // 2. Add constraint on the placeholder
     //    when min_expr >= max_expr, the range is empty, which is under undefined behavior
     //    instead of adding an unsat constraint, we just skip the range constraint to leave it a free var
-    if(tir::is_const_int(range->min) && tir::is_const_int(range->min + range->extent)) {
-      int64_t min_value = *tir::as_const_int(range->min);
-      int64_t max_value = *tir::as_const_int(range->min + range->extent);
+    if(tirx::is_const_int(range->min) && tirx::is_const_int(range->min + range->extent)) {
+      int64_t min_value = *tirx::as_const_int(range->min);
+      int64_t max_value = *tirx::as_const_int(range->min + range->extent);
       if(min_value < max_value) {
         solver.add(ctx->int_val(min_value) <= var_expr);
         solver.add(var_expr < ctx->int_val(max_value));
@@ -623,17 +625,17 @@ private:
   // Bitwise operations
   z3::expr VisitExpr_(const CallNode *op) override {
     // Check if this is a bitwise operation
-    if (op->op.same_as(tir::builtin::bitwise_and())) {
+    if (op->op.same_as(tirx::builtin::bitwise_and())) {
       return VisitBitwiseOp(z3::operator&, op);
-    } else if (op->op.same_as(tir::builtin::bitwise_or())) {
+    } else if (op->op.same_as(tirx::builtin::bitwise_or())) {
       return VisitBitwiseOp(z3::operator|, op);
-    } else if (op->op.same_as(tir::builtin::bitwise_xor())) {
+    } else if (op->op.same_as(tirx::builtin::bitwise_xor())) {
       return VisitBitwiseOp(z3::operator^, op);
-    } else if (op->op.same_as(tir::builtin::bitwise_not())) {
+    } else if (op->op.same_as(tirx::builtin::bitwise_not())) {
       return VisitBitwiseNotOp(op);
-    } else if (op->op.same_as(tir::builtin::shift_left())) {
+    } else if (op->op.same_as(tirx::builtin::shift_left())) {
       return VisitShiftOp(z3::shl, op);
-    } else if (op->op.same_as(tir::builtin::shift_right())) {
+    } else if (op->op.same_as(tirx::builtin::shift_right())) {
       return VisitShiftOp(z3::ashr, op);
     } else {
       // For other call nodes, create a free variable

@@ -23,6 +23,7 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 
+#include "../../../support/bytes_io.h"
 #include "coreml_runtime.h"
 
 namespace tvm {
@@ -60,7 +61,7 @@ void CoreMLModel::SetInput(const std::string& key, DLTensor* data_in) {
 
   MLMultiArray* dest = [[MLMultiArray alloc] initWithShape:shape dataType:dataType error:nil];
 
-  ICHECK(ffi::IsContiguous(*data_in));
+  TVM_FFI_ICHECK(ffi::IsContiguous(*data_in));
   memcpy(dest.dataPointer, data_in->data, size);
 
   NSString* nsKey = [NSString stringWithUTF8String:key.c_str()];
@@ -157,7 +158,8 @@ ffi::Optional<ffi::Function> CoreMLRuntime::GetFunction(const ffi::String& name)
 
       // Copy input tensors to corresponding data entries.
       for (auto i = 0; i < args.size() - 1; ++i) {
-        ICHECK(args[i].type_code() == kTVMDLTensorHandle || args[i].type_code() == kTVMTensorHandle)
+        TVM_FFI_ICHECK(args[i].type_code() == kTVMDLTensorHandle ||
+                       args[i].type_code() == kTVMTensorHandle)
             << "Expect Tensor or DLTensor as inputs\n";
         if (args[i].type_code() == kTVMDLTensorHandle || args[i].type_code() == kTVMTensorHandle) {
           model_->SetInput([input_names[i] UTF8String], args[i]);
@@ -199,18 +201,17 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 }
 
 ffi::Bytes CoreMLRuntime::SaveToBytes() const {
-  std::string buffer;
-  dmlc::MemoryStringStream ms(&buffer);
-  dmlc::Stream* stream = &ms;
+  std::string result;
+  support::BytesOutStream stream(&result);
   NSURL* url = model_->url_;
   NSFileWrapper* dirWrapper = [[[NSFileWrapper alloc] initWithURL:url options:0
                                                             error:nil] autorelease];
   NSData* dirData = [dirWrapper serializedRepresentation];
-  stream->Write(symbol_);
-  stream->Write((uint64_t)[dirData length]);
-  stream->Write([dirData bytes], [dirData length]);
+  stream.Write(symbol_);
+  stream.Write((uint64_t)[dirData length]);
+  stream.Write([dirData bytes], [dirData length]);
   DLOG(INFO) << "Save " << symbol_ << " (" << [dirData length] << " bytes)";
-  return ffi::Bytes(buffer);
+  return ffi::Bytes(std::move(result));
 }
 
 /*!
@@ -221,8 +222,7 @@ ffi::Bytes CoreMLRuntime::SaveToBytes() const {
  * \return The created CoreML module.
  */
 ffi::Module CoreMLRuntimeLoadFromBytes(const ffi::Bytes& bytes) {
-  dmlc::MemoryFixedSizeStream ms(const_cast<char*>(bytes.data()), bytes.size());
-  dmlc::Stream* stream = &ms;
+  support::BytesInStream stream(bytes);
 
   NSString* tempBaseDir = NSTemporaryDirectory();
   if (tempBaseDir == nil) tempBaseDir = @"/tmp";
@@ -236,11 +236,11 @@ ffi::Module CoreMLRuntimeLoadFromBytes(const ffi::Bytes& bytes) {
   NSString* tempDir = [NSString stringWithUTF8String:result];
 
   std::string symbol;
-  stream->Read(&symbol);
+  stream.Read(&symbol);
   uint64_t length;
-  stream->Read(&length);
+  stream.Read(&length);
   void* ptr = new char[length];
-  stream->Read(ptr, length);
+  stream.Read(ptr, length);
   NSData* data = [[NSData alloc] initWithBytesNoCopy:ptr length:length];
   NSFileWrapper* dirWrapper =
       [[[NSFileWrapper alloc] initWithSerializedRepresentation:data] autorelease];
@@ -248,7 +248,7 @@ ffi::Module CoreMLRuntimeLoadFromBytes(const ffi::Bytes& bytes) {
   NSString* model_path = [tempDir stringByAppendingPathComponent:dirname];
   NSURL* url = [NSURL fileURLWithPath:model_path];
   BOOL res = [dirWrapper writeToURL:url options:0 originalContentsURL:nil error:nil];
-  ICHECK(res) << "Failed to create model directory " << [model_path UTF8String];
+  TVM_FFI_ICHECK(res) << "Failed to create model directory " << [model_path UTF8String];
 
   auto exec = ffi::make_object<CoreMLRuntime>();
   exec->Init(symbol, [model_path UTF8String]);

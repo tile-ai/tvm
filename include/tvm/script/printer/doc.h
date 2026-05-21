@@ -22,7 +22,6 @@
 #include <tvm/ffi/reflection/access_path.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
-#include <tvm/node/node.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/device_api.h>
 
@@ -55,7 +54,7 @@ ffi::String DocToPythonScript(Doc doc, const PrinterConfig& cfg);
  *
  * \sa Doc
  */
-class DocNode : public Object {
+class DocNode : public ffi::Object {
  public:
   /*!
    * \brief The list of object paths of the source IR node.
@@ -64,7 +63,7 @@ class DocNode : public Object {
    * this Doc is generated, in order to position the diagnostic
    * message.
    */
-  mutable ffi::Array<ffi::reflection::AccessPath> source_paths;
+  mutable ffi::Array<AccessPath> source_paths;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
@@ -73,7 +72,7 @@ class DocNode : public Object {
 
   static constexpr bool _type_mutable = true;
 
-  TVM_FFI_DECLARE_OBJECT_INFO("script.printer.Doc", DocNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO("script.printer.Doc", DocNode, ffi::Object);
 
  public:
   virtual ~DocNode() = default;
@@ -84,13 +83,13 @@ class DocNode : public Object {
  *
  * \sa DocNode
  */
-class Doc : public ObjectRef {
+class Doc : public ffi::ObjectRef {
  protected:
   Doc() = default;
-  explicit Doc(ObjectPtr<DocNode> data) : ObjectRef(data) {}
+  explicit Doc(ffi::ObjectPtr<DocNode> data) : ffi::ObjectRef(data) {}
 
  public:
-  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(Doc, ObjectRef, DocNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(Doc, ffi::ObjectRef, DocNode);
 };
 
 class ExprDoc;
@@ -153,7 +152,9 @@ class ExprDoc : public Doc {
    */
   ExprDoc operator[](ffi::Array<Doc> indices) const;
 
-  explicit ExprDoc(ObjectPtr<ExprDocNode> data) : Doc(data) { TVM_FFI_ICHECK(data != nullptr); }
+  explicit ExprDoc(ffi::ObjectPtr<ExprDocNode> data) : Doc(data) {
+    TVM_FFI_ICHECK(data != nullptr);
+  }
 
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(ExprDoc, Doc, ExprDocNode);
 };
@@ -307,7 +308,7 @@ class LiteralDoc : public ExprDoc {
    * \param p The object path
    */
   static LiteralDoc DataType(const runtime::DataType& v, const ffi::Optional<AccessPath>& p) {
-    std::string dtype = v.is_void() ? "void" : runtime::DLDataTypeToString(v);
+    std::string dtype = v.is_void() ? "void" : ffi::DLDataTypeToString(v);
     return LiteralDoc::Str(dtype, p);
   }
   /*!

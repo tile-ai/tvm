@@ -19,6 +19,8 @@
 
 #include "op_common.h"
 
+#include <tvm/ffi/cast.h>
+
 #include <algorithm>
 
 namespace tvm {
@@ -48,10 +50,10 @@ void CheckNumArguments(const Call& call, const BlockBuilder& ctx) {
 TensorStructInfo GetInputTensorStructInfo(const Call& call, size_t i_arg, const BlockBuilder& ctx) {
   Op op = Downcast<Op>(call->op);
 
-  ICHECK_EQ(op->arguments.size(), call->args.size())
+  TVM_FFI_ICHECK_EQ(op->arguments.size(), call->args.size())
       << "Failure caught by this check "
       << "should have previously been caught by `CheckNumArguments`";
-  ICHECK_LT(i_arg, op->arguments.size());
+  TVM_FFI_ICHECK_LT(i_arg, op->arguments.size());
 
   auto arg = call->args[i_arg];
   auto sinfo = GetStructInfo(arg);
@@ -148,7 +150,7 @@ ffi::Optional<ffi::Array<PrimExpr>> InferBinaryBroadcastShape(
 
 std::vector<int> NormalizeAxes(const Call& call, const BlockBuilder& ctx, int ndim,
                                const ffi::Array<Integer>& axes) {
-  ICHECK_NE(ndim, kUnknownNDim) << "The ndim is required to be known for this function.";
+  TVM_FFI_ICHECK_NE(ndim, kUnknownNDim) << "The ndim is required to be known for this function.";
   std::vector<bool> appeared_dims_set;
   std::vector<int> axes_non_neg;
   appeared_dims_set.resize(ndim, /*value=*/false);
@@ -180,7 +182,7 @@ std::vector<int> NormalizeAxes(const Call& call, const BlockBuilder& ctx, int nd
 InferLayoutOutput InferLayoutUnaryEwise(
     const Call& call, const ffi::Map<ffi::String, ffi::Array<ffi::String>>& desired_layouts,
     const VarLayoutMap& var_layout_map) {
-  ICHECK(NoDesiredLayout(call, desired_layouts));
+  TVM_FFI_ICHECK(NoDesiredLayout(call, desired_layouts));
   LayoutDecision layout = GetLayoutDecision(var_layout_map, call->args[0]);
   return InferLayoutOutput({layout}, {layout}, Attrs(call->attrs));
 }
@@ -189,12 +191,12 @@ bool CanProveLayoutTransform(const Layout& input_layout, const Layout& desired_l
                              ffi::Array<PrimExpr> shape) {
   bool can_prove = true;
   try {
-    tir::BijectiveLayout todesired(input_layout, desired_layout);
+    tirx::BijectiveLayout todesired(input_layout, desired_layout);
     ffi::Array<PrimExpr> desired_shape = todesired.ForwardShape(shape);
     ffi::Array<PrimExpr> back_shape = todesired.BackwardShape(desired_shape);
     arith::Analyzer analyzer;
     for (size_t i = 0; i < shape.size(); ++i) {
-      if (tir::is_const_int(shape[i])) {
+      if (tirx::is_const_int(shape[i])) {
         if (!analyzer.CanProveEqual(shape[i], back_shape[i])) {
           can_prove = false;
           break;

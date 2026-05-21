@@ -25,14 +25,14 @@
 #ifndef TVM_IR_OP_H_
 #define TVM_IR_OP_H_
 
+#include <tvm/ffi/error.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/ir/attr_registry_map.h>
 #include <tvm/ir/attrs.h>
 #include <tvm/ir/env_func.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/type.h>
-#include <tvm/node/attr_registry_map.h>
-#include <tvm/runtime/logging.h>
 
 #include <string>
 #include <utility>
@@ -293,7 +293,7 @@ class OpAttrMap : public AttrRegistryMap<Op, ValueType> {
 };
 
 // internal macros to make
-#define TVM_OP_REGISTER_VAR_DEF static DMLC_ATTRIBUTE_UNUSED ::tvm::OpRegEntry& __make_##Op
+#define TVM_OP_REGISTER_VAR_DEF [[maybe_unused]] static ::tvm::OpRegEntry& __make_##Op
 
 /*!
  * \def TVM_REGISTER_OP
@@ -310,8 +310,8 @@ class OpAttrMap : public AttrRegistryMap<Op, ValueType> {
  *
  * \endcode
  */
-#define TVM_REGISTER_OP(OpName)                          \
-  TVM_STR_CONCAT(TVM_OP_REGISTER_VAR_DEF, __COUNTER__) = \
+#define TVM_REGISTER_OP(OpName)                              \
+  TVM_FFI_STR_CONCAT(TVM_OP_REGISTER_VAR_DEF, __COUNTER__) = \
       ::tvm::OpRegEntry::RegisterOrGet(OpName).set_name()
 
 // implementations
@@ -364,7 +364,7 @@ inline OpRegEntry& OpRegEntry::set_support_level(int32_t n) {  // NOLINT(*)
 template <typename ValueType>
 inline OpRegEntry& OpRegEntry::set_attr(  // NOLINT(*)
     const std::string& attr_name, const ValueType& value, int plevel) {
-  ICHECK_GT(plevel, 0) << "plevel in set_attr must be greater than 0";
+  TVM_FFI_ICHECK_GT(plevel, 0) << "plevel in set_attr must be greater than 0";
   UpdateAttr(attr_name, Any(value), plevel);
   return *this;
 }
@@ -373,7 +373,7 @@ inline OpRegEntry& OpRegEntry::set_attr(  // NOLINT(*)
 
 template <typename ValueType>
 inline ValueType OpAttrMap<ValueType>::get(const RelaxExpr& expr, ValueType def_value) const {
-  ICHECK(expr.defined());
+  TVM_FFI_ICHECK(expr.defined());
   if (const OpNode* op = expr.as<OpNode>()) {
     return this->map_.get(ffi::GetRef<Op>(op), def_value);
   } else {

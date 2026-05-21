@@ -24,6 +24,7 @@
 
 #include "set.h"
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 
 #include <algorithm>
@@ -67,16 +68,16 @@ StructInfo InferStructInfoUnique(const Call& call, const BlockBuilder& ctx) {
       NormalizeAxis(call, ctx, data_sinfo->ndim, axis_int->value);
     }
   }
-  ICHECK(call->args[2]->IsInstance<PrimValueNode>());
-  ICHECK(call->args[3]->IsInstance<PrimValueNode>());
-  ICHECK(call->args[4]->IsInstance<PrimValueNode>());
+  TVM_FFI_ICHECK(call->args[2]->IsInstance<PrimValueNode>());
+  TVM_FFI_ICHECK(call->args[3]->IsInstance<PrimValueNode>());
+  TVM_FFI_ICHECK(call->args[4]->IsInstance<PrimValueNode>());
 
   return_index = Downcast<PrimValue>(call->args[2]);
   return_inverse = Downcast<PrimValue>(call->args[3]);
   return_counts = Downcast<PrimValue>(call->args[4]);
 
   auto f_convert_to_int64 = [](const PrimExpr& value) {
-    CHECK(value->IsInstance<IntImmNode>())
+    TVM_FFI_ICHECK(value->IsInstance<IntImmNode>())
         << value << " expects to be IntImm, but gets " << value->GetTypeKey();
     const auto* val_node = value.as<IntImmNode>();
     auto val_imm = ffi::GetRef<IntImm>(val_node);
@@ -101,16 +102,41 @@ StructInfo InferStructInfoUnique(const Call& call, const BlockBuilder& ctx) {
     output_sinfo.push_back(TensorStructInfo(data_sinfo->dtype, /*ndim=*/1, data_sinfo->vdevice));
   }
 
-  // index, reverse and counts
-  TensorStructInfo int_return{nullptr};
-  if (data_sinfo->ndim == 0) {
-    int_return = TensorStructInfo(ShapeExpr({IntImm(DataType::Int(64), /*value=*/1)}),
-                                  DataType::Int(64), data_sinfo->vdevice);
-  } else {
-    int_return = TensorStructInfo(DataType::Int(64), /*ndim=*/1, data_sinfo->vdevice);
+  // index, inverse_indices, and counts
+  // index: always 1D
+  if (f_convert_to_int64(return_index->value)) {
+    TensorStructInfo index_sinfo{nullptr};
+    if (data_sinfo->ndim == 0) {
+      index_sinfo = TensorStructInfo(ShapeExpr({IntImm(DataType::Int(64), /*value=*/1)}),
+                                     DataType::Int(64), data_sinfo->vdevice);
+    } else {
+      index_sinfo = TensorStructInfo(DataType::Int(64), /*ndim=*/1, data_sinfo->vdevice);
+    }
+    output_sinfo.push_back(index_sinfo);
   }
-  for (int i = 0; i < n_int_return; ++i) {
-    output_sinfo.push_back(int_return);
+
+  // inverse_indices: always 1D per ONNX spec
+  if (f_convert_to_int64(return_inverse->value)) {
+    TensorStructInfo inverse_sinfo{nullptr};
+    if (data_sinfo->ndim == 0) {
+      inverse_sinfo = TensorStructInfo(ShapeExpr({IntImm(DataType::Int(64), /*value=*/1)}),
+                                       DataType::Int(64), data_sinfo->vdevice);
+    } else {
+      inverse_sinfo = TensorStructInfo(DataType::Int(64), /*ndim=*/1, data_sinfo->vdevice);
+    }
+    output_sinfo.push_back(inverse_sinfo);
+  }
+
+  // counts: always 1D
+  if (f_convert_to_int64(return_counts->value)) {
+    TensorStructInfo counts_sinfo{nullptr};
+    if (data_sinfo->ndim == 0) {
+      counts_sinfo = TensorStructInfo(ShapeExpr({IntImm(DataType::Int(64), /*value=*/1)}),
+                                      DataType::Int(64), data_sinfo->vdevice);
+    } else {
+      counts_sinfo = TensorStructInfo(DataType::Int(64), /*ndim=*/1, data_sinfo->vdevice);
+    }
+    output_sinfo.push_back(counts_sinfo);
   }
 
   if (output_sinfo.size() == 1) {

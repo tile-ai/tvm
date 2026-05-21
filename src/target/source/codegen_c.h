@@ -26,26 +26,26 @@
 
 #include <tvm/ir/op.h>
 #include <tvm/target/codegen.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/builtin.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/function.h>
-#include <tvm/tir/op_attr_types.h>
-#include <tvm/tir/stmt.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/builtin.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/function.h>
+#include <tvm/tirx/op_attr_types.h>
+#include <tvm/tirx/stmt.h>
+#include <tvm/tirx/stmt_functor.h>
 
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "../../tir/transforms/ir_utils.h"
+#include "../../tirx/transform/ir_utils.h"
 #include "codegen_source_base.h"
 
 namespace tvm {
 namespace codegen {
 
-using namespace tir;
+using namespace tirx;
 /*!
  * \brief A base class to generate C code.
  *
@@ -187,17 +187,16 @@ class CodeGenC : public ExprFunctor<void(const PrimExpr&, std::ostream&)>,
   void VisitExpr_(const FloatImmNode* op, std::ostream& os) override;    // NOLINT(*)
   void VisitExpr_(const StringImmNode* op, std::ostream& os) override;   // NOLINT(*)
   // statment
-  void VisitStmt_(const LetStmtNode* op) override;
+  void VisitStmt_(const BindNode* op) override;
   void VisitStmt_(const BufferStoreNode* op) override;
   void VisitStmt_(const ForNode* op) override;
   void VisitStmt_(const WhileNode* op) override;
   void VisitStmt_(const IfThenElseNode* op) override;
-  void VisitStmt_(const AllocateNode* op) override;
+  void VisitStmt_(const AllocBufferNode* op) override;
   void VisitStmt_(const AttrStmtNode* op) override;
   void VisitStmt_(const AssertStmtNode* op) override;
   void VisitStmt_(const EvaluateNode* op) override;
   void VisitStmt_(const SeqStmtNode* op) override;
-  void VisitStmt_(const AllocateConstNode* op) override;
   void VisitStmt_(const DeclBufferNode* op) override;
 
   /*!
@@ -235,6 +234,8 @@ class CodeGenC : public ExprFunctor<void(const PrimExpr&, std::ostream&)>,
   }
 
  protected:
+  /*! \brief Print a C string literal with proper escaping of special chars. */
+  void PrintEscapedCString(const std::string& str, std::ostream& os);
   // Print reference to struct location
   std::string GetStructRef(DataType t, const PrimExpr& buffer, const PrimExpr& index, int kind);
   // Print reference to a buffer as type t in index.
@@ -305,6 +306,8 @@ class CodeGenC : public ExprFunctor<void(const PrimExpr&, std::ostream&)>,
 
   /*! \brief Check if buf_var is volatile or not. */
   bool IsVolatile(const VarNode* buf_var) const { return volatile_buf_.count(buf_var) != 0; }
+  /*! \brief Mark buf_var as volatile. */
+  void MarkVolatile(const VarNode* buf_var) { volatile_buf_.insert(buf_var); }
 
   /*! \brief restrict keyword */
   std::string restrict_keyword_{""};

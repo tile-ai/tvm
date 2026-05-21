@@ -25,8 +25,6 @@
 
 #include <fstream>
 
-#define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-#define TVM_USE_LIBBACKTRACE 0
 /* Enable custom logging - this will cause TVM to use a custom implementation
  * of tvm::runtime::detail::LogMessage. We use this to pass TVM log messages to
  * Android logcat.
@@ -52,7 +50,6 @@
 #include "../src/runtime/logging.cc"
 #include "../src/runtime/memory/memory_manager.cc"
 #include "../src/runtime/minrpc/minrpc_logger.cc"
-#include "../src/runtime/profiling.cc"
 #include "../src/runtime/registry.cc"
 #include "../src/runtime/rpc/rpc_channel.cc"
 #include "../src/runtime/rpc/rpc_endpoint.cc"
@@ -65,6 +62,7 @@
 #include "../src/runtime/tensor.cc"
 #include "../src/runtime/thread_pool.cc"
 #include "../src/runtime/threading_backend.cc"
+#include "../src/runtime/timer.cc"
 #include "../src/runtime/workspace_pool.cc"
 
 #ifdef TVM_OPENCL_RUNTIME
@@ -103,7 +101,7 @@ namespace detail {
 [[noreturn]] void LogFatalImpl(const std::string& file, int lineno, const std::string& message) {
   std::string m = file + ":" + std::to_string(lineno) + ": " + message;
   __android_log_write(ANDROID_LOG_FATAL, "TVM_RUNTIME", m.c_str());
-  throw InternalError(file, lineno, message);
+  throw tvm::ffi::Error("InternalError", message, TVMFFIBacktrace(file.c_str(), lineno, "", 0));
 }
 void LogMessageImpl(const std::string& file, int lineno, int level, const std::string& message) {
   std::string m = file + ":" + std::to_string(lineno) + ": " + message;
