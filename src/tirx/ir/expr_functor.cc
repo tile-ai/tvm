@@ -99,7 +99,7 @@ void ExprVisitor::VisitExpr_(const ReduceNode* op) {
 
 void ExprVisitor::VisitExpr_(const CastNode* op) {
   this->VisitExpr(op->value);
-  // Visit PrimExpr values inside annotations (e.g. "tl.rbits" for stochastic
+  // Visit PrimExpr values inside annotations (e.g. "rbits" for stochastic
   // rounding casts).
   for (const auto& kv : op->annotations) {
     if (auto opt = kv.second.as<PrimExpr>()) {
@@ -257,7 +257,7 @@ PrimExpr ExprMutator::VisitExpr_(const ReduceNode* op) {
 PrimExpr ExprMutator::VisitExpr_(const CastNode* op) {
   PrimExpr value = this->VisitExpr(op->value);
 
-  // Mutate PrimExpr values inside annotations (e.g. "tl.rbits" for
+  // Mutate PrimExpr values inside annotations (e.g. "rbits" for
   // stochastic rounding casts).
   ffi::Map<ffi::String, ffi::Any> new_annotations;
   bool annotations_changed = false;

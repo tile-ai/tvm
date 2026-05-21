@@ -81,15 +81,14 @@ class StringImm : public PrimExpr {
  * conversions (e.g., float32 -> float8_e4m3). This mirrors the annotations
  * pattern on CallNode / ForNode / BlockNode / AllocateNode.
  *
- * Conventions used by the CUDA backend (keys start with "tl." to avoid
- * collisions with future TVM upstream annotations):
+ * Conventions used by the CUDA backend:
  *
- * - "tl.round" (StringImm): PTX rounding modifier, e.g. "rn", "rz", "rp",
+ * - "round" (StringImm): PTX rounding modifier, e.g. "rn", "rz", "rp",
  *   "rm", "rs" (stochastic), "rna", etc. Absent key means backend default.
- * - "tl.sat" (IntImm bool): saturation flag; absent/true means saturate to
+ * - "sat" (IntImm bool): saturation flag; absent/true means saturate to
  *   finite (PTX .satfinite), false disables saturation.
- * - "tl.rbits" (PrimExpr): random bits operand for stochastic rounding
- *   ("tl.round" == "rs"); feeds the rbits operand of PTX cvt.rs.
+ * - "rbits" (PrimExpr): random bits operand for stochastic rounding
+ *   ("round" == "rs"); feeds the rbits operand of PTX cvt.rs.
  */
 class CastNode : public PrimExprNode {
  public:
