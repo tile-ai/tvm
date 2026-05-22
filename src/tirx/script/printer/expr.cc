@@ -125,7 +125,20 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
     .set_dispatch<tirx::Cast>("", [](tirx::Cast cast, AccessPath p, IRDocsifier d) -> Doc {
       ExprDoc dtype = LiteralDoc::DataType(cast->dtype, p->Attr("dtype"));
       ExprDoc value = d->AsDoc<ExprDoc>(cast->value, p->Attr("value"));
-      return TIR(d, "Cast")->Call({dtype, value});
+      ffi::Array<ffi::String> kwargs_keys;
+      ffi::Array<ExprDoc> kwargs_values;
+      if (!cast->annotations.empty()) {
+        ffi::Array<ExprDoc> dict_keys;
+        ffi::Array<ExprDoc> dict_values;
+        for (const auto& kv : cast->annotations) {
+          dict_keys.push_back(LiteralDoc::Str(kv.first, p->Attr("annotations")->Attr(kv.first)));
+          dict_values.push_back(
+              d->AsDoc<ExprDoc>(kv.second, p->Attr("annotations")->Attr(kv.first)));
+        }
+        kwargs_keys.push_back("annotations");
+        kwargs_values.push_back(DictDoc(dict_keys, dict_values));
+      }
+      return TIR(d, "Cast")->Call({dtype, value}, kwargs_keys, kwargs_values);
     });
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)

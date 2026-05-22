@@ -97,7 +97,16 @@ void ExprVisitor::VisitExpr_(const ReduceNode* op) {
   this->VisitExpr(op->condition);
 }
 
-void ExprVisitor::VisitExpr_(const CastNode* op) { this->VisitExpr(op->value); }
+void ExprVisitor::VisitExpr_(const CastNode* op) {
+  this->VisitExpr(op->value);
+  // Visit any PrimExpr stored in the annotations map so visitors can see
+  // sub-expressions reachable only via annotations.
+  for (const auto& kv : op->annotations) {
+    if (auto opt = kv.second.as<PrimExpr>()) {
+      this->VisitExpr(opt.value());
+    }
+  }
+}
 
 void ExprVisitor::VisitExpr_(const NotNode* op) { this->VisitExpr(op->a); }
 
@@ -247,11 +256,30 @@ PrimExpr ExprMutator::VisitExpr_(const ReduceNode* op) {
 
 PrimExpr ExprMutator::VisitExpr_(const CastNode* op) {
   PrimExpr value = this->VisitExpr(op->value);
-  if (value.same_as(op->value)) {
+
+  // Mutate any PrimExpr stored in the annotations map; non-PrimExpr values
+  // pass through unchanged.
+  ffi::Map<ffi::String, ffi::Any> new_annotations;
+  bool annotations_changed = false;
+  for (const auto& kv : op->annotations) {
+    if (auto opt = kv.second.as<PrimExpr>()) {
+      PrimExpr new_val = this->VisitExpr(opt.value());
+      new_annotations.Set(kv.first, new_val);
+      if (!new_val.same_as(opt.value())) {
+        annotations_changed = true;
+      }
+    } else {
+      new_annotations.Set(kv.first, kv.second);
+    }
+  }
+
+  if (value.same_as(op->value) && !annotations_changed) {
     return ffi::GetRef<PrimExpr>(op);
-  } else {
+  }
+  if (op->annotations.empty()) {
     return Cast(op->dtype, value);
   }
+  return Cast(op->dtype, value, annotations_changed ? new_annotations : op->annotations);
 }
 
 PrimExpr ExprMutator::VisitExpr_(const NotNode* op) {

@@ -260,10 +260,27 @@ Cast::Cast(DataType t, PrimExpr value, Span span) {
   data_ = std::move(node);
 }
 
+Cast::Cast(DataType t, PrimExpr value, ffi::Map<ffi::String, ffi::Any> annotations, Span span) {
+  TVM_FFI_ICHECK(value.defined());
+  TVM_FFI_ICHECK_EQ(t.get_lanes_or_vscale_factor(), value.dtype().get_lanes_or_vscale_factor());
+  TVM_FFI_ICHECK(t.is_scalable_vector() == value.dtype().is_scalable_vector());
+  ffi::ObjectPtr<CastNode> node = ffi::make_object<CastNode>();
+  node->dtype = t;
+  node->value = std::move(value);
+  node->annotations = std::move(annotations);
+  node->span = std::move(span);
+  data_ = std::move(node);
+}
+
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("tirx.Cast", [](DataType dtype, PrimExpr value, Span span) {
-    return Cast(dtype, value, span);
+  refl::GlobalDef().def("tirx.Cast", [](DataType dtype, PrimExpr value,
+                                        ffi::Optional<ffi::Map<ffi::String, ffi::Any>> annotations,
+                                        Span span) {
+    if (!annotations.defined() || annotations.value().empty()) {
+      return Cast(dtype, value, span);
+    }
+    return Cast(dtype, value, annotations.value(), span);
   });
 }
 

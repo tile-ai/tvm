@@ -76,15 +76,23 @@ class StringImm : public PrimExpr {
 /*!
  * \brief Cast value from one data type to another.
  * \note The lanes of value should keep fixed.
+ *
+ * The optional `annotations` map carries opaque hints for downstream lowering
+ * passes, mirroring the annotations pattern on Call/For/Block/Allocate. TVM
+ * core treats it as opaque; key conventions are owned by individual backends.
  */
 class CastNode : public PrimExprNode {
  public:
   /*! \brief Original data type. */
   PrimExpr value;
+  /*! \brief Backend-defined annotations attached to this cast. */
+  ffi::Map<ffi::String, ffi::Any> annotations;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
-    refl::ObjectDef<CastNode>().def_ro("value", &CastNode::value);
+    refl::ObjectDef<CastNode>()
+        .def_ro("value", &CastNode::value)
+        .def_ro("annotations", &CastNode::annotations);
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("tirx.Cast", CastNode, PrimExprNode);
 };
@@ -96,6 +104,9 @@ class CastNode : public PrimExprNode {
 class Cast : public PrimExpr {
  public:
   TVM_DLL Cast(DataType dtype, PrimExpr value, Span span = Span());
+  TVM_DLL Cast(DataType dtype, PrimExpr value,
+               ffi::Map<ffi::String, ffi::Any> annotations,
+               Span span = Span());
   TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Cast, PrimExpr, CastNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CastNode);
 };

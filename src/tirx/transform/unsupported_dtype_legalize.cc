@@ -193,6 +193,9 @@ class ComputeLegalizer : public StmtExprMutator {
     if (op_val.same_as(op->value)) {
       return ffi::GetRef<PrimExpr>(op);
     } else {
+      if (!op->annotations.empty()) {
+        return Cast(op->dtype, op_val, op->annotations);
+      }
       return cast(op->dtype, op_val);
     }
   }

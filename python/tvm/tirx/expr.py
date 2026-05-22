@@ -220,7 +220,7 @@ class ExprOp:
         expr : PrimExpr
             Expression with new type
         """
-        return _generic.cast(self, dtype, span)
+        return _generic.cast(self, dtype, span=span)
 
 
 class EqualOp(ObjectConvertible, ExprOp):
@@ -690,14 +690,21 @@ class Cast(PrimExprWithOp):
     value : PrimExpr
         The value of the function.
 
+    annotations : Mapping[str, Object], optional
+        Backend-specific hints for the conversion (e.g. PTX rounding mode,
+        saturation flag, stochastic rbits operand). Mirrors the annotations
+        pattern on Call/For/Block/Allocate. Absent or empty means a plain cast.
+
     span : Optional[Span]
         The location of this expression in the source code.
     """
 
     value: PrimExpr
 
-    def __init__(self, dtype, value, span: Span | None = None) -> None:
-        self.__init_handle_by_constructor__(_ffi_api.Cast, dtype, value, span)  # type: ignore
+    def __init__(self, dtype, value, annotations=None, span: Span | None = None) -> None:
+        self.__init_handle_by_constructor__(
+            _ffi_api.Cast, dtype, value, annotations, span  # type: ignore
+        )
 
 
 @tvm_ffi.register_object("tirx.Add")

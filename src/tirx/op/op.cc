@@ -1203,7 +1203,15 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("tirx.round", tvm::round)
       .def("tirx.nearbyint", tvm::nearbyint)
       .def("tirx.trunc", tvm::trunc)
-      .def("tirx._cast", tvm::cast)
+      .def("tirx._cast",
+           [](DataType dtype, PrimExpr src,
+              ffi::Optional<ffi::Map<ffi::String, ffi::Any>> annotations,
+              Span span) -> PrimExpr {
+             if (!annotations.defined() || annotations.value().empty()) {
+               return tvm::cast(dtype, std::move(src), std::move(span));
+             }
+             return tirx::Cast(dtype, src, annotations.value(), span);
+           })
       .def("tirx.reinterpret", tvm::reinterpret);
 }
 

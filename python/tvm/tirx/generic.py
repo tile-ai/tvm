@@ -127,13 +127,20 @@ def floordiv(lhs, rhs, span=None):
     return _ffi_api._OpFloorDiv(lhs, rhs, span)  # type: ignore
 
 
-def cast(src, dtype, span=None):
+def cast(src, dtype, annotations=None, span=None):
     """Generic cast operator.
 
     Parameters
     ----------
     src : object
         The source operand.
+    dtype : str
+        The target data type.
+    annotations : Mapping[str, Object], optional
+        Backend-specific hints attached to the resulting CastNode (mirrors the
+        annotations pattern on Call/For/Block/Allocate). Absent or empty means
+        a plain cast. Backend layers may interpret keys (e.g. for hardware
+        rounding/saturation modifiers) but TVM core treats this as opaque.
     span : Optional[Span]
         The location of this operator in the source.
 
@@ -142,4 +149,4 @@ def cast(src, dtype, span=None):
     op : tvm.Expr
         The result Expr of cast operaton.
     """
-    return _ffi_api._cast(dtype, src, span)  # type: ignore
+    return _ffi_api._cast(dtype, src, annotations, span)  # type: ignore
