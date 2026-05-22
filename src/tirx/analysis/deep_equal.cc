@@ -137,8 +137,6 @@ class ExprDeepEqualChecker : private ExprFunctor<bool(const PrimExpr&, const Pri
 
   bool VisitExpr_(const CastNode* plhs, const PrimExpr& rhs) final {
     const auto* prhs = rhs.as<CastNode>();
-    // Mirror CallNode: annotations are treated as backend-opaque hints and
-    // do not participate in structural equality.
     return plhs->dtype == prhs->dtype && VisitExpr(plhs->value, prhs->value);
   }
 
