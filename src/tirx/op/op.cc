@@ -1210,7 +1210,6 @@ TVM_FFI_STATIC_INIT_BLOCK() {
              if (!annotations.defined() || annotations.value().empty()) {
                return tvm::cast(dtype, std::move(src), std::move(span));
              }
-             TVM_FFI_ICHECK(src.defined());
              return tirx::Cast(dtype, src, annotations.value(), span);
            })
       .def("tirx.reinterpret", tvm::reinterpret);

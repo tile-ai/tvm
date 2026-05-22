@@ -77,29 +77,15 @@ class StringImm : public PrimExpr {
  * \brief Cast value from one data type to another.
  * \note The lanes of value should keep fixed.
  *
- * An optional `annotations` map carries backend-specific hints for narrowing
- * conversions (e.g., float32 -> float8_e4m3). This mirrors the annotations
- * pattern on CallNode / ForNode / BlockNode / AllocateNode.
- *
- * Conventions used by the CUDA backend:
- *
- * - "round" (StringImm): PTX rounding modifier, e.g. "rn", "rz", "rp",
- *   "rm", "rs" (stochastic), "rna", etc. Absent key means backend default.
- * - "sat" (IntImm bool): saturation flag; absent/true means saturate to
- *   finite (PTX .satfinite), false disables saturation.
- * - "rbits" (PrimExpr): random bits operand for stochastic rounding
- *   ("round" == "rs"); feeds the rbits operand of PTX cvt.rs.
+ * The optional `annotations` map carries opaque hints for downstream lowering
+ * passes, mirroring the annotations pattern on Call/For/Block/Allocate. TVM
+ * core treats it as opaque; key conventions are owned by individual backends.
  */
 class CastNode : public PrimExprNode {
  public:
   /*! \brief Original data type. */
   PrimExpr value;
-  /*!
-   * \brief Additional annotations about the cast.
-   *
-   *  These annotations can be used to pass additional metadata
-   *  to lowering passes (e.g. hardware rounding / saturation hints).
-   */
+  /*! \brief Backend-defined annotations attached to this cast. */
   ffi::Map<ffi::String, ffi::Any> annotations;
 
   static void RegisterReflection() {

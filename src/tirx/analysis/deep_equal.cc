@@ -137,29 +137,9 @@ class ExprDeepEqualChecker : private ExprFunctor<bool(const PrimExpr&, const Pri
 
   bool VisitExpr_(const CastNode* plhs, const PrimExpr& rhs) final {
     const auto* prhs = rhs.as<CastNode>();
-    if (plhs->dtype != prhs->dtype) return false;
-    // Annotations carry backend hints (e.g. rounding mode, rbits operand)
-    // that can change the semantics of the conversion, so compare them here.
-    if (plhs->annotations.size() != prhs->annotations.size()) return false;
-    for (const auto& kv : plhs->annotations) {
-      auto it = prhs->annotations.find(kv.first);
-      if (it == prhs->annotations.end()) return false;
-      const ffi::Any& rv = (*it).second;
-      auto lopt = kv.second.as<PrimExpr>();
-      auto ropt = rv.as<PrimExpr>();
-      if (lopt.has_value() != ropt.has_value()) return false;
-      if (lopt.has_value()) {
-        if (!VisitExpr(lopt.value(), ropt.value())) return false;
-      } else {
-        // Non-PrimExpr values: compare as ObjectRef. If either side is not an
-        // ObjectRef-storable Any, fall back to identity via type_index/v_obj.
-        auto lref = kv.second.as<ffi::ObjectRef>();
-        auto rref = rv.as<ffi::ObjectRef>();
-        if (lref.has_value() != rref.has_value()) return false;
-        if (lref.has_value() && !lref->same_as(*rref)) return false;
-      }
-    }
-    return VisitExpr(plhs->value, prhs->value);
+    // Mirror CallNode: annotations are treated as backend-opaque hints and
+    // do not participate in structural equality.
+    return plhs->dtype == prhs->dtype && VisitExpr(plhs->value, prhs->value);
   }
 
   bool VisitExpr_(const NotNode* plhs, const PrimExpr& rhs) final {
