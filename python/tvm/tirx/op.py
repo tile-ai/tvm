@@ -62,8 +62,10 @@ tir = tirx  # alias for backward compat with upstream tir.convert() calls
 
 def _pack_buffer(buf, span=None):
     """Build intrinsics that packs the buffer."""
-    shape = Call("handle", "tirx.tvm_stack_make_shape", buf.shape, span)
-    strides = Call("handle", "tirx.tvm_stack_make_shape", buf.strides, span) if buf.strides else 0
+    shape = Call("handle", "tirx.tvm_stack_make_shape", buf.shape, span=span)
+    strides = (
+        Call("handle", "tirx.tvm_stack_make_shape", buf.strides, span=span) if buf.strides else 0
+    )
     pack_args = [
         buf.data,
         shape,
@@ -216,10 +218,10 @@ def call_intrin(dtype, func_name, *args, annotations=None, span=None):
     call : PrimExpr
         The call expression.
     """
-    
-    # Convert to TVM Map
     if annotations is not None:
-        annotations = {k: const(v) if isinstance(v, (int, bool)) else v for k, v in annotations.items()}
+        annotations = {
+            k: const(v) if isinstance(v, (int, bool)) else v for k, v in annotations.items()
+        }
     return Call(dtype, func_name, args, annotations=annotations, span=span)
 
 

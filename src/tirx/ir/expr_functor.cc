@@ -170,7 +170,7 @@ PrimExpr ExprMutator::VisitExpr_(const CallNode* op) {
 
   // Also mutate PrimExpr values inside annotations (e.g. barrier arguments
   // stored as CallNode annotations by tile operators like tma_copy).
-  ffi::Map<ffi::String, ffi::ObjectRef> new_annotations;
+  ffi::Map<ffi::String, ffi::Any> new_annotations;
   bool annotations_changed = false;
   for (const auto& kv : op->annotations) {
     if (auto opt = kv.second.as<PrimExpr>()) {
@@ -187,7 +187,8 @@ PrimExpr ExprMutator::VisitExpr_(const CallNode* op) {
   if (args.same_as(op->args) && !annotations_changed) {
     return ffi::GetRef<PrimExpr>(op);
   } else {
-    return Call(op->dtype, op->op, args, annotations_changed ? new_annotations : op->annotations);
+    return Call(op->dtype, op->op, args, annotations_changed ? new_annotations : op->annotations,
+                op->span);
   }
 }
 

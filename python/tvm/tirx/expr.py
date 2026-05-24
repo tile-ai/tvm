@@ -1307,8 +1307,8 @@ class Call(PrimExprWithOp):
     args : list of Expr
         The input arguments to the call
 
-    annotations : Optional[Dict[str, Object]]
-        Additional annotations about the call.
+    annotations : Optional[dict]
+        Additional metadata attached to the call.
 
     span : Optional[Span]
         The location of this expression in the source code.
@@ -1316,6 +1316,7 @@ class Call(PrimExprWithOp):
 
     op: Op
     args: list[PrimExpr]
+    annotations: dict
 
     def __init__(
         self,
@@ -1336,7 +1337,12 @@ class Call(PrimExprWithOp):
                     % op
                 )
             op = Op.get(op)
-        self.__init_handle_by_constructor__(_ffi_api.Call, dtype, op, args, annotations, span)  # type: ignore
+        if annotations:
+            self.__init_handle_by_constructor__(  # type: ignore
+                _ffi_api.CallWithAnnotations, dtype, op, args, annotations, span
+            )
+        else:
+            self.__init_handle_by_constructor__(_ffi_api.Call, dtype, op, args, span)  # type: ignore
 
 
 @tvm_ffi.register_object("tirx.Let")
