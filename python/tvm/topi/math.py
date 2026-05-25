@@ -763,7 +763,7 @@ def cast(x, dtype, span=None):
     # pylint: disable=import-outside-toplevel
     from tvm.tirx import _ffi_api
 
-    return _ffi_api._cast(dtype, x, span)
+    return _ffi_api._cast(dtype, x, None, span)
 
 
 def reinterpret(x, dtype):
