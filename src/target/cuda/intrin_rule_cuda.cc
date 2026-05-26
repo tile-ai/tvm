@@ -271,7 +271,7 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_sync")
     .add_argument("lane", "Expr", "The source thread id.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__shfl_up_sync")
@@ -281,7 +281,7 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_up_sync")
     .add_argument("delta", "Expr", "The source lane id offset to be added.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_up_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__shfl_down_sync")
@@ -291,7 +291,7 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_down_sync")
     .add_argument("delta", "Expr", "The source lane id offset to be subtracted.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_down_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__shfl_xor_sync")
@@ -301,13 +301,13 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_xor_sync")
     .add_argument("lane_mask", "Expr", "The lane mask.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_xor_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__activemask")
     .set_num_inputs(0)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__activemask")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kPure))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 }  // namespace intrin
