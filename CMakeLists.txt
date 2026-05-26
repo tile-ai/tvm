@@ -562,10 +562,12 @@ set_target_properties(tvm PROPERTIES
 )
 # Create compatibility symlinks so Python can find libtvm_runtime.so and
 # libtvm_compiler.so from the unified libtvm.so.
-add_custom_command(TARGET tvm POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_runtime.so"
-  COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_compiler.so"
-)
+if(UNIX)
+  add_custom_command(TARGET tvm POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_runtime.so"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libtvm.so "${CMAKE_BINARY_DIR}/lib/libtvm_compiler.so"
+  )
+endif()
 
 # Place runtime/compiler/allvisible artifacts under build/lib/ to mirror the
 # tvm-ffi layout and make tvm_ffi.libinfo.load_lib_ctypes(package="tvm") able
