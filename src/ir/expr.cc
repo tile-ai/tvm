@@ -169,7 +169,7 @@ FloatImm::FloatImm(DataType dtype, double value, Span span) {
       TVM_FFI_CHECK_LE(value, bound, ValueError)
           << "Literal value " << value << " exceeds maximum of " << dtype;
 
-    } else if (dtype.is_float4_e2m1fn()) {
+    } else if (dtype.is_float4()) {
       double bound = support::kMaxE2M1FN;
       TVM_FFI_CHECK_GE(value, -bound, ValueError)
           << "Literal value " << value << " below minimum of " << dtype;

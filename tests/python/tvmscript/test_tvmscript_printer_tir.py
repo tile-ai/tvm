@@ -905,6 +905,7 @@ CUSTOM_FLOAT_DTYPES = [
     "float6_e3m2fn",
     # Float4 variant
     "float4_e2m1fn",
+    "float4_e2m1_unpacked",
 ]
 
 

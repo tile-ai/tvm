@@ -211,10 +211,10 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, Span span) {  // NOLINT(*)
   } else if (ltype.is_float6() && !rtype.is_float6()) {
     // Cast int->float6 for rhs when lhs is a float6
     rhs = cast(ltype, rhs);
-  } else if (!ltype.is_float4() && rtype.is_float4()) {
+  } else if (!ltype.is_float4_e2m1fn() && rtype.is_float4_e2m1fn()) {
     // Cast int->float4 for lhs when rhs is a float4
     lhs = cast(rtype, lhs);
-  } else if (ltype.is_float4() && !rtype.is_float4()) {
+  } else if (ltype.is_float4_e2m1fn() && !rtype.is_float4_e2m1fn()) {
     // Cast int->float4 for rhs when lhs is a float4
     rhs = cast(ltype, rhs);
   } else if (ltype.is_bool() && (rtype.is_int() || rtype.is_uint())) {

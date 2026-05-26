@@ -71,7 +71,9 @@ class DataType {
     kFloat6_e3m2fn = kDLFloat6_e3m2fn,
     kFloat4_e2m1fn = kDLFloat4_e2m1fn,
     kCustomBegin = 129,
-    kTensorFloat32 = 130
+    kTensorFloat32 = 130,
+    // SM100 FP4 E2M1 with 8-bit unpacked shared-memory storage (TMA ALIGN16B).
+    kFloat4_e2m1_unpacked = 131
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
@@ -107,6 +109,9 @@ class DataType {
     }
     if (code == kFloat4_e2m1fn) {
       TVM_FFI_ICHECK_EQ(bits, 4);
+    }
+    if (code == kFloat4_e2m1_unpacked) {
+      TVM_FFI_ICHECK_EQ(bits, 8);
     }
     if (code == kTensorFloat32) {
       TVM_FFI_ICHECK_EQ(bits, 32);
@@ -164,8 +169,8 @@ class DataType {
     return bits() == 6 &&
            (code() == DataType::kFloat6_e2m3fn || code() == DataType::kFloat6_e3m2fn);
   }
-  /*! \return whether type is the 4-bit custom Float4_e2m1fn variant. */
-  bool is_float4() const { return bits() == 4 && code() == DataType::kFloat4_e2m1fn; }
+  /*! \return whether type is any FP4 E2M1 logical variant (packed or unpacked). */
+  bool is_float4() const { return is_float4_e2m1fn() || is_float4_e2m1_unpacked(); }
   /*! \return whether type is Float8E3M4. */
   bool is_float8_e3m4() const { return bits() == 8 && code() == DataType::kFloat8_e3m4; }
   /*! \return whether type is Float8E4M3. */
@@ -188,8 +193,13 @@ class DataType {
   bool is_float6_e2m3fn() const { return bits() == 6 && code() == DataType::kFloat6_e2m3fn; }
   /*! \return whether type is Float6E3M2FN. */
   bool is_float6_e3m2fn() const { return bits() == 6 && code() == DataType::kFloat6_e3m2fn; }
-  /*! \return whether type is Float4E2M1FN. */
+  /*! \return whether type is the packed 4-bit Float4E2M1FN variant. */
   bool is_float4_e2m1fn() const { return bits() == 4 && code() == DataType::kFloat4_e2m1fn; }
+  /*! \return whether type is the 8-bit Float4E2M1 unpacked storage
+   * (CUTLASS float_e2m1_unpacksmem_t) for tcgen05 f8f6f4 / mxf8f6f4. */
+  bool is_float4_e2m1_unpacked() const {
+    return bits() == 8 && code() == DataType::kFloat4_e2m1_unpacked;
+  }
   /*! \return whether type is a tfloat32 type. */
   bool is_tfloat32() const { return bits() == 32 && code() == DataType::kTensorFloat32; }
   /*! \return whether type is a float16 type. */
@@ -384,6 +394,15 @@ class DataType {
    * \return The constructed data type.
    */
   static DataType Float4E2M1FN(int lanes = 1) { return DataType(kFloat4_e2m1fn, 4, lanes); }
+
+  /*!
+   * \brief Construct float4 e2m1 unpacked shared-memory datatype.
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType Float4E2M1Unpacked(int lanes = 1) {
+    return DataType(kFloat4_e2m1_unpacked, 8, lanes);
+  }
 
   /*!
    * \brief Construct a tensorfloat32 datatype.

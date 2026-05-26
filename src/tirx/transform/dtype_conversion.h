@@ -100,7 +100,7 @@ class FloatConfig {
    */
   static FloatConfig FromDataType(DataType dtype) {
     TVM_FFI_ICHECK(dtype.is_float() || dtype.is_bfloat16() || dtype.is_float8() ||
-                   dtype.is_float6() || dtype.is_float4())
+                   dtype.is_float6() || dtype.is_float4_e2m1fn())
         << "FloatConfig is only applicable to floating point data types, got " << dtype
         << " instead.";
     if (dtype.is_float()) {

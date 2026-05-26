@@ -431,7 +431,7 @@ void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
       fail = true;
     }
     return;
-  } else if (t.is_float4()) {
+  } else if (t.is_float4_e2m1fn()) {
     enable_fp4_ = true;
     if (t.lanes() <= 4) {
       os << GetFP4Type(t);
