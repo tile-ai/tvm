@@ -49,7 +49,7 @@ static PrimExpr DispatchMetalShuffle(const PrimExpr& e) {
   TVM_FFI_ICHECK(call != nullptr);
   TVM_FFI_ICHECK_EQ(call->args.size(), 5);  // mask, value, warp_id, width, warp_size
   ffi::Array<PrimExpr> metal_args{{call->args[1], call->args[2]}};
-  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), metal_args, call->annotations);
+  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), metal_args, call->attrs);
 }
 
 TVM_REGISTER_OP("tirx.clz")

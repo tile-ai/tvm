@@ -44,7 +44,7 @@ PrimExpr CallGLSLIntrin(PrimExpr e, const ffi::Array<PrimExpr>& args) {
   for (PrimExpr arg : args) {
     cargs.push_back(arg);
   }
-  return tirx::Call(call->dtype, tirx::builtin::call_spirv_pure_glsl450(), cargs, call->annotations);
+  return tirx::Call(call->dtype, tirx::builtin::call_spirv_pure_glsl450(), cargs, call->attrs);
 }
 
 template <unsigned id>

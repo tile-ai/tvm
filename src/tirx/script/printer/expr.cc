@@ -271,7 +271,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
     .set_dispatch<tirx::Call>("", [](tirx::Call call, AccessPath call_p, IRDocsifier d) -> Doc {
-      if (!call->annotations.empty()) {
+      if (call->attrs.defined()) {
         ffi::Array<ExprDoc> call_args;
         int n_args = call->args.size();
         call_args.reserve(n_args);
@@ -283,7 +283,7 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
                              : d->AsDoc<ExprDoc>(call->op, call_p->Attr("op"));
         return TIR(d, "Call")->Call(
             {LiteralDoc::DataType(call->dtype, call_p->Attr("dtype")), op_doc, ListDoc(call_args)},
-            {"annotations"}, {d->AsDoc<DictDoc>(call->annotations, call_p->Attr("annotations"))});
+            {"attrs"}, {d->AsDoc<ExprDoc>(call->attrs, call_p->Attr("attrs"))});
       }
       static const OpAttrMap<tirx::TScriptPrinterName>& op_names =
           Op::GetAttrMap<tirx::TScriptPrinterName>("TScriptPrinterName");
@@ -326,10 +326,12 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
           }
           ffi::Array<ffi::String> kwargs_keys;
           ffi::Array<ExprDoc> kwargs_values;
-          for (const auto& kv : call->annotations) {
-            kwargs_keys.push_back(kv.first);
-            kwargs_values.push_back(
-                d->AsDoc<ExprDoc>(kv.second, call_p->Attr("annotations")->Attr(kv.first)));
+          if (const auto* dict_attrs = call->attrs.as<DictAttrsNode>()) {
+            for (const auto& kv : dict_attrs->dict) {
+              kwargs_keys.push_back(kv.first);
+              kwargs_values.push_back(
+                  d->AsDoc<ExprDoc>(kv.second, call_p->Attr("attrs")->Attr(kv.first)));
+            }
           }
           return prefix.value()->Call(args, kwargs_keys, kwargs_values);
         }
@@ -380,10 +382,12 @@ TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
       }
       ffi::Array<ffi::String> kwargs_keys;
       ffi::Array<ExprDoc> kwargs_values;
-      for (const auto& kv : call->annotations) {
-        kwargs_keys.push_back(kv.first);
-        kwargs_values.push_back(
-            d->AsDoc<ExprDoc>(kv.second, call_p->Attr("annotations")->Attr(kv.first)));
+      if (const auto* dict_attrs = call->attrs.as<DictAttrsNode>()) {
+        for (const auto& kv : dict_attrs->dict) {
+          kwargs_keys.push_back(kv.first);
+          kwargs_values.push_back(
+              d->AsDoc<ExprDoc>(kv.second, call_p->Attr("attrs")->Attr(kv.first)));
+        }
       }
       return prefix.value()->Call(args, kwargs_keys, kwargs_values);
     });

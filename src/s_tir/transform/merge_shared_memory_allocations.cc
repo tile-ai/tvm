@@ -504,7 +504,7 @@ class SharedMemoryRewriter : public StmtExprMutator {
       return Call(op->dtype, op->op,
                   {op->args[0], scope_stack_.back().merged_buf_var, extra_offset + offset, extent,
                    op->args[4]},
-                  op->annotations);
+                  op->attrs);
     } else if (op->op.same_as(builtin::ptx_cp_async())) {
       TVM_FFI_ICHECK((op->args.size() == 5U) || (op->args.size() == 6U));
       Var buffer = Downcast<Var>(op->args[0]);
@@ -528,13 +528,13 @@ class SharedMemoryRewriter : public StmtExprMutator {
             dtype, op->op,
             {scope_stack_.back().merged_buf_var, mul(extra_offset + offset, PrimExpr(index_factor)),
              op->args[2], op->args[3], op->args[4]},
-            op->annotations);
+            op->attrs);
       else
         return Call(
             dtype, op->op,
             {scope_stack_.back().merged_buf_var, mul(extra_offset + offset, PrimExpr(index_factor)),
              op->args[2], op->args[3], op->args[4], op->args[5]},
-            op->annotations);
+            op->attrs);
     } else {
       return StmtExprMutator::VisitExpr_(op);
     }

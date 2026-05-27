@@ -43,7 +43,7 @@ inline PrimExpr TVMExternCall(const tirx::CallNode* call, const std::string& fna
   for (PrimExpr arg : call->args) {
     new_args.push_back(arg);
   }
-  return tirx::Call(call->dtype, tirx::builtin::call_pure_extern(), new_args, call->annotations);
+  return tirx::Call(call->dtype, tirx::builtin::call_pure_extern(), new_args, call->attrs);
 }
 
 template <std::string& tvm_wrapper, unsigned id, int num_sign>
@@ -72,7 +72,7 @@ inline PrimExpr DispatchTVMQHLWrapperFp16(const PrimExpr& e) {
   new_args.push_back(IntImm(DataType::UInt(32), id));
   new_args.push_back(IntImm(DataType::UInt(32), num_sign));
   new_args.insert(new_args.end(), call->args.begin(), call->args.end());
-  return tirx::Call(call->dtype, tirx::builtin::call_llvm_pure_intrin(), new_args, call->annotations);
+  return tirx::Call(call->dtype, tirx::builtin::call_llvm_pure_intrin(), new_args, call->attrs);
 }
 
 TVM_REGISTER_OP("tirx.fma")
@@ -186,7 +186,7 @@ TVM_REGISTER_OP("tirx.sigmoid")
       const PrimExpr v2 = tirx::Min(v1, MaxBound);
 
       ffi::Array<tvm::PrimExpr> new_args = {v2};
-      const tirx::Call new_call = tirx::Call(call->dtype, call->op, new_args, call->annotations);
+      const tirx::Call new_call = tirx::Call(call->dtype, call->op, new_args, call->attrs);
 
       // Enable QHL library for FP16 data type
       if (x->dtype.is_float16() && x->dtype.is_vector() && useqhl) {

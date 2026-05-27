@@ -352,7 +352,7 @@ class DeviceKernelMutator : public StmtExprMutator {
         for (const auto& arg : node->args) {
           args.push_back(arg);
         }
-        return Call(node->dtype, builtin::call_extern(), args, node->annotations);
+        return Call(node->dtype, builtin::call_extern(), args, node->attrs);
       }
     }
 
@@ -391,7 +391,7 @@ class DeviceKernelMutator : public StmtExprMutator {
 
     auto dtype = node->dtype.is_void() ? DataType::Int(32) : node->dtype;
 
-    return Call(dtype, builtin::tvm_call_packed(), call_args, node->annotations);
+    return Call(dtype, builtin::tvm_call_packed(), call_args, node->attrs);
   }
 
   ffi::Optional<Target> current_target_;

@@ -83,7 +83,7 @@ inline PrimExpr DispatchPureExtern(const PrimExpr& e) {
     for (auto arg : call->args) {
       new_args.push_back(arg);
     }
-    return Call(call->dtype, builtin::call_pure_extern(), new_args, call->annotations);
+    return Call(call->dtype, builtin::call_pure_extern(), new_args, call->attrs);
   } else {
     return e;
   }

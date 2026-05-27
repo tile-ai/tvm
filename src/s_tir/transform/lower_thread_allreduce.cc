@@ -309,7 +309,7 @@ class ThreadAllreduceBuilder final : public StmtExprMutator {
     if (IsWarpReduction(types, group_extent, reduce_extent, contiguous_reduce_extent)) {
       std::vector<PrimExpr> reduce_results;
       DataType mask_dtype = DataType::UInt(32);
-      PrimExpr mask = Call(mask_dtype, builtin::tvm_warp_activemask(), {}, call->annotations);
+      PrimExpr mask = Call(mask_dtype, builtin::tvm_warp_activemask(), {}, call->attrs);
 
       if (reduce_extent <= warp_size_) {
         std::tie(reduce_results, new_alloc_bufs) =
