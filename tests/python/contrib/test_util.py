@@ -22,7 +22,7 @@ import os
 import shutil
 import tempfile
 
-from tvm.contrib import utils
+from tvm.support import utils
 
 
 def validate_debug_dir_path(temp_dir, expected_basename):
@@ -36,7 +36,7 @@ def validate_debug_dir_path(temp_dir, expected_basename):
 
 
 def _create_debug_tempdir(root_dir):
-    from tvm.contrib import utils as worker_utils
+    from tvm.support import utils as worker_utils
 
     worker_utils.TempDirectory._DEBUG_PARENT_DIR = None
     worker_utils.TempDirectory._NUM_TEMPDIR_CREATED = 0
