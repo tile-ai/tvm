@@ -18,11 +18,10 @@
  */
 
 /*!
- * \file ir/repr.cc
- * \brief Implements Dump helpers and FFI registration for ffi-repr-based printing.
+ * \file ir/access_path_repr.cc
+ * \brief FFI registration for ffi-repr-based printing.
  *
- * The legacy ReprPrinter has been replaced by ffi::ReprPrint.  This file:
- *  - Implements the Dump() debug helpers (they call ffi::ReprPrint).
+ * This file:
  *  - Registers node.AsRepr (for backward Python compatibility) via ffi::ReprPrint.
  *
  * Note: __ffi_repr__ hooks for ffi::reflection::AccessPath and AccessStep are
@@ -33,14 +32,8 @@
 #include <tvm/ffi/extra/dataclass.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/ir/repr.h>
-#include <tvm/runtime/device_api.h>
 
 namespace tvm {
-
-void Dump(const ffi::ObjectRef& n) { std::cerr << ffi::ReprPrint(ffi::Any(n)) << "\n"; }
-
-void Dump(const ffi::Object* n) { Dump(ffi::GetRef<ffi::ObjectRef>(n)); }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;

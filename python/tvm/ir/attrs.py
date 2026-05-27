@@ -83,8 +83,9 @@ class DictAttrs(Attrs):
     def __dict__(self):
         """Return the underlying key-value map as a Python dict.
 
-        Defined explicitly so that tvm_ffi skips registering the C++ reflection
-        field named "__dict__".
+        Defined explicitly so that tvm_ffi's _add_class_attrs skips registering
+        the C++ reflection field named '__dict__' (Python forbids adding a class
+        attribute named '__dict__' via setattr on extension-type subclasses).
         """
         return dict(self._dict())
 
