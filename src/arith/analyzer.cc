@@ -29,12 +29,27 @@
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/op.h>
 
-#include "./scalable_expression.h"
+#include "../tirx/analysis/check_contains.h"
 #include "const_fold.h"
 #include "product_normal_form.h"
 
 namespace tvm {
 namespace arith {
+
+namespace {
+
+bool IsVScaleCall(const PrimExpr& expr) {
+  if (const auto* call = expr.as<tirx::CallNode>()) {
+    return call->op.same_as(tirx::builtin::vscale());
+  }
+  return false;
+}
+
+bool ContainsVscaleCall(const PrimExpr& expr) {
+  return tirx::CheckContains::ExprContains(expr, IsVScaleCall);
+}
+
+}  // namespace
 
 Analyzer::Analyzer()
     : const_int_bound(this),
@@ -327,26 +342,7 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
     }
   }
 
-  // Current analysis may not be powerful enough to prove expressions containing
-  // the same symbolic value multiple times. However, when the symbolic values are
-  // "T.vscale" and the compile target uses a scalable architecture extension like
-  // VLA, we can make some assumptions about the value of vscale and iterate over a
-  // space of pre-defined values to attempt to prove the expression.
-  Target curr_target = Target::Current();
-  if (ContainsVscaleCall(simplified)) {
-    if (TargetHasVLA(curr_target)) {
-      auto kVScaleValues = GetVScaleValues(curr_target);
-      if(CanProveVscaleExpressionFromKnownValues(this, simplified, kVScaleValues)) {
-        return true;
-      }
-    }
-    // LOG(WARNING)
-    //     << "The expression contains scalable values. An attempt to prove by substituting "
-    //        "with known values of vscale was not performed. This proof currently only supports "
-    //        "VLA targets, but the target was "
-    //     << curr_target;
-  }
-  if(z3_prover.CanProve(simplified)) {
+  if (!ContainsVscaleCall(simplified) && z3_prover.CanProve(simplified)) {
     // auto msg = z3_prover.GetSMTLIB2(simplified);
     // std::stringstream ss;
     // ss << msg;
