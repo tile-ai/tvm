@@ -1522,12 +1522,6 @@ if TYPE_CHECKING:
     class float4_e2m1fnx32: ...
     class float4_e2m1fnx64: ...
     class float4_e2m1_unpacked: ...
-    class float4_e2m1_unpackedx2: ...
-    class float4_e2m1_unpackedx4: ...
-    class float4_e2m1_unpackedx8: ...
-    class float4_e2m1_unpackedx16: ...
-    class float4_e2m1_unpackedx32: ...
-    class float4_e2m1_unpackedx64: ...
     class bfloat16: ...
     class bfloat16x2: ...
     class bfloat16x4: ...
@@ -1708,12 +1702,6 @@ else:
     float4_e2m1fnx64 = func_gen("Float4E2M1FNx64")
 
     float4_e2m1_unpacked = func_gen("Float4E2M1Unpacked")
-    float4_e2m1_unpackedx2 = func_gen("Float4E2M1Unpackedx2")
-    float4_e2m1_unpackedx4 = func_gen("Float4E2M1Unpackedx4")
-    float4_e2m1_unpackedx8 = func_gen("Float4E2M1Unpackedx8")
-    float4_e2m1_unpackedx16 = func_gen("Float4E2M1Unpackedx16")
-    float4_e2m1_unpackedx32 = func_gen("Float4E2M1Unpackedx32")
-    float4_e2m1_unpackedx64 = func_gen("Float4E2M1Unpackedx64")
 
     bfloat16 = func_gen("BFloat16")
     bfloat16x2 = func_gen("BFloat16x2")
@@ -2233,7 +2221,6 @@ bases = [
     "float6_e2m3fn",
     "float6_e3m2fn",
     "float4_e2m1fn",
-    "float4_e2m1_unpacked",
     "float16",
     "float32",
     "float64",
@@ -2247,6 +2234,7 @@ for base in bases:
         float_types.append(f"{base}{suffix}")
 
 __all__ = float_types + [
+    "float4_e2m1_unpacked",
     "int8",
     "int16",
     "int32",
