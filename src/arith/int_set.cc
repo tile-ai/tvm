@@ -429,11 +429,6 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
   IntervalSet VisitExpr_(const VarNode* op) final {
     Var var = ffi::GetRef<Var>(op);
 
-    // Detect cyclic dependency: if we're already visiting this var, return conservative estimate
-    if (visiting_vars_.count(op)) {
-      return IntervalSet::SinglePoint(var);
-    }
-
     ffi::Array<IntSet> values;
     if (dom_constraints_) {
       for (const auto& constraint : *dom_constraints_) {
@@ -464,13 +459,29 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
     if (res->min_value.same_as(var) && res->max_value.same_as(var)) {
       return res;
     }
-    // Mark this var as being visited to detect cycles
-    visiting_vars_.insert(op);
-    // recursively evaluate mapped result
-    // in case the domain contains variables to be relaxed.
-    IntervalSet result = Eval(res);
-    visiting_vars_.erase(op);
-    return result;
+    // Recursively relax the mapped interval, since the domain bounds may
+    // themselves reference other variables that need to be relaxed.
+    //
+    // Memoize the fully-relaxed interval per variable, and guard against
+    // cyclic variable dependencies with an in-progress set.  Without this,
+    // diamond-shaped variable dependencies (var a -> {b, c}, b -> {d, e}, ...)
+    // are re-expanded along every path: each level evaluates both the min and
+    // max sub-expressions, so the cost is exponential (2^depth) in the length
+    // of the variable dependency chain rather than linear.
+    auto memo_it = relax_memo_.find(op);
+    if (memo_it != relax_memo_.end()) {
+      return memo_it->second;
+    }
+    if (relax_in_progress_.count(op)) {
+      // Cyclic dependency among variable bounds: stop relaxing here to keep
+      // the recursion finite, keeping this variable symbolic.
+      return res;
+    }
+    relax_in_progress_.insert(op);
+    IntervalSet relaxed = Eval(res);
+    relax_in_progress_.erase(op);
+    relax_memo_[op] = relaxed;
+    return relaxed;
   }
 
   IntervalSet VisitExpr_(const AddNode* op) final { return VisitBinaryExpr_<Add>(op); }
@@ -616,13 +627,16 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
 
   // recursive depth
   int recur_depth_{0};
+  // Memo of fully-relaxed interval sets per variable, to avoid exponential
+  // re-expansion of diamond-shaped variable dependencies.
+  std::unordered_map<const VarNode*, IntervalSet> relax_memo_;
+  // Variables currently being relaxed, used to break cyclic dependencies.
+  std::unordered_set<const VarNode*> relax_in_progress_;
   // analyzer
   Analyzer* analyzer_;
   const ffi::Map<Var, IntSet>& dom_map_;
   const std::vector<std::pair<Var, IntSet>>* dom_constraints_;
   bool eval_vec_{false};
-  // track variables being visited to detect cyclic dependencies
-  std::unordered_set<const VarNode*> visiting_vars_;
 };
 
 class IntSetAnalyzer::Impl {
