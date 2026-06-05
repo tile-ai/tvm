@@ -85,6 +85,17 @@ class OpenCLWrappedFunc {
     for (cl_uint i = 0; i < work_dim; ++i) {
       wl.work_size[i] *= wl.work_size[i + 3];
     }
+    bool has_positive_work = true;
+    for (cl_uint i = 0; i < work_dim; ++i) {
+      has_positive_work = has_positive_work && wl.work_size[i] > 0 && wl.work_size[i + 3] > 0;
+    }
+    TVM_FFI_ICHECK(has_positive_work)
+        << "OpenCLLaunch Error: work dimensions must be positive, but got"
+        << " global=(" << wl.work_size[0] << "," << wl.work_size[1] << "," << wl.work_size[2] << ")"
+        << " local=(" << wl.work_size[3] << "," << wl.work_size[4] << "," << wl.work_size[5] << ")"
+        << " in kernel " << func_name_
+        << ". A zero work dimension is often caused by a dynamic shape"
+        << " (e.g. num_tokens) being 0 at runtime.";
     // launch kernel
     if (w_->IsProfiling(t->device)) {
       w_->GetEventQueue(t->device).resize(w_->GetEventQueue(t->device).size() + 1);

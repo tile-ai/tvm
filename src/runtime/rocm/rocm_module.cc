@@ -177,6 +177,13 @@ class ROCMWrappedFunc {
     hipStream_t strm = static_cast<hipStream_t>(TVMFFIEnvGetStream(kDLROCM, device_id));
 
     ThreadWorkLoad wl = launch_param_config_.Extract(args);
+    TVM_FFI_ICHECK(wl.grid_dim(0) > 0 && wl.grid_dim(1) > 0 && wl.grid_dim(2) > 0)
+        << "ROCMLaunch Error: grid dimension must be positive, but got"
+        << " grid=(" << wl.grid_dim(0) << "," << wl.grid_dim(1) << "," << wl.grid_dim(2) << ")"
+        << " in kernel " << func_name_
+        << ". A zero grid dimension is often caused by a dynamic shape"
+        << " (e.g. num_tokens) being 0 at runtime.";
+
     void* config[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, packed_args, HIP_LAUNCH_PARAM_BUFFER_SIZE,
                       &packed_nbytes, HIP_LAUNCH_PARAM_END};
     // HIP supports only extra_args.
