@@ -25,10 +25,11 @@
  *  - Registers node.AsRepr (for backward Python compatibility) via ffi::ReprPrint.
  *
  * Note: __ffi_repr__ hooks for ffi::reflection::AccessPath and AccessStep are
- * registered by tvm-ffi.  Keeping duplicate registrations here aborts at
- * library load time.
+ * registered by tvm-ffi itself (src/ffi/extra/reflection_extra.cc, landed in
+ * apache/tvm-ffi#598). The duplicate registrations that previously lived here
+ * were removed when bumping tvm-ffi to 59da4c0 to avoid a double-registration
+ * abort at library load time.
  */
-#include <tvm/ffi/cast.h>
 #include <tvm/ffi/extra/dataclass.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
