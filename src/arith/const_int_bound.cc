@@ -95,7 +95,7 @@ struct ConstIntBoundAnalyzer::Entry {
 class ConstIntBoundAnalyzer::Impl
     : public ExprFunctor<ConstIntBoundAnalyzer::Entry(const PrimExpr&)> {
  public:
-  explicit Impl(Analyzer* parent) : parent_(parent) {}
+  explicit Impl(AnalyzerObj* parent) : parent_(parent) {}
   void CopyFrom(const Impl& other) {
     this->var_map_ = other.var_map_;
     this->additional_info_ = other.additional_info_;
@@ -583,7 +583,7 @@ class ConstIntBoundAnalyzer::Impl
  private:
   friend class ConstIntBoundAnalyzer;
   // parent analyzer
-  Analyzer* parent_;
+  AnalyzerObj* parent_;
   // internal variable map
   std::unordered_map<Var, Entry> var_map_;
   // additional bound info
@@ -963,7 +963,7 @@ std::function<void()> ConstIntBoundAnalyzer::EnterConstraint(const PrimExpr& con
   return impl_->EnterConstraint(constraint);
 }
 
-ConstIntBoundAnalyzer::ConstIntBoundAnalyzer(Analyzer* parent) : impl_(new Impl(parent)) {}
+ConstIntBoundAnalyzer::ConstIntBoundAnalyzer(AnalyzerObj* parent) : impl_(new Impl(parent)) {}
 
 ConstIntBoundAnalyzer::~ConstIntBoundAnalyzer() { delete impl_; }
 

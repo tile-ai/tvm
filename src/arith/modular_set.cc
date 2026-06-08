@@ -99,7 +99,7 @@ struct ModularSetAnalyzer::Entry {
 
 class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(const PrimExpr&)> {
  public:
-  explicit Impl(Analyzer* parent) : parent_(parent) {}
+  explicit Impl(AnalyzerObj* parent) : parent_(parent) {}
 
   void CopyFrom(const Impl& other) { var_map_ = other.var_map_; }
 
@@ -314,7 +314,7 @@ class ModularSetAnalyzer::Impl : public ExprFunctor<ModularSetAnalyzer::Entry(co
 
  private:
   /*! \brief pointer to parent. */
-  Analyzer* parent_{nullptr};
+  AnalyzerObj* parent_{nullptr};
   // internal variable map
   std::unordered_map<Var, Entry> var_map_;
   /*!
@@ -405,7 +405,7 @@ std::function<void()> ModularSetAnalyzer::EnterConstraint(const PrimExpr& constr
   return impl_->EnterConstraint(constraint);
 }
 
-ModularSetAnalyzer::ModularSetAnalyzer(Analyzer* parent) : impl_(new Impl(parent)) {}
+ModularSetAnalyzer::ModularSetAnalyzer(AnalyzerObj* parent) : impl_(new Impl(parent)) {}
 
 ModularSetAnalyzer::~ModularSetAnalyzer() { delete impl_; }
 

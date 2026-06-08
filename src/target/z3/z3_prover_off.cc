@@ -34,7 +34,7 @@ void Z3Prover::CopyFrom(const Z3Prover & other) {}
 ffi::String Z3Prover::GetStats() {
   return "; Z3 Prover is disabled.";
 }
-Z3Prover::Z3Prover(Analyzer*): impl_(nullptr) {}
+Z3Prover::Z3Prover(AnalyzerObj*): impl_(nullptr) {}
 TVM_DLL Z3Prover::~Z3Prover() {}
 
 } // namespace tvm::arith
