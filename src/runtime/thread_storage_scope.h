@@ -233,6 +233,15 @@ struct ThreadScope {
     } else if (s.compare(0, 14, "clusterCtaIdx.") == 0) {
       r.rank = 2;
       r.dim_index = static_cast<int>(s[14] - 'x');
+    } else if (s == launch_param::kClusterDimX) {
+      r.rank = 2;
+      r.dim_index = 0;
+    } else if (s == launch_param::kClusterDimY) {
+      r.rank = 2;
+      r.dim_index = 1;
+    } else if (s == launch_param::kClusterDimZ) {
+      r.rank = 2;
+      r.dim_index = 2;
     } else if (s.compare(0, 23, "preferredClusterCtaIdx.") == 0) {
       r.rank = 3;
       r.dim_index = static_cast<int>(s[23] - 'x');
@@ -305,6 +314,7 @@ class LaunchParamConfig {
       } else {
         ThreadScope ts = ThreadScope::Create(tag);
         arg_index_map_.push_back(ts.rank * 3 + ts.dim_index);
+        arg_name_map_.push_back(tag);
         filled[ts.rank * 3 + ts.dim_index] = true;
       }
     }
@@ -322,11 +332,13 @@ class LaunchParamConfig {
     const TVMFFIAny* raw_args = reinterpret_cast<const TVMFFIAny*>(args.data());
 
     for (size_t i = 0; i < arg_index_map_.size(); ++i) {
-      // Dynamic shapes can result in 0 dim size. Guard to ensure that the dim size is at least 1.
-      size_t size = static_cast<size_t>(raw_args[base_ + i].v_int64);
-      if (size > 0) {
-        w.work_size[arg_index_map_[i]] = size;
+      int64_t size = raw_args[base_ + i].v_int64;
+      if (size <= 0) {
+        TVM_FFI_THROW(ValueError)
+            << "Kernel launch parameter " << arg_name_map_[i]
+            << " must be positive, got " << size;
       }
+      w.work_size[arg_index_map_[i]] = static_cast<size_t>(size);
     }
     if (use_dyn_shared_memory_) {
       w.dyn_shmem_size = static_cast<size_t>(raw_args[base_ + arg_index_map_.size()].v_int64);
@@ -353,6 +365,8 @@ class LaunchParamConfig {
   size_t work_dim_;
   /*! \brief The index mapping. */
   std::vector<uint32_t> arg_index_map_;
+  /*! \brief The launch parameter names in arg_index_map_. */
+  std::vector<std::string> arg_name_map_;
   /*! \brief Whether or not use dynamic shared memory. */
   bool use_dyn_shared_memory_{false};
   /*! \brief Whether or not use programmatic dependent launch. */

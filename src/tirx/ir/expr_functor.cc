@@ -218,8 +218,37 @@ DEFINE_BIOP_EXPR_MUTATE_(Sub);
 DEFINE_BIOP_EXPR_MUTATE_(Mul);
 DEFINE_BIOP_EXPR_MUTATE_(Div);
 DEFINE_BIOP_EXPR_MUTATE_(Mod);
-DEFINE_BIOP_EXPR_MUTATE_(FloorDiv);
-DEFINE_BIOP_EXPR_MUTATE_(FloorMod);
+
+PrimExpr ExprMutator::VisitExpr_(const FloorDivNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr b = this->VisitExpr(op->b);
+  if (a.same_as(op->a) && b.same_as(op->b)) {
+    return ffi::GetRef<PrimExpr>(op);
+  }
+  if (a.dtype() != op->dtype) {
+    a = Cast(op->dtype, a);
+  }
+  if (b.dtype() != op->dtype) {
+    b = Cast(op->dtype, b);
+  }
+  return FloorDiv(a, b);
+}
+
+PrimExpr ExprMutator::VisitExpr_(const FloorModNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr b = this->VisitExpr(op->b);
+  if (a.same_as(op->a) && b.same_as(op->b)) {
+    return ffi::GetRef<PrimExpr>(op);
+  }
+  if (a.dtype() != op->dtype) {
+    a = Cast(op->dtype, a);
+  }
+  if (b.dtype() != op->dtype) {
+    b = Cast(op->dtype, b);
+  }
+  return FloorMod(a, b);
+}
+
 DEFINE_BIOP_EXPR_MUTATE_(Min);
 DEFINE_BIOP_EXPR_MUTATE_(Max);
 DEFINE_BIOP_EXPR_MUTATE_(EQ);

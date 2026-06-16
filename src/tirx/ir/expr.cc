@@ -124,6 +124,25 @@ TVM_FFI_STATIC_INIT_BLOCK() {
     data_ = std::move(node);                                                  \
   }
 
+#define TVM_DEFINE_FLOOR_BINOP_CONSTRUCTOR(Name)                              \
+  Name::Name(PrimExpr a, PrimExpr b, Span span) {                             \
+    using T = Name::ContainerType;                                            \
+    TVM_FFI_CHECK(a.defined(), ValueError) << "a is undefined\n";             \
+    TVM_FFI_CHECK(b.defined(), ValueError) << "b is undefined\n";             \
+    if (a.dtype() != b.dtype()) {                                             \
+      TVM_FFI_CHECK(a.dtype().is_int() && b.dtype().is_int(), TypeError)      \
+          << "mismatched types. " << a.dtype() << " vs. " << b.dtype()        \
+          << "\n";                                                           \
+      b = Cast(a.dtype(), std::move(b), span);                                \
+    }                                                                         \
+    ffi::ObjectPtr<T> node = ffi::make_object<T>();                           \
+    node->dtype = a.dtype();                                                  \
+    node->a = std::move(a);                                                   \
+    node->b = std::move(b);                                                   \
+    node->span = std::move(span);                                             \
+    data_ = std::move(node);                                                  \
+  }
+
 #define TVM_DEFINE_CMPOP_CONSTRUCTOR(Name)                                                  \
   Name::Name(PrimExpr a, PrimExpr b, Span span) {                                           \
     using T = Name::ContainerType;                                                          \
@@ -350,7 +369,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 }
 
 // FloorDiv
-TVM_DEFINE_BINOP_CONSTRUCTOR(FloorDiv);
+TVM_DEFINE_FLOOR_BINOP_CONSTRUCTOR(FloorDiv);
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
@@ -359,7 +378,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
 }
 
 // FloorMod
-TVM_DEFINE_BINOP_CONSTRUCTOR(FloorMod);
+TVM_DEFINE_FLOOR_BINOP_CONSTRUCTOR(FloorMod);
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;

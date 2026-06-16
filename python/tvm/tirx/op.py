@@ -3849,8 +3849,9 @@ def ptx_mma_sp(
     call : PrimExpr
         The call expression.
     """
+    call_dtype = _PTX_TO_NUMPY_DTYPE.get(dtype, dtype) if isinstance(dtype, str) else dtype
     return call_intrin(
-        dtype,
+        call_dtype,
         "tirx.ptx_mma_sp",
         shape,
         A_layout,
