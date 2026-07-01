@@ -67,6 +67,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const ForNode* op) {
     Range dom = Range::FromMinExtent(op->min, op->extent);
     analyzer_->Bind(op->loop_var, dom);
     iter_vars_.Set(op->loop_var, dom);
+    constraint_scope_.Current().Emplace(analyzer_, op->extent > 0);
     return StmtExprMutator::VisitStmt_(op);
   });
 }
@@ -148,7 +149,7 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
       iter_vars_.Set(iv->var, dom);
     } else if (op->attr_key == tirx::attr::tilelang_assume) {
       auto condition = Downcast<PrimExpr>(op->node);
-      constraint_scope_.Current().Emplace(analyzer_, condition);
+      constraint_scope_.Current().Emplace(analyzer_, condition, /*is_assume=*/true);
     }
     return StmtExprMutator::VisitStmt_(op);
   });

@@ -35,6 +35,7 @@ using namespace tirx;
 void IRVisitorWithAnalyzer::VisitStmt_(const ForNode* op) {
   constraint_scope_.WithNewScope([&]() {
     analyzer_.Bind(op->loop_var, Range::FromMinExtent(op->min, op->extent));
+    constraint_scope_.Current().Emplace(&analyzer_, op->extent > 0);
     StmtExprVisitor::VisitStmt_(op);
   });
 }
@@ -81,7 +82,7 @@ void IRVisitorWithAnalyzer::VisitStmt_(const AttrStmtNode* op) {
       analyzer_.Bind(iv->var, Range::FromMinExtent(IntImm(op->value->dtype, 0), op->value));
     } else if (op->attr_key == tirx::attr::tilelang_assume) {
       auto condition = Downcast<PrimExpr>(op->node);
-      constraint_scope_.Current().Emplace(&analyzer_, condition);
+      constraint_scope_.Current().Emplace(&analyzer_, condition, /*is_assume=*/true);
     }
     StmtExprVisitor::VisitStmt_(op);
   });
