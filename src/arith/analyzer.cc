@@ -403,7 +403,7 @@ std::function<void()> Analyzer::EnterConstraint(const PrimExpr& constraint, bool
   recovery_functions.push_back(this->rewrite_simplify.EnterConstraint(constraint, is_assume));
   recovery_functions.push_back(this->int_set.EnterConstraint(constraint));
   recovery_functions.push_back(this->transitive_comparisons.EnterConstraint(constraint));
-  recovery_functions.push_back(this->z3_prover.EnterConstraint(constraint));
+  recovery_functions.push_back(this->z3_prover.EnterConstraint(constraint, is_assume));
 
   return [recovery_functions]() mutable {
     // Exiting the scope.
