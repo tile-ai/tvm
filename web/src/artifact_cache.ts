@@ -17,6 +17,10 @@
  * under the License.
  */
 
+import { OPFSStore, type OPFSAccessMode } from "./opfs_store";
+
+export type { OPFSAccessMode } from "./opfs_store";
+
 export interface TensorCacheEntry {
   name: string;
   shape: Array<number>;
@@ -83,12 +87,13 @@ export interface ArtifactCacheTemplate {
   deleteInCache(url: string): Promise<void>;
 }
 
-export type ArtifactCacheType = "cache" | "indexeddb" | "cross-origin";
+export type ArtifactCacheType = "cache" | "indexeddb" | "cross-origin" | "opfs";
 
 export interface TensorCacheAccessOptions {
   cacheScope?: string;
   cacheType?: ArtifactCacheType;
   artifactCache?: ArtifactCacheTemplate;
+  opfsAccessMode?: OPFSAccessMode;
 }
 
 type StoreType = string | undefined;
@@ -131,6 +136,7 @@ declare global {
 
 const HASH_ALGORITHM = "SHA-256";
 const DEFAULT_FETCH_OPTIONS: RequestInit = { method: "GET" };
+const COS_HASH_META_CACHE = "tvmjs-cos-hash-meta";
 let crossOriginFallbackWarningLogged = false;
 
 const GLOBAL_HASH_CACHE = new Map<
@@ -192,9 +198,9 @@ class CrossOriginStorage {
     await writableStream.write(blob);
     await writableStream.close();
     this.hashCache.set(url, hash);
+    await this.persistHashEntry(url, hash);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async delete(_request: RequestLike): Promise<void> {
     // Cross-origin storage extension currently has no delete API.
     return;
@@ -223,12 +229,54 @@ class CrossOriginStorage {
     throw new Error("CrossOriginStorage: Unsupported request type.");
   }
 
+  private async persistHashEntry(
+    url: string,
+    hash: CrossOriginHashDescriptor,
+  ): Promise<void> {
+    try {
+      if (typeof caches === "undefined") {
+        return;
+      }
+      const store = await caches.open(COS_HASH_META_CACHE);
+      await store.put(url, new Response(JSON.stringify(hash)));
+    } catch {
+      // best-effort: ignore storage errors
+    }
+  }
+
+  private async loadPersistedHashEntry(
+    url: string,
+  ): Promise<CrossOriginHashDescriptor | null> {
+    try {
+      if (typeof caches === "undefined") {
+        return null;
+      }
+      const store = await caches.open(COS_HASH_META_CACHE);
+      const response = await store.match(url);
+      if (!response) {
+        return null;
+      }
+      return JSON.parse(await response.text()) as CrossOriginHashDescriptor;
+    } catch {
+      return null;
+    }
+  }
+
   private async resolveHashDescriptor(
     url: string,
   ): Promise<CrossOriginHashDescriptor | null> {
     const cached = this.hashCache.get(url);
     if (cached) {
       return cached;
+    }
+    // Check persistent store before falling back to network-based hash extraction.
+    // This covers non-LFS files (JSON configs, tokenizers) and non-HuggingFace URLs
+    // (e.g. GitHub raw .wasm files) whose hashes were computed from blob content on a
+    // previous visit and persisted to the Cache API.
+    const persisted = await this.loadPersistedHashEntry(url);
+    if (persisted) {
+      this.hashCache.set(url, persisted);
+      return persisted;
     }
     const hashValue = await this.getFileHash(url);
     if (!hashValue) {
@@ -239,6 +287,9 @@ class CrossOriginStorage {
       value: hashValue,
     };
     this.hashCache.set(url, descriptor);
+    // Persist pointer-derived hashes so subsequent visits skip the LFS pointer
+    // network request (especially important for models with many shards).
+    await this.persistHashEntry(url, descriptor);
     return descriptor;
   }
 
@@ -550,6 +601,95 @@ export class ArtifactIndexedDBCache implements ArtifactCacheTemplate {
 }
 
 /**
+ * Cache by Origin Private File System (OPFS).
+ */
+export class ArtifactOPFSCache implements ArtifactCacheTemplate {
+  private readonly store: OPFSStore;
+
+  constructor(scope: string, accessMode: OPFSAccessMode = "async") {
+    this.store = new OPFSStore(scope, accessMode);
+  }
+
+  static isAvailable(): boolean {
+    return OPFSStore.isAvailable();
+  }
+
+  async fetchWithCache(
+    url: string,
+    storetype?: string,
+    signal?: AbortSignal,
+  ): Promise<any> {
+    // TODO: Avoid duplicate OPFS record validation by trying cache reads first
+    await this.addToCache(url, storetype, signal);
+    return this.readFromCache(url, storetype);
+  }
+
+  private async readFromCache(url: string, storetype?: string): Promise<any> {
+    if (storetype?.toLowerCase() === "arraybuffer") {
+      const cachedData = await this.store.readArrayBuffer(url);
+      if (cachedData === undefined) {
+        throw new Error("ArtifactOPFSCache failed to fetch: " + url);
+      }
+      return cachedData;
+    }
+    const cachedResponse = await this.store.read(url);
+    if (cachedResponse === undefined) {
+      throw new Error("ArtifactOPFSCache failed to fetch: " + url);
+    }
+    return this.responseToStoreType(cachedResponse, storetype);
+  }
+
+  async addToCache(
+    url: string,
+    _storetype?: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (await this.store.has(url)) {
+      return;
+    }
+    const request = new Request(
+      url,
+      signal ? { ...DEFAULT_FETCH_OPTIONS, signal } : DEFAULT_FETCH_OPTIONS,
+    );
+    const response = await fetch(request);
+    if (!response.ok) {
+      throw new Error(
+        `ArtifactOPFSCache: Unable to fetch ${url}, received status ${response.status}`,
+      );
+    }
+    await this.store.write(url, response);
+  }
+
+  async hasAllKeys(keys: string[]): Promise<boolean> {
+    const results = await Promise.all(
+      keys.map(async (key) => await this.store.has(key)),
+    );
+    return results.every((result) => result);
+  }
+
+  async deleteInCache(url: string): Promise<void> {
+    await this.store.remove(url);
+  }
+
+  private async responseToStoreType(
+    response: Response,
+    storetype?: StoreType,
+  ): Promise<any> {
+    if (storetype === undefined) {
+      return response;
+    }
+    const format = storetype.toLowerCase();
+    if (format === "json") {
+      return response.json();
+    }
+    if (format === "arraybuffer") {
+      return response.arrayBuffer();
+    }
+    return response;
+  }
+}
+
+/**
  * Cache by cross-origin storage extension.
  */
 export class ArtifactCrossOriginStorageCache implements ArtifactCacheTemplate {
@@ -647,6 +787,9 @@ function normalizeCacheType(cacheType?: string): ArtifactCacheType {
   if (normalized === "cross-origin") {
     return "cross-origin";
   }
+  if (normalized === "opfs") {
+    return "opfs";
+  }
   console.error("Unsupported cacheType: " + cacheType + ", using default ArtifactCache.");
   return "cache";
 }
@@ -692,6 +835,9 @@ export function createArtifactCache(
       crossOriginFallbackWarningLogged = true;
     }
   }
+  if (cacheType === "opfs") {
+    return new ArtifactOPFSCache(scope, options.opfsAccessMode);
+  }
   return new ArtifactCache(scope);
 }
 
@@ -701,7 +847,7 @@ export function createArtifactCache(
  *
  * @param tensorCacheUrl The cache url which links to the Tensor
  * @param cacheScope The scope identifier of the cache
- * @param cacheType The type of the cache: "cache", "indexedDB", or "cross-origin"
+ * @param cacheType The type of the cache: "cache", "indexedDB", "cross-origin", or "opfs"
  * @returns the result if the cache has Tensor
  */
 export async function hasTensorInCache(
@@ -739,7 +885,7 @@ export async function hasTensorInCache(
  *
  * @param cacheUrl The cacheUrl for the items
  * @param cacheScope The scope identifier of the cache
- * @param cacheType The type of the cache: "cache", "indexedDB", or "cross-origin"
+ * @param cacheType The type of the cache: "cache", "indexedDB", "cross-origin", or "opfs"
  */
 export async function deleteTensorCache(
   cacheUrl: string,

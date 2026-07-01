@@ -23,10 +23,10 @@
 #include <dlpack/dlpack.h>
 #include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
-#include <tvm/runtime/memory/memory_manager.h>
-#include <tvm/runtime/nvtx.h>
-#include <tvm/runtime/vm/vm.h>
 #include <tvm/runtime/logging.h>
+#include <tvm/runtime/memory/memory_manager.h>
+#include <tvm/runtime/vm/vm.h>
+#include <tvm/support/cuda/nvtx.h>
 
 #include <thread>
 
@@ -547,7 +547,7 @@ void VirtualMachineImpl::InvokeClosurePacked(const ffi::ObjectRef& closure_or_pa
   packed_args[0] = static_cast<void*>(static_cast<VirtualMachine*>(this));
   std::copy(args.data(), args.data() + args.size(), packed_args.begin() + 1);
   {
-    NVTXScopedRange scope("RelaxVM: " + clo->func_name);
+    support::NVTXScopedRange scope("RelaxVM: " + clo->func_name);
     clo->impl.CallPacked(ffi::PackedArgs(packed_args.data(), packed_args.size()), rv);
   }
 }

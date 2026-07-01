@@ -76,7 +76,7 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
     ffi::Array<PrimExpr> vcnt_args;
     vcnt_args.push_back(IntImm(DataType::UInt(32), ctpop_id));
     vcnt_args.push_back(e);
-    return tirx::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt_args, call->annotations);
+    return tirx::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt_args, call->attrs);
   }
 
   // Popcount lowering rule:
@@ -99,13 +99,13 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
   ffi::Array<PrimExpr> vcnt8_args;
   vcnt8_args.push_back(IntImm(DataType::UInt(32), ctpop_id));
   vcnt8_args.push_back(input8);
-  PrimExpr vcnt8 = tirx::Call(uint8_type, builtin_call_llvm_pure_intrin_, vcnt8_args, call->annotations);
+  PrimExpr vcnt8 = tirx::Call(uint8_type, builtin_call_llvm_pure_intrin_, vcnt8_args, call->attrs);
 
   // Accumulation 8->16bit
   ffi::Array<PrimExpr> vcnt16_args;
   vcnt16_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt16_args.push_back(vcnt8);
-  PrimExpr vcnt16 = tirx::Call(uint16_type, builtin_call_llvm_pure_intrin_, vcnt16_args, call->annotations);
+  PrimExpr vcnt16 = tirx::Call(uint16_type, builtin_call_llvm_pure_intrin_, vcnt16_args, call->attrs);
   if (call->dtype.bits() == 16) {
     return vcnt16;
   }
@@ -114,7 +114,7 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
   ffi::Array<PrimExpr> vcnt32_args;
   vcnt32_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt32_args.push_back(vcnt16);
-  PrimExpr vcnt32 = tirx::Call(uint32_type, builtin_call_llvm_pure_intrin_, vcnt32_args, call->annotations);
+  PrimExpr vcnt32 = tirx::Call(uint32_type, builtin_call_llvm_pure_intrin_, vcnt32_args, call->attrs);
   if (call->dtype.bits() == 32) {
     return vcnt32;
   }
@@ -123,7 +123,7 @@ PrimExpr CodeGenARM::ARMPopcount(const CallNode* call) {
   ffi::Array<PrimExpr> vcnt64_args;
   vcnt64_args.push_back(IntImm(DataType::UInt(32), vpaddlu_id));
   vcnt64_args.push_back(vcnt32);
-  return tirx::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt64_args, call->annotations);
+  return tirx::Call(call->dtype, builtin_call_llvm_pure_intrin_, vcnt64_args, call->attrs);
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {

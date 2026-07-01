@@ -183,7 +183,7 @@ class VTInjector : public arith::IRMutatorWithAnalyzer {
   using IRMutatorWithAnalyzer::VisitStmt_;
 
   // constructor
-  VTInjector(arith::Analyzer* analyzer, Var var, int num_threads,
+  VTInjector(arith::AnalyzerObj* analyzer, Var var, int num_threads,
              const std::unordered_set<const VarNode*>& touched_var, bool allow_share)
       : IRMutatorWithAnalyzer(analyzer),
         var_(var),
@@ -228,7 +228,8 @@ class VTInjector : public arith::IRMutatorWithAnalyzer {
       PrimExpr stride = it->second / make_const(offset.dtype(), dtype.lanes());
       offset = RewriteIndex(offset, stride);
 
-      return Call(op->dtype, op->op, {op->args[0], op->args[1], offset, extent, op->args[4]}, op->annotations);
+      return Call(op->dtype, op->op, {op->args[0], op->args[1], offset, extent, op->args[4]},
+                  op->attrs);
     } else if (op->op.same_as(builtin::tvm_context_id())) {
       return allow_share_ ? ffi::GetRef<PrimExpr>(op) : var_;
     } else {
@@ -541,7 +542,7 @@ Pass InjectVirtualThread() {
 
     arith::Analyzer analyzer;
 
-    n->body = VirtualThreadInjector(&analyzer)(std::move(n->body));
+    n->body = VirtualThreadInjector(analyzer.get())(std::move(n->body));
     n->body = ConvertSSA(std::move(n->body));
     return f;
   };

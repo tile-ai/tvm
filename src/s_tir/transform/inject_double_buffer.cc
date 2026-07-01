@@ -24,11 +24,11 @@
 #include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/s_tir/stmt.h>
 #include <tvm/s_tir/transform.h>
 #include <tvm/tirx/op.h>
 #include <tvm/tirx/stmt_functor.h>
-#include <tvm/runtime/logging.h>
 
 #include "../../tirx/transform/ir_utils.h"
 
@@ -36,7 +36,7 @@ namespace tvm {
 namespace s_tir {
 using namespace tvm::tirx;
 
-struct InjectDoubleBufferConfigNode : public AttrsNodeReflAdapter<InjectDoubleBufferConfigNode> {
+struct InjectDoubleBufferConfigNode : public ffi::Object {
   int split_loop;
 
   static void RegisterReflection() {
@@ -46,12 +46,12 @@ struct InjectDoubleBufferConfigNode : public AttrsNodeReflAdapter<InjectDoubleBu
         refl::DefaultValue(1));
   }
   TVM_FFI_DECLARE_OBJECT_INFO_FINAL("s_tir.transform.InjectDoubleBufferConfig",
-                                    InjectDoubleBufferConfigNode, BaseAttrsNode);
+                                    InjectDoubleBufferConfigNode, ffi::Object);
 };
 
-class InjectDoubleBufferConfig : public Attrs {
+class InjectDoubleBufferConfig : public ffi::ObjectRef {
  public:
-  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(InjectDoubleBufferConfig, Attrs,
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(InjectDoubleBufferConfig, ffi::ObjectRef,
                                                 InjectDoubleBufferConfigNode);
 };
 
@@ -332,7 +332,7 @@ Pass InjectDoubleBuffer() {
     auto* n = f.CopyOnWrite();
     auto cfg = ctx->GetConfig<InjectDoubleBufferConfig>("s_tir.InjectDoubleBuffer");
     if (!cfg.defined()) {
-      cfg = AttrsWithDefaultValues<InjectDoubleBufferConfig>();
+      cfg = tvm::transform::PassConfigWithDefaults<InjectDoubleBufferConfig>();
     }
     n->body = DoubleBufferInjector(cfg.value()->split_loop).Inject(std::move(n->body));
     return f;

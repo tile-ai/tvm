@@ -118,11 +118,12 @@ StructInfo InferStructInfoROIAlign(const Call& call, const BlockBuilder& ctx) {
   ffi::Array<PrimExpr> data_shape = data_sinfo->shape.as<ShapeExprNode>()->values;
   ffi::Array<PrimExpr> out_shape;
   if (attrs->layout == "NCHW") {
-    out_shape = {rois_shape->values[0], data_shape[1], Integer(attrs->pooled_size[0]),
-                 Integer(attrs->pooled_size[1])};
+    out_shape = {rois_shape->values[0], data_shape[1],
+                 IntImm(DataType::Int(32), attrs->pooled_size[0]),
+                 IntImm(DataType::Int(32), attrs->pooled_size[1])};
   } else {
-    out_shape = {rois_shape->values[0], Integer(attrs->pooled_size[0]),
-                 Integer(attrs->pooled_size[1]), data_shape[3]};
+    out_shape = {rois_shape->values[0], IntImm(DataType::Int(32), attrs->pooled_size[0]),
+                 IntImm(DataType::Int(32), attrs->pooled_size[1]), data_shape[3]};
   }
   return TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype, data_sinfo->vdevice);
 }
@@ -135,7 +136,7 @@ TVM_REGISTER_OP("relax.vision.roi_align")
                   "The input rois with shape (num_roi, 5) in [batch_idx, x1, y1, x2, y2] format.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoROIAlign)
     .set_attr<TMixedPrecisionPolicy>("TMixedPrecisionPolicy", MixedPrecisionPolicyKind::kFollow)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 }  // namespace relax
 }  // namespace tvm

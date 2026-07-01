@@ -59,7 +59,7 @@ TVM_REGISTER_OP("relax.ccl.allreduce")
     .add_argument("x", "Tensor", "Input to which allreduce will be applied.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoAllReduce)
     .set_attr<FRelaxInferLayout>("FRelaxInferLayout", InferLayoutUnaryEwise)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 /* relax.ccl.allgather */
 
@@ -98,7 +98,7 @@ TVM_REGISTER_OP("relax.ccl.allgather")
     .add_argument("x", "Tensor", "Input to which allgather will be applied.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoAllGather)
     .set_attr<FRelaxInferLayout>("FRelaxInferLayout", InferLayoutUnaryEwise)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 /* relax.ccl.broadcast_from_worker0 */
 Expr broadcast_from_worker0(Expr x) {
@@ -121,7 +121,7 @@ TVM_REGISTER_OP("relax.ccl.broadcast_from_worker0")
     .add_argument("x", "Tensor", "Input to be broadcast.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoBroadcastFromZero)
     .set_attr<FRelaxInferLayout>("FRelaxInferLayout", InferLayoutUnaryEwise)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 /* relax.ccl.scatter_from_worker0 */
 
@@ -146,7 +146,7 @@ StructInfo InferStructInfoScatter(const Call& call, const BlockBuilder& ctx) {
   const auto* attrs = call->attrs.as<ScatterCollectiveAttrs>();
   int num_workers = attrs->num_workers;
 
-  arith::Analyzer* analyzer = ctx->GetAnalyzer();
+  arith::Analyzer analyzer = ctx->GetAnalyzer();
   auto input_shape = input_sinfo->GetShape();
   TVM_FFI_ICHECK(input_shape.defined())
       << "input tensor of scatter_from_worker0 should have defined shape.";
@@ -170,7 +170,7 @@ TVM_REGISTER_OP("relax.ccl.scatter_from_worker0")
                   "The buffer to be divided into equal parts and sent to each worker accordingly.")
     .set_attrs_type<ScatterCollectiveAttrs>()
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoScatter)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 }  // namespace relax
 }  // namespace tvm

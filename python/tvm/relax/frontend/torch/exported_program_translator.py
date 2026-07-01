@@ -1140,9 +1140,7 @@ class ExportedProgramImporter(BaseFXGraphImporter):
         target_w = size[3]
 
         # Relax affine_grid outputs [N, 2, H, W]
-        grid = self.block_builder.emit(
-            relax.op.image.affine_grid(theta, (target_h, target_w))
-        )
+        grid = self.block_builder.emit(relax.op.image.affine_grid(theta, (target_h, target_w)))
         # Permute to PyTorch convention [N, H, W, 2]
         return self.block_builder.emit(relax.op.permute_dims(grid, axes=[0, 2, 3, 1]))
 
@@ -1338,7 +1336,37 @@ class ExportedProgramImporter(BaseFXGraphImporter):
                 raise ValueError(f"Unsupported op {node.op}")
 
         assert output_args is not None
-        return output_args
+        return self._flatten_output_args(output_args)
+
+    @staticmethod
+    def _flatten_output_args(output_args) -> tuple[relax.Expr, ...]:
+        """Flatten output args into a tuple of Relax expressions.
+
+        ExportedProgram output trees contain nested Python tuple/list containers
+        (e.g. mutation outputs + user tuple outputs). Emitting nested Python tuples
+        directly through FFI may construct invalid Relax tuples.
+        """
+
+        flattened: list[relax.Expr] = []
+
+        def _visit(value):
+            if isinstance(value, relax.Expr):
+                flattened.append(value)
+            elif isinstance(value, list | tuple):
+                for item in value:
+                    _visit(item)
+            elif value is None:
+                # Preserve explicit None outputs as Relax null objects.
+                flattened.append(relax.op.null_value())
+            else:
+                raise ValueError(f"Unsupported output type in exported graph output: {type(value)}")
+
+        _visit(output_args)
+
+        if not flattened:
+            raise ValueError("Exported graph produced no Relax outputs")
+
+        return tuple(flattened)
 
     def _import_branch_subgraph(
         self,
@@ -1523,7 +1551,7 @@ class ExportedProgramImporter(BaseFXGraphImporter):
             "log2.default": self._log2,
             "log10.default": self._log10,
             "log1p.default": self._log1p,
-            "logical_not.default": self._unary_op(relax.op.logical_not),
+            "logical_not.default": self._logical_not,
             "logical_and.default": self._binary_op(relax.op.logical_and, operator.and_),
             "log_softmax.int": self._log_softmax,
             "_log_softmax.default": self._log_softmax,
@@ -1617,7 +1645,7 @@ class ExportedProgramImporter(BaseFXGraphImporter):
                 relax.op.outer(self.env[node.args[0]], self.env[node.args[1]])
             ),
             "pow.Scalar": self._binary_op(relax.op.power, operator.pow),
-            "pow.Tensor_Scalar": self._binary_op(relax.op.power, operator.pow),
+            "pow.Tensor_Scalar": self._pow,
             "pow.Tensor_Tensor": self._binary_op(relax.op.power, operator.pow),
             "sub.Tensor": self._binary_op(relax.op.subtract, operator.sub),
             "sub.Scalar": self._binary_op(relax.op.subtract, operator.sub),
@@ -1995,7 +2023,7 @@ class ExportedProgramImporter(BaseFXGraphImporter):
                 output_args = self._translate_fx_graph(
                     exported_program.graph_module, nodes, inputs_vars, custom_ops
                 )
-                assert isinstance(output_args, tuple | relax.Tuple)
+                output_args = self._flatten_output_args(output_args)
 
                 if unwrap_unit_return_tuple and len(output_args) == 1:
                     ret = output_args[0]

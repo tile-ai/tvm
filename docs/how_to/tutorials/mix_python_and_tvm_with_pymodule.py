@@ -14,7 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# ruff: noqa: E402
 
 """
 .. _mix_python_and_tvm:
@@ -86,7 +85,7 @@ if RUN_EXAMPLE:
 
     @I.ir_module
     class MyFirstModule(BasePyModule):
-        @T.prim_func
+        @T.prim_func(s_tir=True)
         def add_tir(
             A: T.Buffer((4,), "float32"),
             B: T.Buffer((4,), "float32"),
@@ -134,7 +133,7 @@ if RUN_EXAMPLE:
 
     @I.ir_module
     class DebugModule(BasePyModule):
-        @T.prim_func
+        @T.prim_func(s_tir=True)
         def matmul_tir(var_A: T.handle, var_B: T.handle, var_C: T.handle):
             n = T.int32()
             A = T.match_buffer(var_A, (n, 4), "float32")
@@ -163,8 +162,10 @@ if RUN_EXAMPLE:
             logits = self._convert_tvm_to_pytorch(out)
 
             # Inspect intermediate value — impossible with a compiled-only workflow
-            print(f"  [DEBUG] logits shape: {logits.shape}, "
-                  f"min: {logits.min():.4f}, max: {logits.max():.4f}")
+            print(
+                f"  [DEBUG] logits shape: {logits.shape}, "
+                f"min: {logits.min():.4f}, max: {logits.max():.4f}"
+            )
 
             result = F.softmax(logits, dim=-1)
 
@@ -198,12 +199,10 @@ if RUN_EXAMPLE:
 # — for example, CUBLAS or cuDNN bindings that TVM wraps as packed functions.
 
 if RUN_EXAMPLE:
-
     # Register a packed function (simulating an external library binding)
     @tvm.register_global_func("my_bias_add", override=True)
     def my_bias_add(x, bias, out):
         """Packed function: adds bias to each row of x."""
-        import numpy as np
 
         x_np = x.numpy()
         b_np = bias.numpy()
@@ -212,7 +211,7 @@ if RUN_EXAMPLE:
 
     @I.ir_module
     class PipelineModule(BasePyModule):
-        @T.prim_func
+        @T.prim_func(s_tir=True)
         def matmul_tir(var_A: T.handle, var_B: T.handle, var_C: T.handle):
             A = T.match_buffer(var_A, (2, 4), "float32")
             B = T.match_buffer(var_B, (4, 3), "float32")
@@ -230,14 +229,16 @@ if RUN_EXAMPLE:
             x_tvm = self._convert_pytorch_to_tvm(x)
             w_tvm = self._convert_pytorch_to_tvm(weights)
             h = self.call_tir(
-                self.matmul_tir, [x_tvm, w_tvm],
+                self.matmul_tir,
+                [x_tvm, w_tvm],
                 out_sinfo=R.Tensor((2, 3), "float32"),
             )
             h_pt = self._convert_tvm_to_pytorch(h)
 
             # 2. Packed function for bias add (simulating an external library)
             h_biased = self.call_dps_packed(
-                "my_bias_add", [h_pt, bias],
+                "my_bias_add",
+                [h_pt, bias],
                 out_sinfo=R.Tensor((2, 3), "float32"),
             )
 
@@ -274,7 +275,7 @@ if RUN_EXAMPLE:
     # A simple Relax module: matmul + bias + relu (a dense layer)
     @I.ir_module
     class DenseLayer:
-        @T.prim_func
+        @T.prim_func(s_tir=True)
         def bias_add_tir(var_x: T.handle, var_b: T.handle, var_out: T.handle):
             x = T.match_buffer(var_x, (2, 4), "float32")
             b = T.match_buffer(var_b, (4,), "float32")
@@ -291,7 +292,8 @@ if RUN_EXAMPLE:
             h = R.matmul(x, w)
             cls = DenseLayer
             h_bias = R.call_tir(
-                cls.bias_add_tir, (h, b),
+                cls.bias_add_tir,
+                (h, b),
                 out_sinfo=R.Tensor((2, 4), "float32"),
             )
             return R.nn.relu(h_bias)
@@ -324,8 +326,7 @@ if RUN_EXAMPLE:
 
     print("\nAfter CanonicalizeBindings pass:")
     print("  Converted result:", py_result_late)
-    print("  Still matches:   ",
-          torch.allclose(py_result_late, expected, atol=1e-5))
+    print("  Still matches:   ", torch.allclose(py_result_late, expected, atol=1e-5))
     assert torch.allclose(py_result_late, expected, atol=1e-5)
 
 
@@ -363,12 +364,8 @@ if RUN_EXAMPLE:
             x: R.Tensor((4, 8), "float32"),
         ) -> R.Tensor((4, 8), "float32"):
             # The VM calls back into Python for these two ops
-            h = R.call_py_func(
-                "layer_norm", (x,), out_sinfo=R.Tensor((4, 8), "float32")
-            )
-            out = R.call_py_func(
-                "silu", (h,), out_sinfo=R.Tensor((4, 8), "float32")
-            )
+            h = R.call_py_func("layer_norm", (x,), out_sinfo=R.Tensor((4, 8), "float32"))
+            out = R.call_py_func("silu", (h,), out_sinfo=R.Tensor((4, 8), "float32"))
             return out
 
     mod = HybridVMModule(device=tvm.cpu(0))
@@ -390,7 +387,7 @@ if RUN_EXAMPLE:
 # ``BasePyModule`` is designed for **cross-level interoperability**: Python functions can call
 # TIR and Relax functions, and Relax functions can call Python functions. We have already seen:
 #
-# - Python → TIR via ``call_tir`` (Steps 1–3)
+# - Python → TIR via ``call_tir`` (Steps 1-3)
 # - Python → packed function via ``call_dps_packed`` (Step 3)
 # - Relax → Python via ``R.call_py_func`` (Step 5)
 #
@@ -406,7 +403,7 @@ if RUN_EXAMPLE:
 
     @I.ir_module
     class DynamicModule(BasePyModule):
-        @T.prim_func
+        @T.prim_func(s_tir=True)
         def scale_tir(var_x: T.handle, var_out: T.handle):
             n = T.int64()
             x = T.match_buffer(var_x, (n,), "float32")
@@ -441,9 +438,7 @@ if RUN_EXAMPLE:
     # Python → TIR with symbolic output shape
     n = T.int64()
     x7 = torch.randn(7)
-    scaled = mod.call_tir(
-        "scale_tir", [x7], relax.TensorStructInfo((n,), "float32")
-    )
+    scaled = mod.call_tir("scale_tir", [x7], relax.TensorStructInfo((n,), "float32"))
     print("scale_tir(len=7):", scaled)
     assert torch.allclose(torch.tensor(scaled.numpy()), x7 * 2.0, atol=1e-5)
 

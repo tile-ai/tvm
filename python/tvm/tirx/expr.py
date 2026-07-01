@@ -259,6 +259,9 @@ class EqualOp(ObjectConvertible, ExprOp):
         """Convert object."""
         return _ffi_api._OpEQ(self.a, self.b, self.span)  # type: ignore
 
+    def __repr__(self) -> str:
+        return f"EqualOp({self.a!r}, {self.b!r})"
+
 
 class NotEqualOp(ObjectConvertible, ExprOp):
     """Deferred NE operator.
@@ -295,6 +298,9 @@ class NotEqualOp(ObjectConvertible, ExprOp):
     def asobject(self) -> PrimExpr:
         """Convert object."""
         return _ffi_api._OpNE(self.a, self.b, self.span)  # type: ignore
+
+    def __repr__(self) -> str:
+        return f"NotEqualOp({self.a!r}, {self.b!r})"
 
 
 class IntImmEnum(ObjectConvertible):
@@ -1301,22 +1307,23 @@ class Call(PrimExprWithOp):
     args : list of Expr
         The input arguments to the call
 
-    annotations : Optional[Dict[str, Object]]
-        Additional annotations about the call.
-
     span : Optional[Span]
         The location of this expression in the source code.
+
+    attrs : Optional[tvm.ir.Attrs or dict]
+        Attributes attached to the call.
     """
 
     op: Op
     args: list[PrimExpr]
+    attrs: ir.Attrs | None
 
     def __init__(
         self,
         dtype: str,
         op: Op | str,
         args: list[PrimExpr],
-        annotations: dict | None = None,
+        attrs: ir.Attrs | dict | None = None,
         span: Span | None = None,
     ) -> None:
         if isinstance(op, str):
@@ -1330,7 +1337,14 @@ class Call(PrimExprWithOp):
                     % op
                 )
             op = Op.get(op)
-        self.__init_handle_by_constructor__(_ffi_api.Call, dtype, op, args, annotations, span)  # type: ignore
+        if isinstance(attrs, dict):
+            attrs = ir.make_node("ir.DictAttrs", **attrs)
+        if attrs:
+            self.__init_handle_by_constructor__(  # type: ignore
+                _ffi_api.CallWithAttrs, dtype, op, args, attrs, span
+            )
+        else:
+            self.__init_handle_by_constructor__(_ffi_api.Call, dtype, op, args, span)  # type: ignore
 
 
 @tvm_ffi.register_object("tirx.Let")

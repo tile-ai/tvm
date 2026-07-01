@@ -45,8 +45,8 @@ class ThreadAllreduceBuilder final : public StmtExprMutator {
  public:
   explicit ThreadAllreduceBuilder(const TargetNode* target)
       : target_(target),
-        warp_size_(target->GetAttr<Integer>("thread_warp_size", 1).value().IntValue()),
-        max_num_threads_(target->GetAttr<Integer>("max_num_threads", -1).value().IntValue()) {}
+        warp_size_(target->GetAttr<int64_t>("thread_warp_size", 1).value()),
+        max_num_threads_(target->GetAttr<int64_t>("max_num_threads", -1).value()) {}
 
   Stmt VisitStmt_(const AttrStmtNode* op) final {
     if (op->attr_key == tirx::attr::thread_extent) {
@@ -102,7 +102,7 @@ class ThreadAllreduceBuilder final : public StmtExprMutator {
     cow->buffer = replacement;
     if (replacement.scope() == "shared") {
       auto annotations = cow->annotations;
-      annotations.Set(tirx::attr::kVolatile, Bool(true));
+      annotations.Set(tirx::attr::kVolatile, true);
       cow->annotations = annotations;
     }
     return node;
@@ -309,7 +309,7 @@ class ThreadAllreduceBuilder final : public StmtExprMutator {
     if (IsWarpReduction(types, group_extent, reduce_extent, contiguous_reduce_extent)) {
       std::vector<PrimExpr> reduce_results;
       DataType mask_dtype = DataType::UInt(32);
-      PrimExpr mask = Call(mask_dtype, builtin::tvm_warp_activemask(), {}, call->annotations);
+      PrimExpr mask = Call(mask_dtype, builtin::tvm_warp_activemask(), {}, call->attrs);
 
       if (reduce_extent <= warp_size_) {
         std::tie(reduce_results, new_alloc_bufs) =
@@ -710,7 +710,7 @@ class ThreadAllreduceBuilder final : public StmtExprMutator {
   // The local buffer index.
   PrimExpr BufIndex(PrimExpr reduce_index, PrimExpr group_index, int reduce_extent) {
     if (!is_zero(group_index)) {
-      return analyzer_.Simplify(group_index * reduce_extent + reduce_index);
+      return analyzer_->Simplify(group_index * reduce_extent + reduce_index);
     } else {
       return reduce_index;
     }
@@ -864,7 +864,7 @@ class DeferredRemapper : public StmtExprMutator {
         cow->buffer = replacement;
         if (replacement.scope() == "shared") {
           auto annotations = cow->annotations;
-          annotations.Set(tirx::attr::kVolatile, Bool(true));
+          annotations.Set(tirx::attr::kVolatile, true);
           cow->annotations = annotations;
         }
       }

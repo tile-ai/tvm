@@ -356,7 +356,7 @@ ffi::Array<BufferRegion> BlockReadWriteDetector::CollectRegions(
       // Try to prove single point access, fallback to cover range if analysis fails
       // (e.g., due to divide-by-zero in symbolic simplification)
       try {
-        if (range.CanProveSinglePoint(&ana_)) {
+        if (range.CanProveSinglePoint(ana_)) {
           PrimExpr min = range.min();
           region.push_back(Range::FromMinExtent(min, make_const(min.dtype(), 1)));
         } else {

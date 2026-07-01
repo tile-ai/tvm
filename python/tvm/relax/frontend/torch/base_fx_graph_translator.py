@@ -22,10 +22,12 @@
 
 import abc
 import math
+import operator
 from collections.abc import Callable
 from functools import reduce
 
-import tvm
+import tvm_ffi
+
 from tvm import relax, tirx
 
 
@@ -389,6 +391,14 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
         dim = node.args[1] if len(node.args) > 1 else node.kwargs.get("dim", -1)
         return self.block_builder.emit(relax.op.nn.log_softmax(x, dim))
 
+    def _logical_not(self, node: fx.Node) -> relax.Var:
+        x = self.env[node.args[0]]
+        # torch.logical_not accepts any dtype (treating nonzero as True) and returns bool, but
+        # relax.op.logical_not requires a boolean input, so cast non-bool inputs to bool first.
+        if x.struct_info.dtype != "bool":
+            x = self.block_builder.emit(relax.op.astype(x, "bool"))
+        return self.block_builder.emit(relax.op.logical_not(x))
+
     def _prelu(self, node: fx.Node) -> relax.Var:
         x = self.env[node.args[0]]
         alpha = self.env[node.args[1]]
@@ -514,6 +524,27 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
             return intrinsic_op(lhs, rhs)
 
         return convert
+
+    def _pow(self, node: fx.Node) -> relax.Var:
+        lhs, rhs = self.retrieve_args(node)
+        # torch integer pow returns an integer tensor, but relax.op.power legalizes to
+        # TOPI power which requires floating-point inputs. Decompose an integer base with
+        # a constant non-negative integer exponent into repeated multiplication instead.
+        if (
+            isinstance(lhs, relax.Expr)
+            and isinstance(lhs.struct_info, relax.TensorStructInfo)
+            and "int" in lhs.struct_info.dtype
+            and isinstance(rhs, int)
+            and not isinstance(rhs, bool)
+            and rhs >= 0
+        ):
+            if rhs == 0:
+                return self.block_builder.emit(relax.op.ones_like(lhs))
+            result = lhs
+            for _ in range(rhs - 1):
+                result = self.block_builder.emit(relax.op.multiply(result, lhs))
+            return result
+        return self._binary_op(relax.op.power, operator.pow)(node)
 
     def _div(self, node: fx.Node) -> relax.Var:
         args = self.retrieve_args(node)
@@ -1645,11 +1676,71 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
         return self.block_builder.emit(relax.op.sum(x, dim, keepdims=keepdim))
 
     def _var(self, node: fx.Node) -> relax.Var:
+        # `aten.var.correction` (and decomposed `aten.std.*`) carries an
+        # optional `correction` kwarg whose `None` default means 1 (Bessel).
+        # Legacy fx `tensor.var(...)` calls go through the original path
+        # below to keep this fix narrowly scoped.
+        target = node.target
+        if (
+            getattr(target, "_overloadname", None) == "correction"
+            or getattr(target, "overload_name", None) == "correction"
+        ):
+            return self._var_correction(node)
         args = self.retrieve_args(node)
         x = args[0]
         dim = args[1] if len(node.args) > 1 else node.kwargs.get("dim", None)
         keepdim = args[2] if len(node.args) > 2 else node.kwargs.get("keepdim", False)
         return self.block_builder.emit(relax.op.variance(x, dim, keepdims=keepdim))
+
+    def _var_correction(self, node: fx.Node) -> relax.Var:
+        args = self.retrieve_args(node)
+        x = args[0]
+        dim = args[1] if len(node.args) > 1 else node.kwargs.get("dim", None)
+        keepdim = node.kwargs.get("keepdim", False)
+        correction = node.kwargs.get("correction", None)
+        if correction is None:
+            correction = 1
+        var = self.block_builder.emit(relax.op.variance(x, dim, keepdims=keepdim))
+        if correction == 0:
+            return var
+        n = self._reduction_size(x, dim)
+        if n is None:
+            raise NotImplementedError(
+                "var/std with non-zero correction requires statically known reduction-axis sizes."
+            )
+        # PyTorch returns NaN (with a warning) when `n - correction <= 0`;
+        # mirror that semantics rather than failing the import.
+        if n - correction <= 0:
+            scale = float("nan")
+        else:
+            scale = float(n) / float(n - correction)
+        return self.block_builder.emit(
+            relax.op.multiply(var, relax.const(scale, x.struct_info.dtype))
+        )
+
+    @staticmethod
+    def _reduction_size(x: relax.Expr, dim) -> int | None:
+        """Static product of reduced-axis sizes; None if any axis is dynamic."""
+        shape = x.struct_info.shape
+        if shape is None:
+            return None
+        rank = len(shape)
+        if dim is None:
+            axes = list(range(rank))
+        elif isinstance(dim, int):
+            axes = [dim]
+        elif isinstance(dim, list | tuple) and all(isinstance(a, int) for a in dim):
+            axes = list(dim)
+        else:
+            return None
+        n = 1
+        for ax in axes:
+            ax = ax + rank if ax < 0 else ax
+            s = shape[ax]
+            if not isinstance(s, tirx.IntImm):
+                return None
+            n *= int(s.value)
+        return n
 
     def _any(self, node: fx.Node) -> relax.Var:
         args = self.retrieve_args(node)
@@ -1802,11 +1893,15 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
     def _flip(self, node: fx.Node) -> relax.Var:
         x = self.env[node.args[0]]
         dims = node.args[1] if len(node.args) > 1 else node.kwargs.get("dims", None)
-        if isinstance(dims, list | tuple) and len(dims) > 0:
-            dims = dims[0]
-        elif not isinstance(dims, int):
-            raise TypeError(f"flip expects an integer axis, but got {type(dims)}: {dims}")
-        return self.block_builder.emit(relax.op.flip(x, dims))
+        if isinstance(dims, int):
+            dims = [dims]
+        elif not isinstance(dims, list | tuple):
+            raise TypeError(f"flip expects an int or list of ints, but got {type(dims)}: {dims}")
+        # relax.op.flip is single-axis; iterate to honor multi-axis torch.flip semantics.
+        out = x
+        for d in dims:
+            out = self.block_builder.emit(relax.op.flip(out, d))
+        return out
 
     def _gather(self, node: fx.Node) -> relax.Var:
         x = self.env[node.args[0]]
@@ -1857,7 +1952,25 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
                 indices = relax.Tuple(processed_indices)
             else:
                 indices = relax.Tuple(indices)
-        return self.block_builder.emit(relax.op.index_put(tensor, indices, values, accumulate))
+
+        output = self.block_builder.emit(relax.op.index_put(tensor, indices, values, accumulate))
+
+        target_name = (
+            node.target if isinstance(node.target, str) else getattr(node.target, "__name__", "")
+        )
+        if target_name.startswith("index_put_") and len(node.args) > 0:
+            from torch import fx
+
+            if isinstance(node.args[0], fx.Node):
+                # `index_put_` is in-place. If the mutated input is an alias of another
+                # FX node, later reads via either the alias node or the original node
+                # must oberve the updated tensor.
+                aliased_expr = tensor
+                for env_node, env_expr in list(self.env.items()):
+                    if env_expr is aliased_expr:
+                        self.env[env_node] = output
+
+        return output
 
     def _index_tensor(self, node: fx.Node) -> relax.Var:
         args = self.retrieve_args(node)
@@ -2425,7 +2538,7 @@ class BaseFXGraphImporter(metaclass=abc.ABCMeta):
 
         data_shape = self.shape_of(data)
         mask_shape = self.shape_of(mask)
-        shapes_equal = tvm.ir.structural_equal(data_shape, mask_shape)
+        shapes_equal = tvm_ffi.structural_equal(data_shape, mask_shape)
 
         if not shapes_equal:
             mask = self.block_builder.emit(relax.op.broadcast_to(mask, data_shape))

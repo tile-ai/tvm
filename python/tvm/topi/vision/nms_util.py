@@ -308,7 +308,7 @@ def _all_class_nms_ir(
         if selected_scores is not None:
             selected_scores = T.buffer_proxy(selected_scores)
 
-        if isinstance(iou_threshold, (float, int)):
+        if isinstance(iou_threshold, float | int):
             iou_threshold = tvm.tirx.FloatImm("float32", float(iou_threshold))
         elif isinstance(iou_threshold, te.Tensor):
             if len(iou_threshold.shape) == 0:
@@ -423,10 +423,10 @@ def run_all_class_nms(
 
     if return_scores is False:
         all_class_num0_buf = tvm.tirx.decl_buffer(
-            (batch_class, num_boxes), "int32", "all_class_nms0", data_alignment=8
+            (batch_class, num_boxes), "int32", "all_class_nms0", data_alignment=8, layout=None
         )
         all_class_num1_buf = tvm.tirx.decl_buffer(
-            (batch_class,), "int32", "all_class_nms1", data_alignment=8
+            (batch_class,), "int32", "all_class_nms1", data_alignment=8, layout=None
         )
         extern_inputs = [boxes, sorted_scores, sorted_indices, valid_count]
         if score_threshold is not None:

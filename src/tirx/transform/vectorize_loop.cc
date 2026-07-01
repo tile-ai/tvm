@@ -26,6 +26,7 @@
 #include <tvm/ffi/extra/structural_equal.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/tirx/analysis.h>
 #include <tvm/tirx/builtin.h>
 #include <tvm/tirx/expr.h>
@@ -33,18 +34,37 @@
 #include <tvm/tirx/op_attr_types.h>
 #include <tvm/tirx/stmt_functor.h>
 #include <tvm/tirx/transform.h>
-#include <tvm/runtime/logging.h>
 
 #include <unordered_map>
 #include <vector>
 
-#include "../../src/arith/scalable_expression.h"
 #include "../../tirx/analysis/check_contains.h"
 #include "tvm/runtime/data_type.h"
 #include "tvm/tirx/buffer.h"
 
 namespace tvm {
 namespace tirx {
+
+namespace {
+// File-local helper: true if `expr` is a call to tirx::builtin::vscale().
+bool IsVScaleCall(const PrimExpr& expr) {
+  if (const auto* call = expr.as<CallNode>()) {
+    return call->op.same_as(builtin::vscale());
+  }
+  return false;
+}
+
+// File-local helper: true if the target supports Variable-Length Array extensions
+// (AArch64 SVE or RISC-V V).
+bool TargetHasVLA(Target target) {
+  if (!target.defined()) return false;
+  bool has_vla = target->GetAttr<bool>("feature.has_sve").value_or(false);
+  static auto target_has_feature_fn =
+      tvm::ffi::Function::GetGlobalRequired("target.target_has_feature");
+  has_vla |= target_has_feature_fn("v", target).cast<bool>();
+  return has_vla;
+}
+}  // namespace
 
 inline PrimExpr CreateNewLanes(bool is_scalable, int lanes_or_vscale_factor) {
   if (is_scalable) {
@@ -79,14 +99,14 @@ inline PrimExpr BroadcastTo(PrimExpr e, int lanes, bool is_scalable) {
 
 bool EnableBufferLevelPredication(Target target) {
   transform::PassContext pass_ctx = transform::PassContext::Current();
-  ffi::Optional<Bool> enable_buffer_predication =
-      pass_ctx->GetConfig<Bool>("tirx.enable_buffer_level_predication");
-  if (enable_buffer_predication.defined()) {
+  ffi::Optional<bool> enable_buffer_predication =
+      pass_ctx->GetConfig<bool>("tirx.enable_buffer_level_predication");
+  if (enable_buffer_predication.has_value()) {
     return enable_buffer_predication.value();
   }
 
   // Use buffer-level predication by default for VLA targets
-  return arith::TargetHasVLA(target);
+  return TargetHasVLA(target);
 }
 
 /*!
@@ -238,7 +258,7 @@ class VecAllocAccess : public StmtExprMutator {
       // var_lanes_.  Typically, this will be a 1-d index into a flat
       // memory space.
       ffi::Array<PrimExpr> shape = node->buffer->shape;
-      shape.Set(shape.size() - 1, analyzer_.Simplify(shape[shape.size() - 1] * var_lanes_));
+      shape.Set(shape.size() - 1, analyzer_->Simplify(shape[shape.size() - 1] * var_lanes_));
 
       // TODO(Lunderberg): Move this pass to be prior to
       // FlattenBuffer, implement by appending a
@@ -253,7 +273,7 @@ class VecAllocAccess : public StmtExprMutator {
         if (i != strides.size() - 1) {
           stride *= var_lanes_;
         }
-        strides.push_back(analyzer_.Simplify(stride));
+        strides.push_back(analyzer_->Simplify(stride));
       }
 
       // Copy everything into the new buffer.
@@ -268,7 +288,7 @@ class VecAllocAccess : public StmtExprMutator {
     // variable.
     ffi::Array<PrimExpr> indices = node->indices;
     indices.Set(indices.size() - 1,
-                analyzer_.Simplify(indices[indices.size() - 1] * var_lanes_ + var_));
+                analyzer_->Simplify(indices[indices.size() - 1] * var_lanes_ + var_));
 
     auto writer = node.CopyOnWrite();
     writer->buffer = buf;
@@ -338,11 +358,11 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       if (is_vec_a || is_vec_b) {
         const RampNode* b_ramp = b.as<RampNode>();
         const RampNode* a_ramp = a.as<RampNode>();
-        if (a_ramp && b.dtype().is_scalar() && analyzer_.CanProve(b > 0)) {
+        if (a_ramp && b.dtype().is_scalar() && analyzer_->CanProve(b > 0)) {
           PrimExpr lanes = a_ramp->lanes;
           return Ramp(a_ramp->base * b, a_ramp->stride * b, lanes);
         }
-        if (b_ramp && a.dtype().is_scalar() && analyzer_.CanProve(a > 0)) {
+        if (b_ramp && a.dtype().is_scalar() && analyzer_->CanProve(a > 0)) {
           PrimExpr lanes = b_ramp->lanes;
           return Ramp(b_ramp->base * a, b_ramp->stride * a, lanes);
         }
@@ -392,8 +412,8 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       const RampNode* base_ramp = base.as<RampNode>();
       int op_lanes = static_cast<int>(Downcast<IntImm>(op->lanes)->value);
       int base_ramp_lanes = static_cast<int>(Downcast<IntImm>(base_ramp->lanes)->value);
-      if (analyzer_.CanProve(base_ramp->stride ==
-                             stride * make_const(stride.dtype(), base_ramp_lanes))) {
+      if (analyzer_->CanProve(base_ramp->stride ==
+                              stride * make_const(stride.dtype(), base_ramp_lanes))) {
         return Ramp(base_ramp->base, stride, op_lanes * base_ramp_lanes);
       }
     }
@@ -491,9 +511,10 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       t = BroadcastTo(t, lanes, is_scalable);
       f = BroadcastTo(f, lanes, is_scalable);
       if (is_scalable) {
-        return Call(op->dtype.with_scalable_vscale_factor(lanes), op->op, {cond, t, f}, op->annotations);
+        return Call(op->dtype.with_scalable_vscale_factor(lanes), op->op, {cond, t, f}, op->attrs,
+                    op->span);
       } else {
-        return Call(op->dtype.with_lanes(lanes), op->op, {cond, t, f}, op->annotations);
+        return Call(op->dtype.with_lanes(lanes), op->op, {cond, t, f}, op->attrs, op->span);
       }
     }
   }
@@ -506,13 +527,14 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
     } else {
       int lanes = value.dtype().get_lanes_or_vscale_factor();
       if (value.dtype().is_scalable_vector()) {
-        return Call(op->dtype.with_scalable_vscale_factor(lanes), op->op, {value}, op->annotations);
+        return Call(op->dtype.with_scalable_vscale_factor(lanes), op->op, {value}, op->attrs,
+                    op->span);
       } else {
         int new_lanes = (op->dtype != DataType::Float4E2M1FN() &&
                          op->args[0].dtype() != DataType::Float4E2M1FN())
                             ? (value.dtype().bits() * value.dtype().lanes()) / op->dtype.bits()
                             : value.dtype().lanes();
-        return Call(op->dtype.with_lanes(new_lanes), op->op, {value}, op->annotations);
+        return Call(op->dtype.with_lanes(new_lanes), op->op, {value}, op->attrs, op->span);
       }
     }
   }
@@ -534,7 +556,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       auto new_args = op->args;
       new_args.pop_back();
       new_args.push_back(fcd[0]);
-      return Call(op->dtype.with_lanes(lane), op->op, new_args);
+      return Call(op->dtype.with_lanes(lane), op->op, new_args, op->attrs, op->span);
     } else if (op->op.same_as(builtin::texture2d_store())) {
       int lane = 0;
       // Vectorize the value to store
@@ -549,7 +571,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
           << "Expected Data to be Written equal to Texture Store length";
       ffi::Array<PrimExpr> new_args{op->args[0], op->args[1], op->args[2],
                                     op->args[3], op->args[4], mutated_value[0]};
-      return Call(op->dtype.with_lanes(lane), op->op, new_args);
+      return Call(op->dtype.with_lanes(lane), op->op, new_args, op->attrs, op->span);
     } else if (op->op.same_as(builtin::reinterpret())) {
       return MutateReinterpretExpr_(op);
     }
@@ -571,7 +593,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       if (op->args.same_as(new_args)) {
         return ffi::GetRef<PrimExpr>(op);
       } else {
-        return Call(op->dtype, op->op, new_args, op->annotations);
+        return Call(op->dtype, op->op, new_args, op->attrs, op->span);
       }
     } else {
       int lane = 0;
@@ -597,7 +619,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       if (op->args.same_as(new_args)) {
         return ffi::GetRef<PrimExpr>(op);
       } else {
-        return Call(op->dtype.with_lanes(lane), op->op, new_args, op->annotations);
+        return Call(op->dtype.with_lanes(lane), op->op, new_args, op->attrs, op->span);
       }
     }
   }
@@ -841,7 +863,7 @@ class Vectorizer : public StmtMutator, public ExprFunctor<PrimExpr(const PrimExp
       if (value.same_as(op->value)) {
         return ffi::GetRef<Stmt>(op);
       } else {
-        return Bind(op->var, value);
+        return Bind(op->var, value, op->span);
       }
     }
   }
@@ -954,8 +976,8 @@ class LoopVectorizer : public StmtMutator {
       auto* extent_as_int = op->extent.as<IntImmNode>();
 
       if (!extent_as_int || extent_as_int->value < 1) {
-        bool is_scalable_expr = CheckContains::ExprContains(op->extent, arith::IsVScaleCall);
-        TVM_FFI_ICHECK(is_scalable_expr && arith::TargetHasVLA(target_))
+        bool is_scalable_expr = CheckContains::ExprContains(op->extent, IsVScaleCall);
+        TVM_FFI_ICHECK(is_scalable_expr && TargetHasVLA(target_))
             << "Failed to vectorize loop with extent " << op->extent << " for target " << target_;
       }
       TVM_FFI_ICHECK(is_zero(op->min));

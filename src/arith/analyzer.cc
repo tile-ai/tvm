@@ -29,14 +29,29 @@
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/op.h>
 
-#include "./scalable_expression.h"
+#include "../tirx/analysis/check_contains.h"
 #include "const_fold.h"
 #include "product_normal_form.h"
 
 namespace tvm {
 namespace arith {
 
-Analyzer::Analyzer()
+namespace {
+
+bool IsVScaleCall(const PrimExpr& expr) {
+  if (const auto* call = expr.as<tirx::CallNode>()) {
+    return call->op.same_as(tirx::builtin::vscale());
+  }
+  return false;
+}
+
+bool ContainsVscaleCall(const PrimExpr& expr) {
+  return tirx::CheckContains::ExprContains(expr, IsVScaleCall);
+}
+
+}  // namespace
+
+AnalyzerObj::AnalyzerObj()
     : const_int_bound(this),
       modular_set(this),
       rewrite_simplify(this),
@@ -44,8 +59,8 @@ Analyzer::Analyzer()
       int_set(this),
       z3_prover(this) {}
 
-std::unique_ptr<Analyzer> Analyzer::Clone() const {
-  auto cloned = std::make_unique<Analyzer>();
+Analyzer AnalyzerObj::Clone() const {
+  Analyzer cloned;
   // Copy per-sub-analyzer states
   cloned->const_int_bound.CopyFrom(this->const_int_bound);
   cloned->modular_set.CopyFrom(this->modular_set);
@@ -57,7 +72,7 @@ std::unique_ptr<Analyzer> Analyzer::Clone() const {
   return cloned;
 }
 
-void Analyzer::Bind(const Var& var, const PrimExpr& expr, bool allow_override) {
+void AnalyzerObj::Bind(const Var& var, const PrimExpr& expr, bool allow_override) {
   PrimExpr new_expr = expr;
   new_expr = this->canonical_simplify(new_expr);
   new_expr = this->rewrite_simplify(new_expr);
@@ -71,7 +86,7 @@ void Analyzer::Bind(const Var& var, const PrimExpr& expr, bool allow_override) {
   this->z3_prover.Bind(var, expr, allow_override);
 }
 
-void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
+void AnalyzerObj::Bind(const Var& var, const Range& range, bool allow_override) {
   TVM_FFI_ICHECK(range.defined());
   if (tirx::is_one(range->extent)) {
     this->Bind(var, range->min, allow_override);
@@ -85,7 +100,7 @@ void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
   // skip rewrite simplify
 }
 
-void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
+void AnalyzerObj::MarkGlobalNonNegValue(const PrimExpr& value) {
   // decompose value as symbol * scale + offset
   int64_t offset = 0;
   PrimExpr symbol_scale = tirx::make_const(value.dtype(), 0);
@@ -135,7 +150,7 @@ void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
   }
 }
 
-void Analyzer::Bind(const ffi::Map<Var, Range>& variables, bool allow_override) {
+void AnalyzerObj::Bind(const ffi::Map<Var, Range>& variables, bool allow_override) {
   for (const auto& iter : variables) {
     this->Bind(iter.first, iter.second, allow_override);
   }
@@ -162,7 +177,7 @@ void ConstraintContext::ExitWithScope() {
   }
 }
 
-bool Analyzer::CanProveGreaterEqual(const PrimExpr& expr, int64_t lower_bound) {
+bool AnalyzerObj::CanProveGreaterEqual(const PrimExpr& expr, int64_t lower_bound) {
   if (const auto* ptr = expr.as<tirx::IntImmNode>()) {
     return ptr->value >= lower_bound;
   }
@@ -171,7 +186,7 @@ bool Analyzer::CanProveGreaterEqual(const PrimExpr& expr, int64_t lower_bound) {
   return false;
 }
 
-bool Analyzer::CanProveLess(const PrimExpr& expr, int64_t upper_bound) {
+bool AnalyzerObj::CanProveLess(const PrimExpr& expr, int64_t upper_bound) {
   if (const auto* ptr = expr.as<tirx::IntImmNode>()) {
     return ptr->value < upper_bound;
   }
@@ -180,7 +195,7 @@ bool Analyzer::CanProveLess(const PrimExpr& expr, int64_t upper_bound) {
   return false;
 }
 
-bool Analyzer::CanProveEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
+bool AnalyzerObj::CanProveEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
   const auto* clhs = lhs.as<IntImmNode>();
   const auto* crhs = rhs.as<IntImmNode>();
   if (clhs && crhs) return clhs->value == crhs->value;
@@ -190,7 +205,8 @@ bool Analyzer::CanProveEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
   return CanProve(lhs - rhs == 0);
 }
 
-bool Analyzer::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs, const PrimExpr& shape) {
+bool AnalyzerObj::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs,
+                                                          const PrimExpr& shape) {
   if (this->CanProve(lhs <= shape, ProofStrength::kSymbolicBound)) return true;
   // no need to do further attempt if shape is already a constant.
   if (tirx::is_const_int(shape)) return false;
@@ -208,7 +224,7 @@ bool Analyzer::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs, cons
   return false;
 }
 
-bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
+bool AnalyzerObj::CanProve(const PrimExpr& expr, ProofStrength strength) {
   // Avoid potentially expensive simplification unless required.
   if (const auto* ptr = expr.as<IntImmNode>()) {
     return ptr->value != 0;
@@ -327,26 +343,7 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
     }
   }
 
-  // Current analysis may not be powerful enough to prove expressions containing
-  // the same symbolic value multiple times. However, when the symbolic values are
-  // "T.vscale" and the compile target uses a scalable architecture extension like
-  // VLA, we can make some assumptions about the value of vscale and iterate over a
-  // space of pre-defined values to attempt to prove the expression.
-  Target curr_target = Target::Current();
-  if (ContainsVscaleCall(simplified)) {
-    if (TargetHasVLA(curr_target)) {
-      auto kVScaleValues = GetVScaleValues(curr_target);
-      if(CanProveVscaleExpressionFromKnownValues(this, simplified, kVScaleValues)) {
-        return true;
-      }
-    }
-    // LOG(WARNING)
-    //     << "The expression contains scalable values. An attempt to prove by substituting "
-    //        "with known values of vscale was not performed. This proof currently only supports "
-    //        "VLA targets, but the target was "
-    //     << curr_target;
-  }
-  if(z3_prover.CanProve(simplified)) {
+  if (!ContainsVscaleCall(simplified) && z3_prover.CanProve(simplified)) {
     // auto msg = z3_prover.GetSMTLIB2(simplified);
     // std::stringstream ss;
     // ss << msg;
@@ -374,7 +371,7 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
   return false;
 }
 
-PrimExpr Analyzer::Simplify(const PrimExpr& expr, int steps) {
+PrimExpr AnalyzerObj::Simplify(const PrimExpr& expr, int steps) {
   PrimExpr res = expr;
 
   // Always starts with a canonical simplification, as some structural property
@@ -395,7 +392,7 @@ PrimExpr Analyzer::Simplify(const PrimExpr& expr, int steps) {
   return res;
 }
 
-std::function<void()> Analyzer::EnterConstraint(const PrimExpr& constraint, bool is_assume) {
+std::function<void()> AnalyzerObj::EnterConstraint(const PrimExpr& constraint, bool is_assume) {
   // Entering the scope.
   std::vector<std::function<void()>> recovery_functions;
   recovery_functions.push_back(this->const_int_bound.EnterConstraint(constraint));
@@ -403,7 +400,7 @@ std::function<void()> Analyzer::EnterConstraint(const PrimExpr& constraint, bool
   recovery_functions.push_back(this->rewrite_simplify.EnterConstraint(constraint, is_assume));
   recovery_functions.push_back(this->int_set.EnterConstraint(constraint));
   recovery_functions.push_back(this->transitive_comparisons.EnterConstraint(constraint));
-  recovery_functions.push_back(this->z3_prover.EnterConstraint(constraint));
+  recovery_functions.push_back(this->z3_prover.EnterConstraint(constraint, is_assume));
 
   return [recovery_functions]() mutable {
     // Exiting the scope.
@@ -417,130 +414,107 @@ std::function<void()> Analyzer::EnterConstraint(const PrimExpr& constraint, bool
   };
 }
 
-namespace {
-using FnFactory = tvm::ffi::TypedFunction<tvm::ffi::Function(std::string)>;
-static FnFactory BuildAnalyzerFactory(std::shared_ptr<tvm::arith::Analyzer> self) {
-  using tvm::ffi::Function;
-  return FnFactory([self](std::string name) -> Function {
-    if (name == "const_int_bound") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->const_int_bound(args[0].cast<PrimExpr>());
-      });
-    } else if (name == "modular_set") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->modular_set(args[0].cast<PrimExpr>());
-      });
-    } else if (name == "clone") {
-      return Function([self](tvm::ffi::PackedArgs, tvm::ffi::Any* ret) {
-        auto cloned_unique = self->Clone();
-        auto cloned = std::shared_ptr<Analyzer>(cloned_unique.release());
-        *ret = BuildAnalyzerFactory(cloned);
-      });
-    } else if (name == "const_int_bound_update") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        self->const_int_bound.Update(args[0].cast<Var>(), args[1].cast<ConstIntBound>(),
-                                     args[2].cast<bool>());
-      });
-    } else if (name == "const_int_bound_is_bound") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->const_int_bound.IsBound(args[0].cast<Var>());
-      });
-    } else if (name == "Simplify") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        if (args.size() == 1) {
-          *ret = self->Simplify(args[0].cast<PrimExpr>());
-        } else if (args.size() == 2) {
-          *ret = self->Simplify(args[0].cast<PrimExpr>(), args[1].cast<int>());
-        } else {
-          LOG(FATAL) << "Invalid size of argument (" << args.size() << ")";
-        }
-      });
-    } else if (name == "rewrite_simplify") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->rewrite_simplify(args[0].cast<PrimExpr>());
-      });
-    } else if (name == "get_rewrite_simplify_stats") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->rewrite_simplify.GetStatsCounters();
-      });
-    } else if (name == "reset_rewrite_simplify_stats") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        self->rewrite_simplify.ResetStatsCounters();
-      });
-    } else if (name == "canonical_simplify") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->canonical_simplify(args[0].cast<PrimExpr>());
-      });
-    } else if (name == "int_set") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->int_set(args[0].cast<PrimExpr>(), args[1].cast<tvm::ffi::Map<Var, IntSet>>());
-      });
-    } else if (name == "bind") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        bool allow_override = args.size() >= 3 && args[2].cast<bool>();
-        if (auto opt_range = args[1].try_cast<Range>()) {
-          self->Bind(args[0].cast<Var>(), opt_range.value(), allow_override);
-        } else {
-          self->Bind(args[0].cast<Var>(), args[1].cast<PrimExpr>(), allow_override);
-        }
-      });
-    } else if (name == "can_prove") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        int strength = args[1].cast<int>();
-        *ret = self->CanProve(args[0].cast<PrimExpr>(), static_cast<ProofStrength>(strength));
-      });
-    } else if (name == "enter_constraint_context") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        auto ctx = std::shared_ptr<With<ConstraintContext>>(
-            new With<ConstraintContext>(self.get(), args[0].cast<PrimExpr>()));
-        auto fexit = [ctx](tvm::ffi::PackedArgs, tvm::ffi::Any*) mutable { ctx.reset(); };
-        *ret = tvm::ffi::Function::FromPacked(fexit);
-      });
-    } else if (name == "can_prove_equal") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->CanProveEqual(args[0].cast<PrimExpr>(), args[1].cast<PrimExpr>());
-      });
-    } else if (name == "get_enabled_extensions") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = static_cast<std::int64_t>(self->rewrite_simplify.GetEnabledExtensions());
-      });
-    } else if (name == "set_enabled_extensions") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        int64_t flags = args[0].cast<int64_t>();
-        self->rewrite_simplify.SetEnabledExtensions(
-            static_cast<RewriteSimplifier::Extension>(flags));
-      });
-    } else if (name == "get_smtlib2") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        auto expr = args[0].cast<ffi::Optional<PrimExpr>>();
-        *ret = self->z3_prover.GetSMTLIB2(expr);
-      });
-    } else if (name == "get_z3_stats") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        *ret = self->z3_prover.GetStats();
-      });
-    } else if (name == "set_z3_timeout_ms") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        unsigned timeout_ms = args[0].cast<unsigned>();
-        self->z3_prover.SetTimeoutMs(timeout_ms);
-      });
-    } else if (name == "set_z3_rlimit") {
-      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
-        unsigned max_step = args[0].cast<unsigned>();
-        self->z3_prover.SetRLimit(max_step);
-      });
-    }
-    return Function();
-  });
-}
-}  // namespace
-
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def_packed("arith.CreateAnalyzer", [](ffi::PackedArgs, ffi::Any* ret) {
-    auto self = std::make_shared<Analyzer>();
-    *ret = BuildAnalyzerFactory(self);
-  });
+  refl::ObjectDef<AnalyzerObj>();
+  refl::GlobalDef()
+      .def("arith.Analyzer", []() { return Analyzer(); })
+      .def("arith.AnalyzerClone", [](Analyzer analyzer) { return analyzer->Clone(); })
+      .def("arith.AnalyzerConstIntBound",
+           [](Analyzer analyzer, const PrimExpr& expr) { return analyzer->const_int_bound(expr); })
+      .def("arith.AnalyzerConstIntBoundUpdate",
+           [](Analyzer analyzer, const Var& var, const ConstIntBound& info, bool allow_override) {
+             analyzer->const_int_bound.Update(var, info, allow_override);
+           })
+      .def("arith.AnalyzerConstIntBoundIsBound",
+           [](Analyzer analyzer, const Var& var) { return analyzer->const_int_bound.IsBound(var); })
+      .def("arith.AnalyzerModularSetUpdate",
+           [](Analyzer analyzer, const Var& var, const ModularSet& info, bool allow_override) {
+             analyzer->modular_set.Update(var, info, allow_override);
+           })
+      .def("arith.AnalyzerIntSetUpdate",
+           [](Analyzer analyzer, const Var& var, const IntSet& info, bool allow_override) {
+             analyzer->int_set.Update(var, info, allow_override);
+           })
+      .def("arith.AnalyzerModularSet",
+           [](Analyzer analyzer, const PrimExpr& expr) { return analyzer->modular_set(expr); })
+      .def("arith.AnalyzerSimplify", [](Analyzer analyzer, const PrimExpr& expr,
+                                        int steps) { return analyzer->Simplify(expr, steps); })
+      .def("arith.AnalyzerRewriteSimplify",
+           [](Analyzer analyzer, const PrimExpr& expr) { return analyzer->rewrite_simplify(expr); })
+      .def("arith.AnalyzerGetRewriteSimplifyStats",
+           [](Analyzer analyzer) { return analyzer->rewrite_simplify.GetStatsCounters(); })
+      .def("arith.AnalyzerResetRewriteSimplifyStats",
+           [](Analyzer analyzer) { analyzer->rewrite_simplify.ResetStatsCounters(); })
+      .def("arith.AnalyzerCanonicalSimplify",
+           [](Analyzer analyzer, const PrimExpr& expr) {
+             return analyzer->canonical_simplify(expr);
+           })
+      .def("arith.AnalyzerIntSet",
+           [](Analyzer analyzer, const PrimExpr& expr,
+              ffi::Optional<ffi::Map<Var, IntSet>> opt_dom_map) {
+             if (opt_dom_map.has_value()) {
+               return analyzer->int_set(expr, opt_dom_map.value());
+             }
+             return analyzer->int_set(expr);
+           })
+      .def_packed("arith.AnalyzerBind",
+                  [](ffi::PackedArgs args, ffi::Any* ret) {
+                    TVM_FFI_ICHECK(args.size() == 3 || args.size() == 4)
+                        << "AnalyzerBind expects 3 or 4 arguments, but got " << args.size();
+                    Analyzer analyzer = args[0].cast<Analyzer>();
+                    bool allow_override = args.size() >= 4 && args[3].cast<bool>();
+                    if (auto opt_range = args[2].try_cast<Range>()) {
+                      analyzer->Bind(args[1].cast<Var>(), opt_range.value(), allow_override);
+                    } else {
+                      analyzer->Bind(args[1].cast<Var>(), args[2].cast<PrimExpr>(), allow_override);
+                    }
+                  })
+      .def("arith.AnalyzerCanProve",
+           [](Analyzer analyzer, const PrimExpr& expr, int strength) {
+             return analyzer->CanProve(expr, static_cast<ProofStrength>(strength));
+           })
+      .def("arith.AnalyzerSetMaximumRewriteSteps",
+           [](Analyzer analyzer, int64_t maximum) {
+             analyzer->rewrite_simplify.SetMaximumRewriteSteps(maximum);
+           })
+      .def("arith.AnalyzerEnterConstraintContext",
+           [](Analyzer analyzer, const PrimExpr& constraint) {
+             // can't use make_shared due to noexcept(false) decl in destructor,
+             // see https://stackoverflow.com/a/43907314
+             auto ctx = std::shared_ptr<With<ConstraintContext>>(
+                 new With<ConstraintContext>(analyzer, constraint));
+             auto fexit = [ctx](ffi::PackedArgs, ffi::Any*) mutable { ctx.reset(); };
+             return ffi::Function::FromPacked(fexit);
+           })
+      .def_method("arith.AnalyzerCanProveEqual", &AnalyzerObj::CanProveEqual)
+      .def("arith.AnalyzerTryCompare",
+           [](Analyzer analyzer, const PrimExpr& lhs, const PrimExpr& rhs,
+              bool propagate_inequalities) {
+             return static_cast<int64_t>(
+                 analyzer->transitive_comparisons.TryCompare(lhs, rhs, propagate_inequalities));
+           })
+      .def("arith.AnalyzerGetEnabledExtensions",
+           [](Analyzer analyzer) {
+             return static_cast<std::int64_t>(analyzer->rewrite_simplify.GetEnabledExtensions());
+           })
+      .def("arith.AnalyzerSetEnabledExtensions", [](Analyzer analyzer, int64_t flags) {
+        analyzer->rewrite_simplify.SetEnabledExtensions(
+            static_cast<RewriteSimplifier::Extension>(flags));
+      })
+      .def("arith.AnalyzerGetSMTLIB2",
+           [](Analyzer analyzer, ffi::Optional<PrimExpr> expr) {
+             return analyzer->z3_prover.GetSMTLIB2(expr);
+           })
+      .def("arith.AnalyzerGetZ3Stats", [](Analyzer analyzer) {
+        return analyzer->z3_prover.GetStats();
+      })
+      .def("arith.AnalyzerSetZ3TimeoutMs", [](Analyzer analyzer, unsigned timeout_ms) {
+        analyzer->z3_prover.SetTimeoutMs(timeout_ms);
+      })
+      .def("arith.AnalyzerSetZ3RLimit", [](Analyzer analyzer, unsigned max_step) {
+        analyzer->z3_prover.SetRLimit(max_step);
+      });
 }
 
 }  // namespace arith

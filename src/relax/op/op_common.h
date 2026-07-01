@@ -169,7 +169,7 @@ std::tuple<ArgTypes...> GetArgStructInfo(const Call& call, const BlockBuilder& c
       .add_argument("x", "Tensor", "The input tensor.")                                            \
       .set_attr<FRelaxInferLayout>("FRelaxInferLayout", InferLayoutUnaryEwise)                     \
       .set_attr<TMixedPrecisionPolicy>("TMixedPrecisionPolicy", MixedPrecisionPolicyKind::kFollow) \
-      .set_attr<Bool>("FPurity", Bool(true))
+      .set_attr<bool>("FPurity", true)
 
 /*!
  * \brief Quick helper macro to expose a make-function to construct the operator.
@@ -263,7 +263,7 @@ StructInfo InferStructInfoUnaryArith(const Call& call, const BlockBuilder& ctx) 
 }
 
 /*!
- * \brief Layout infer util for unary elementwise ops. It will simply take the layout of the input.
+ * \brief SLayout infer util for unary elementwise ops. It will simply take the layout of the input.
  * \param call The context Call to the operator.
  * \param desired_layouts The desired layouts of certain ops.
  * \param var_layout_map The layout of vars.
@@ -387,6 +387,36 @@ inline ffi::Optional<VDevice> InferBinaryArithOpOutVDevice(const Call& call,
   return lhs_vdevice;
 }
 
+/*! \brief Result of binary broadcast shape inference without diagnostic context. */
+struct BinaryBroadcastShapeInferResult {
+  enum class Status {
+    /*! \brief Broadcast output shape is known. */
+    kSuccess,
+    /*! \brief Shapes may be broadcastable but cannot be proved symbolically. */
+    kUnknown,
+    /*! \brief Concrete shapes are not broadcastable. */
+    kConflict,
+  };
+
+  /*! \brief Inference status. */
+  Status status = Status::kUnknown;
+  /*! \brief Broadcasted shape if status is kSuccess. */
+  ffi::Optional<ffi::Array<PrimExpr>> shape;
+  /*! \brief Human-readable conflict description if status is kConflict. */
+  ffi::Optional<ffi::String> message;
+};
+
+/*!
+ * \brief Infer the output shape for binary broadcast operators.
+ * \param analyzer The arithmetic analyzer used to prove shape equality.
+ * \param x1_shape The shape of the first operand.
+ * \param x2_shape The shape of the second operand.
+ * \return Inference status and broadcasted shape, or a conflict message.
+ */
+BinaryBroadcastShapeInferResult InferBinaryBroadcastShape(arith::AnalyzerObj* analyzer,
+                                                          const ffi::Array<PrimExpr>& x1_shape,
+                                                          const ffi::Array<PrimExpr>& x2_shape);
+
 /*!
  * \brief Infer the output shape for binary broadcast operators.
  * \param call The context Call to the operator.
@@ -412,7 +442,7 @@ ffi::Optional<ffi::Array<PrimExpr>> InferBinaryBroadcastShape(const Call& call,
  * \throw Throw exception if there exists out-of-range axis index or repetitive indices.
  */
 std::vector<int> NormalizeAxes(const Call& call, const BlockBuilder& ctx, int ndim,
-                               const ffi::Array<Integer>& axes);
+                               const ffi::Array<int64_t>& axes);
 
 /*!
  * \brief Convert the given axis to non-negative index. Meanwhile check if the axis is in range
@@ -526,21 +556,21 @@ inline ffi::Array<int64_t> GetCompletePadding3D(ffi::Array<int64_t> padding) {
 
 /*!
  * \brief Check if the given tensor layout can be converted to the given target layout.
- * If convertible, return the tensor layout and the bijective conversion in tirx::Layout and
- * tirx::BijectiveLayout accordingly.
+ * If convertible, return the tensor layout and the bijective conversion in tirx::SLayout and
+ * tirx::SBijectiveLayout accordingly.
  * \param call The context Call to the operator.
  * \param ctx The error reporting context.
  * \param tensor_layout The tensor layout to be checked
  * \param tgt_layout The target layout to be matched
  * \param tensor_name The name of the input tensor
- * \return The tensor layout and the bijective conversion in tirx::Layout and tirx::BijectiveLayout
- * accordingly.
+ * \return The tensor layout and the bijective conversion in tirx::SLayout and
+ * tirx::SBijectiveLayout accordingly.
  */
-inline std::pair<tirx::Layout, tirx::BijectiveLayout> CheckTensorLayout(
+inline std::pair<tirx::SLayout, tirx::SBijectiveLayout> CheckTensorLayout(
     const Call& call, const BlockBuilder& ctx, const ffi::String& tensor_layout,
     const ffi::String& tgt_layout, const ffi::String& tensor_name) {
-  tirx::Layout _tensor_layout(tensor_layout, DataType::Int(64));
-  tirx::BijectiveLayout tensor2tgt(_tensor_layout, tirx::Layout(tgt_layout, DataType::Int(64)));
+  tirx::SLayout _tensor_layout(tensor_layout, DataType::Int(64));
+  tirx::SBijectiveLayout tensor2tgt(_tensor_layout, tirx::SLayout(tgt_layout, DataType::Int(64)));
   if (!tensor2tgt.defined()) {
     ctx->ReportFatal(Diagnostic::Error(call) << call->op << " requires the given " << tensor_name
                                              << " layout to be convertible from " << tgt_layout
@@ -562,7 +592,7 @@ inline std::pair<tirx::Layout, tirx::BijectiveLayout> CheckTensorLayout(
 inline ffi::Optional<ShapeExpr> CheckNdimPerLayoutAndGetShape(const Call& call,
                                                               const BlockBuilder& ctx,
                                                               const TensorStructInfo& sinfo,
-                                                              const tirx::Layout& layout) {
+                                                              const tirx::SLayout& layout) {
   if (!sinfo->IsUnknownNdim() && sinfo->ndim != static_cast<int>(layout.ndim())) {
     ctx->ReportFatal(Diagnostic::Error(call)
                      << "In " << call->op << ", layout " << layout << " requires the input to be "
@@ -599,7 +629,7 @@ ffi::Array<Expr> GetCallArgs(const Call& call);
  * \param shape array
  * \return true or false depending on the compatibility
  */
-bool CanProveLayoutTransform(const Layout& input_layout, const Layout& desired_layout,
+bool CanProveLayoutTransform(const SLayout& input_layout, const SLayout& desired_layout,
                              ffi::Array<PrimExpr> shape);
 
 }  // namespace relax

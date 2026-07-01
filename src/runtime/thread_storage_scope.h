@@ -26,6 +26,7 @@
 
 #include <tvm/ffi/function.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,12 @@ enum class StorageRank {
   kMMAMatrixC = 11,
   /*! \brief Metal SIMD group memory */
   kMetalSimdGroup = 12,
+  /*! \brief Metal cooperative_tensor memory (MetalPerformancePrimitives) */
+  kMetalCooperativeTensor = 13,
+  /*! \brief Trainium sbuf */
+  kTrnSbuf = 14,
+  /*! \brief Trainium psum */
+  kTrnPsum = 15,
 };
 
 /*!
@@ -129,6 +136,8 @@ struct StorageScope {
         return "m16n8k8.matrixC" + tag;
       case StorageRank::kMetalSimdGroup:
         return "metal.simdgroup" + tag;
+      case StorageRank::kMetalCooperativeTensor:
+        return "metal.cooperative_tensor" + tag;
       default:
         TVM_FFI_THROW(InternalError) << "unknown storage scope";
         return "";
@@ -182,6 +191,15 @@ struct StorageScope {
     } else if (s.compare(0, 15, "metal.simdgroup") == 0) {
       r.rank = StorageRank::kMetalSimdGroup;
       r.tag = s.substr(15, std::string::npos);
+    } else if (s.compare(0, 24, "metal.cooperative_tensor") == 0) {
+      r.rank = StorageRank::kMetalCooperativeTensor;
+      r.tag = s.substr(24, std::string::npos);
+    } else if (s.compare(0, 8, "trn.sbuf") == 0) {
+      r.rank = StorageRank::kTrnSbuf;
+      r.tag = s.substr(8, std::string::npos);
+    } else if (s.compare(0, 8, "trn.psum") == 0) {
+      r.rank = StorageRank::kTrnPsum;
+      r.tag = s.substr(8, std::string::npos);
     } else {
       TVM_FFI_THROW(InternalError) << "unknown storage scope " << s;
     }
@@ -212,21 +230,43 @@ struct ThreadScope {
     } else if (s.compare(0, 10, "threadIdx.") == 0) {
       r.rank = 1;
       r.dim_index = static_cast<int>(s[10] - 'x');
+    } else if (s.compare(0, 14, "clusterCtaIdx.") == 0) {
+      r.rank = 2;
+      r.dim_index = static_cast<int>(s[14] - 'x');
+    } else if (s == launch_param::kClusterDimX) {
+      r.rank = 2;
+      r.dim_index = 0;
+    } else if (s == launch_param::kClusterDimY) {
+      r.rank = 2;
+      r.dim_index = 1;
+    } else if (s == launch_param::kClusterDimZ) {
+      r.rank = 2;
+      r.dim_index = 2;
+    } else if (s.compare(0, 23, "preferredClusterCtaIdx.") == 0) {
+      r.rank = 3;
+      r.dim_index = static_cast<int>(s[23] - 'x');
     } else {
       TVM_FFI_THROW(InternalError) << "Unknown threadscope " << s;
     }
     return r;
   }
+
+  /*! \brief Whether the thread scope is a virtual thread */
+  bool IsVirtualThread() const { return rank == 1 && dim_index == -1; }
+  /*! \brief Whether the thread scope is a block */
+  bool IsBlockIdx() const { return rank == 0; }
+  /*! \brief Whether the thread scope is a thread */
+  bool IsThreadIdx() const { return rank == 1 && dim_index != -1; }
+  /*! \brief Whether the thread scope is a cluster */
+  bool IsClusterCtaIdx() const { return rank == 2; }
 };
 
 /*! \brief workload specification */
 struct ThreadWorkLoad {
-  // array, first three are thread configuration.
-  size_t work_size[6];
+  // work_size layout: [0-2] grid, [3-5] block, [6-8] cluster, [9-11] preferred_cluster
+  size_t work_size[12];
   // Dynamic shared memory allocation size in bytes.
   size_t dyn_shmem_size{0};
-  // Cluster dimensions for SM90+ cluster launch (x, y, z)
-  size_t cluster_dim[3] = {1, 1, 1};
   /*!
    * \param i The block dimension.
    * \return i-th block dim
@@ -238,18 +278,29 @@ struct ThreadWorkLoad {
    */
   inline size_t grid_dim(size_t i) const { return work_size[i]; }
   /*!
+   * \param i The cluster dimension.
+   * \return i-th cluster dim
+   */
+  inline size_t cluster_dim(size_t i) const { return work_size[i + 6]; }
+  /*!
+   * \param i The preferred cluster dimension.
+   * \return i-th preferred cluster dim
+   */
+  inline size_t preferred_cluster_dim(size_t i) const { return work_size[i + 9]; }
+  /*!
    * \return whether cluster launch is enabled
    */
   inline bool use_cluster_launch() const {
-    return cluster_dim[0] > 1 || cluster_dim[1] > 1 || cluster_dim[2] > 1;
+    return cluster_dim(0) > 1 || cluster_dim(1) > 1 || cluster_dim(2) > 1;
   }
 };
+
 /*! \brief Launch parameters configuration */
 class LaunchParamConfig {
  public:
   void Init(size_t base, const ffi::Array<ffi::String>& launch_param_tags) {
     base_ = base;
-    std::vector<bool> filled(6, false);
+    std::vector<bool> filled(12, false);
     for (size_t i = 0; i < launch_param_tags.size(); ++i) {
       std::string tag(launch_param_tags[i]);
       if (tag == launch_param::kUseDynamicSharedMemoryTag) {
@@ -260,18 +311,10 @@ class LaunchParamConfig {
         use_programmatic_dependent_launch_ = true;
       } else if (tag == launch_param::kUseCooperativeLaunch) {
         use_cooperative_launch_ = true;
-      } else if (tag == launch_param::kClusterDimX) {
-        cluster_dim_x_arg_index_ = arg_index_map_.size();
-        arg_index_map_.push_back(100);  // Special marker for cluster dim x
-      } else if (tag == launch_param::kClusterDimY) {
-        cluster_dim_y_arg_index_ = arg_index_map_.size();
-        arg_index_map_.push_back(101);  // Special marker for cluster dim y
-      } else if (tag == launch_param::kClusterDimZ) {
-        cluster_dim_z_arg_index_ = arg_index_map_.size();
-        arg_index_map_.push_back(102);  // Special marker for cluster dim z
       } else {
         ThreadScope ts = ThreadScope::Create(tag);
         arg_index_map_.push_back(ts.rank * 3 + ts.dim_index);
+        arg_name_map_.push_back(tag);
         filled[ts.rank * 3 + ts.dim_index] = true;
       }
     }
@@ -285,24 +328,17 @@ class LaunchParamConfig {
   // extract workload from arguments.
   ThreadWorkLoad Extract(ffi::PackedArgs args) const {
     ThreadWorkLoad w;
-    std::fill(w.work_size, w.work_size + 6, 1);
+    std::fill(w.work_size, w.work_size + 12, 1);
     const TVMFFIAny* raw_args = reinterpret_cast<const TVMFFIAny*>(args.data());
 
     for (size_t i = 0; i < arg_index_map_.size(); ++i) {
-      uint32_t idx = arg_index_map_[i];
-      size_t size = static_cast<size_t>(raw_args[base_ + i].v_int64);
-      if (idx == 100) {
-        // Cluster dim X
-        w.cluster_dim[0] = size > 0 ? size : 1;
-      } else if (idx == 101) {
-        // Cluster dim Y
-        w.cluster_dim[1] = size > 0 ? size : 1;
-      } else if (idx == 102) {
-        // Cluster dim Z
-        w.cluster_dim[2] = size > 0 ? size : 1;
-      } else {
-        w.work_size[idx] = size;
+      int64_t size = raw_args[base_ + i].v_int64;
+      if (size <= 0) {
+        TVM_FFI_THROW(ValueError)
+            << "Kernel launch parameter " << arg_name_map_[i]
+            << " must be positive, got " << size;
       }
+      w.work_size[arg_index_map_[i]] = static_cast<size_t>(size);
     }
     if (use_dyn_shared_memory_) {
       w.dyn_shmem_size = static_cast<size_t>(raw_args[base_ + arg_index_map_.size()].v_int64);
@@ -317,8 +353,8 @@ class LaunchParamConfig {
   bool use_cooperative_launch() const { return use_cooperative_launch_; }
 
   bool use_cluster_launch() const {
-    return cluster_dim_x_arg_index_ >= 0 || cluster_dim_y_arg_index_ >= 0 ||
-           cluster_dim_z_arg_index_ >= 0;
+    return std::any_of(arg_index_map_.begin(), arg_index_map_.end(),
+                       [](uint32_t idx) { return idx >= 6 && idx < 9; });
   }
 
 
@@ -329,16 +365,14 @@ class LaunchParamConfig {
   size_t work_dim_;
   /*! \brief The index mapping. */
   std::vector<uint32_t> arg_index_map_;
+  /*! \brief The launch parameter names in arg_index_map_. */
+  std::vector<std::string> arg_name_map_;
   /*! \brief Whether or not use dynamic shared memory. */
   bool use_dyn_shared_memory_{false};
   /*! \brief Whether or not use programmatic dependent launch. */
   bool use_programmatic_dependent_launch_{false};
   /*! \brief Whether or not use cooperative launch. */
   bool use_cooperative_launch_{false};
-  /*! \brief Cluster dimension argument indices (-1 if not used) */
-  int cluster_dim_x_arg_index_{-1};
-  int cluster_dim_y_arg_index_{-1};
-  int cluster_dim_z_arg_index_{-1};
 };
 
 }  // namespace runtime

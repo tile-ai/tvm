@@ -29,7 +29,7 @@ import onnx
 import onnxruntime
 import pytest
 import tvm_ffi
-from onnx import ModelProto, TensorProto, helper
+from onnx import ModelProto, TensorProto, helper, numpy_helper
 
 import tvm
 import tvm.testing
@@ -533,10 +533,81 @@ def test_concat():
     verify_binary("Concat", [1, 32], [1, 32], [2, 32], attrs={"axis": 0})
 
 
+def test_concat_with_param_shape_value():
+    """Concat must handle a 1D-int64 initializer mixed with a ShapeExpr when
+    keep_params_in_input=True. Standard pattern in PyTorch-exported ONNX
+    models for dynamic-batch Reshape: Reshape(x, Concat(Shape(x)[:1], [12]))."""
+    inp = helper.make_tensor_value_info("x", TensorProto.FLOAT, ["N", 3, 4])
+    out = helper.make_tensor_value_info("y", TensorProto.FLOAT, ["N", 12])
+    twelve = numpy_helper.from_array(np.array([12], dtype=np.int64), "twelve")
+    starts = numpy_helper.from_array(np.array([0], dtype=np.int64), "starts")
+    ends = numpy_helper.from_array(np.array([1], dtype=np.int64), "ends")
+    nodes = [
+        helper.make_node("Shape", ["x"], ["x_shape"]),
+        helper.make_node("Slice", ["x_shape", "starts", "ends"], ["dyn_n"]),
+        helper.make_node("Concat", ["dyn_n", "twelve"], ["new_shape"], axis=0),
+        helper.make_node("Reshape", ["x", "new_shape"], ["y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "concat_param_shape",
+        [inp],
+        [out],
+        initializer=[twelve, starts, ends],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 8
+    onnx.checker.check_model(model)
+    # Both modes should succeed; previously True crashed with
+    # "Op(relax.concat) expects the input to be a Tuple of Tensors".
+    from_onnx(model, keep_params_in_input=False)
+    from_onnx(model, keep_params_in_input=True)
+
+
+def test_concat_with_param_tensor_keeps_runtime_param():
+    """Concat(input, weight) under keep_params_in_input=True must keep `weight`
+    as a runtime param, not fold it into a constant."""
+    weight_np = np.arange(8, dtype=np.float32).reshape(2, 4)
+    graph = helper.make_graph(
+        [helper.make_node("Concat", ["x", "w"], ["y"], axis=0)],
+        "concat_param_tensor",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 4])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [4, 4])],
+        initializer=[numpy_helper.from_array(weight_np, "w")],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 8
+    onnx.checker.check_model(model)
+
+    mod, params = relax.frontend.detach_params(from_onnx(model, keep_params_in_input=True))
+    assert "w" in [p.name_hint for p in mod["main"].params]
+    assert len(params["main"]) == 1
+    np.testing.assert_array_equal(params["main"][0].numpy(), weight_np)
+
+
 @pytest.mark.parametrize("op_name", ["Add", "Sub", "Mul", "Div", "Pow"])
 def test_binary(op_name: str):
     verify_binary(op_name, [1, 32], [1, 32], [1, 32])
     verify_binary_scalar(op_name)
+
+
+def test_div_integer_constant_zero_divisor_raises_valueerror():
+    b_init = numpy_helper.from_array(np.array([3, 0, -2, 1], dtype=np.int32), name="b")
+    node = helper.make_node("Div", ["a", "b"], ["y"])
+    graph = helper.make_graph(
+        [node],
+        "div_const_zero",
+        [helper.make_tensor_value_info("a", TensorProto.INT32, [4])],
+        [helper.make_tensor_value_info("y", TensorProto.INT32, [4])],
+        initializer=[b_init],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    model.ir_version = 9
+
+    with pytest.raises(
+        ValueError, match="ONNX Div with integer inputs encountered divisor value 0"
+    ):
+        from_onnx(model, opset=18, keep_params_in_input=False)
 
 
 @pytest.mark.parametrize("int_mode", [True, False])
@@ -653,9 +724,9 @@ def test_bitwise_shift(direction: str):
         "Sinh",
         "Cosh",
         "Tanh",
-        # "Asin",  // TODO @jikechao, fix the precision loss due to the Taylor approximation
-        # "Acos",
-        # "Atan",
+        "Asin",
+        "Acos",
+        "Atan",
         "Asinh",
         "Acosh",
         "Atanh",
@@ -698,6 +769,35 @@ def test_unary(op_name: str):
     else:
         output_dtype = TensorProto.FLOAT
     verify_unary(op_name, [8, 8, 8], input_dtype=input_dtype, output_dtype=output_dtype)
+
+
+def test_sign_nan_preserve():
+    sign_node = helper.make_node("Sign", ["x"], ["y"])
+    graph = helper.make_graph(
+        [sign_node],
+        "sign_nan_test",
+        inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [4])],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [4])],
+    )
+    model = helper.make_model(graph, producer_name="sign_nan_test")
+    model.ir_version = 8
+    for opset_import in model.opset_import:
+        if opset_import.domain in ["", "ai.onnx"]:
+            opset_import.version = 18
+            break
+    x = np.array([np.nan, 9.0, -9.0, np.nan], dtype=np.float32)
+
+    ort_out = onnxruntime.InferenceSession(
+        model.SerializeToString(), providers=["CPUExecutionProvider"]
+    ).run([], {"x": x})[0]
+
+    tvm_out = run_in_tvm(model, inputs={"x": x}, opset=18)
+    out_np = (tvm_out[0] if isinstance(tvm_out, list | tuple) else tvm_out).numpy()
+
+    np.testing.assert_array_equal(np.isnan(out_np), np.isnan(ort_out))
+    np.testing.assert_allclose(
+        out_np[~np.isnan(ort_out)], ort_out[~np.isnan(ort_out)], rtol=1e-7, atol=1e-5
+    )
 
 
 @pytest.mark.parametrize("op_name", ["Softmax", "LogSoftmax", "Hardmax"])
@@ -792,6 +892,37 @@ def test_cast(from_type, to_type):
     check_correctness(model, opset=13)
 
 
+@pytest.mark.parametrize("to_type", [TensorProto.INT64, TensorProto.UINT64])
+def test_cast_float_to_64bit_int_dynamic(to_type):
+    cast_node = helper.make_node("Cast", ["a"], ["b"], to=to_type)
+    graph = helper.make_graph(
+        [cast_node],
+        "cast_float_to_64bit_int_dynamic_test",
+        inputs=[helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 8])],
+        outputs=[helper.make_tensor_value_info("b", to_type, [1, 8])],
+    )
+    model = helper.make_model(graph, producer_name="cast_float_to_64bit_int_dynamic_test")
+    inputs = {"a": np.array([[0.0, 1.2, 2.8, 7.9, 15.1, 31.7, 63.4, 127.9]], dtype=np.float32)}
+    check_correctness(model, inputs=inputs, opset=13, check_dtypes=True)
+
+
+def test_cast_nan_inf_to_int8():
+    vals = np.array([300.0, np.nan, np.inf, -np.inf, 50.0, -50.0], dtype=np.float32)
+    node = helper.make_node("Cast", inputs=["a"], outputs=["b"], to=TensorProto.INT8)
+    graph = helper.make_graph(
+        [node],
+        "cast_nan_inf_test",
+        inputs=[helper.make_tensor_value_info("a", TensorProto.FLOAT, list(vals.shape))],
+        outputs=[helper.make_tensor_value_info("b", TensorProto.INT8, list(vals.shape))],
+    )
+    model = helper.make_model(graph, producer_name="cast_nan_inf_test")
+    tvm_output = run_in_tvm(model, inputs={"a": vals}, opset=13)
+    out_np = tvm_output.numpy()
+    expected = np.array([44, 0, 0, 0, 50, -50], dtype=np.int8)
+    assert out_np.dtype == np.int8
+    np.testing.assert_array_equal(out_np, expected)
+
+
 def test_gather():
     def _verify_gather(data_shape, indices, out_shape, axis=0):
         gather_node = helper.make_node("Gather", ["data", "indices"], ["y"], axis=axis)
@@ -821,6 +952,68 @@ def test_gather():
     _verify_gather([5, 4, 3, 2], [0, 1, 3], [3, 4, 3, 2])
     _verify_gather([3], 0, [])
     _verify_gather([3, 3], [[0, 2]], [3, 1, 2], 1)
+
+
+@pytest.mark.parametrize(
+    "axis, indices, out_shape",
+    [
+        (0, [-1, 0], [2, 4]),
+        (1, [-1, 0], [3, 2]),
+        (
+            1,
+            [[-1, 0], [1, -2]],
+            [3, 2, 2],
+        ),
+    ],
+)
+@pytest.mark.parametrize("indices_type", [TensorProto.INT64, TensorProto.INT32])
+def test_gather_negative_indices(axis, indices, out_shape, indices_type):
+    gather_node = helper.make_node("Gather", ["data", "indices"], ["y"], axis=axis)
+    indices_shape = np.asarray(indices).shape
+
+    graph = helper.make_graph(
+        [gather_node],
+        "gather_negative_indices_test",
+        inputs=[
+            helper.make_tensor_value_info("data", TensorProto.FLOAT, [3, 4]),
+            helper.make_tensor_value_info("indices", indices_type, indices_shape),
+        ],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, out_shape)],
+    )
+
+    model = helper.make_model(graph, producer_name="gather_negative_indices_test")
+    indices_np_dtype = {
+        TensorProto.INT64: np.int64,
+        TensorProto.INT32: np.int32,
+    }[indices_type]
+    input_values = {
+        "data": np.random.randn(3, 4).astype("float32"),
+        "indices": np.array(indices).astype(indices_np_dtype),
+    }
+    check_correctness(model, inputs=input_values)
+
+
+@pytest.mark.parametrize("indices_type", [TensorProto.INT64, TensorProto.INT32])
+def test_gather_negative_indices_ir_normalization(indices_type):
+    gather_node = helper.make_node("Gather", ["data", "indices"], ["y"], axis=1)
+    graph = helper.make_graph(
+        [gather_node],
+        "gather_negative_indices_ir_test",
+        inputs=[
+            helper.make_tensor_value_info("data", TensorProto.FLOAT, [3, 4]),
+            helper.make_tensor_value_info("indices", indices_type, [2]),
+        ],
+        outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [3, 2])],
+    )
+
+    model = helper.make_model(graph, producer_name="gather_negative_indices_ir_test")
+    tvm_model = from_onnx(model, opset=13, keep_params_in_input=True)
+    call_ops = collect_relax_call_ops(tvm_model["main"])
+
+    assert "relax.where" in call_ops
+    assert "relax.less" in call_ops
+    assert "relax.add" in call_ops
+    assert "relax.take" in call_ops
 
 
 @pytest.mark.parametrize(
@@ -908,6 +1101,106 @@ def test_scatter(axis: int, name: str, opset: int):
     model = helper.make_model(graph, producer_name="scatter_test")
     indices = np.random.randint(0, 16, indices_shape)
     check_correctness(model, inputs={"indices": indices}, opset=opset)
+
+
+@pytest.mark.parametrize(
+    "reduction, opset, data, indices, updates",
+    [
+        (
+            None,
+            11,
+            np.array([[1, 2, 3], [4, 5, 6]], dtype="float32"),
+            np.array([[2, 0, 1], [1, 2, 0]], dtype="int64"),
+            np.array([[30, 10, 20], [50, 60, 40]], dtype="float32"),
+        ),
+        (
+            "none",
+            18,
+            np.array([[1, 2, 3], [4, 5, 6]], dtype="float32"),
+            np.array([[2, 0, 1], [1, 2, 0]], dtype="int64"),
+            np.array([[30, 10, 20], [50, 60, 40]], dtype="float32"),
+        ),
+        (
+            "add",
+            16,
+            np.full((2, 3), 10, dtype="float32"),
+            np.array([[0, 0, 2], [1, 1, 2]], dtype="int64"),
+            np.array([[2, 5, 7], [20, 3, 4]], dtype="float32"),
+        ),
+        (
+            "mul",
+            16,
+            np.full((2, 3), 10, dtype="float32"),
+            np.array([[0, 0, 2], [1, 1, 2]], dtype="int64"),
+            np.array([[2, 5, 7], [20, 3, 4]], dtype="float32"),
+        ),
+        (
+            "min",
+            18,
+            np.full((2, 3), 10, dtype="float32"),
+            np.array([[0, 0, 2], [1, 1, 2]], dtype="int64"),
+            np.array([[2, 5, 7], [20, 3, 4]], dtype="float32"),
+        ),
+        (
+            "max",
+            18,
+            np.full((2, 3), 10, dtype="float32"),
+            np.array([[0, 0, 2], [1, 1, 2]], dtype="int64"),
+            np.array([[2, 5, 7], [20, 3, 4]], dtype="float32"),
+        ),
+    ],
+)
+def test_scatter_elements_reduction(reduction, opset, data, indices, updates):
+    attrs = {"axis": 1}
+    if reduction is not None:
+        attrs["reduction"] = reduction
+    scatter_elements_node = helper.make_node(
+        "ScatterElements", ["data", "indices", "updates"], ["output"], **attrs
+    )
+
+    graph = helper.make_graph(
+        [scatter_elements_node],
+        "scatter_elements_reduction_test",
+        inputs=[
+            helper.make_tensor_value_info("data", TensorProto.FLOAT, list(data.shape)),
+            helper.make_tensor_value_info("indices", TensorProto.INT64, list(indices.shape)),
+            helper.make_tensor_value_info("updates", TensorProto.FLOAT, list(updates.shape)),
+        ],
+        outputs=[helper.make_tensor_value_info("output", TensorProto.FLOAT, list(data.shape))],
+    )
+    model = helper.make_model(graph, producer_name="scatter_elements_reduction_test")
+
+    check_correctness(
+        model,
+        inputs={"data": data, "indices": indices, "updates": updates},
+        opset=opset,
+    )
+
+
+def test_scatter_elements_invalid_reduction():
+    data_shape = [2, 3]
+    scatter_elements_node = helper.make_node(
+        "ScatterElements",
+        ["data", "indices", "updates"],
+        ["output"],
+        axis=1,
+        reduction="unsupported",
+    )
+
+    graph = helper.make_graph(
+        [scatter_elements_node],
+        "scatter_elements_invalid_reduction_test",
+        inputs=[
+            helper.make_tensor_value_info("data", TensorProto.FLOAT, data_shape),
+            helper.make_tensor_value_info("indices", TensorProto.INT64, data_shape),
+            helper.make_tensor_value_info("updates", TensorProto.FLOAT, data_shape),
+        ],
+        outputs=[helper.make_tensor_value_info("output", TensorProto.FLOAT, data_shape)],
+    )
+    model = helper.make_model(graph, producer_name="scatter_elements_invalid_reduction_test")
+
+    with pytest.raises(ValueError, match="Only .* reductions are supported, but got unsupported"):
+        from_onnx(model, opset=18, keep_params_in_input=True)
 
 
 @pytest.mark.parametrize("reduction", ["none", "add", "mul"])
@@ -1384,6 +1677,55 @@ def test_clip_v6(max, min):
     check_correctness(model, opset=10)
 
 
+@pytest.mark.parametrize(
+    "min,max",
+    [
+        pytest.param(
+            np.array(0.0, dtype=np.float32),
+            np.array(6.0, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(0.0, dtype=np.float32),
+            np.array(np.nan, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(np.nan, dtype=np.float32),
+            np.array(6.0, dtype=np.float32),
+        ),
+        pytest.param(
+            np.array(np.nan, dtype=np.float32),
+            np.array(np.nan, dtype=np.float32),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "input",
+    [
+        np.array([0.5, -3.0, 4.5, 11.0, 7.0], dtype=np.float32),
+        np.array([0.5, -3.0, 4.5, 11.0, np.nan], dtype=np.float32),
+    ],
+)
+def test_clip_v13(input, min, max):
+    # Opset 13: tensor min/max. NaN bound => unbounded on that side (ORT); input NaN preserved.
+    clip_node = helper.make_node("Clip", ["input", "min", "max"], ["output"])
+    graph = helper.make_graph(
+        [clip_node],
+        "clip_v13_nan_max",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [5]),
+            helper.make_tensor_value_info("min", TensorProto.FLOAT, []),
+            helper.make_tensor_value_info("max", TensorProto.FLOAT, []),
+        ],
+        outputs=[helper.make_tensor_value_info("output", TensorProto.FLOAT, [5])],
+    )
+    model = helper.make_model(graph, producer_name="clip_v13_nan_max")
+    check_correctness(
+        model,
+        inputs={"input": input, "min": min, "max": max},
+        opset=13,
+    )
+
+
 def test_equal():
     equal_node = helper.make_node("Equal", ["a", "b"], ["output"])
 
@@ -1733,7 +2075,7 @@ def test_cumsum_axis_shape_validation():
 
     model = helper.make_model(graph, producer_name="cumsum_invalid_axis_shape_graph")
     with pytest.raises(
-        ValueError, 
+        ValueError,
         match="axis input must be a scalar \(0-D\) or a single-element 1-D tensor",
     ):
         from_onnx(model, opset=14, keep_params_in_input=True)
@@ -2025,6 +2367,104 @@ def test_layer_norm_with_nd_gamma_beta():
 
     model = helper.make_model(graph, producer_name="layer_norm_with_nd_gamma_beta_test")
     check_correctness(model)
+
+
+def test_layer_norm_numerical_stability():
+    """Numerical stability test for https://github.com/apache/tvm/issues/19592."""
+    layer_norm_node = helper.make_node(
+        "LayerNormalization", ["input", "scale", "bias"], ["Y"], axis=-1, epsilon=1e-5
+    )
+    graph = helper.make_graph(
+        [layer_norm_node],
+        "layer_norm_numerical_stability",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 4]),
+            helper.make_tensor_value_info("scale", TensorProto.FLOAT, [4]),
+            helper.make_tensor_value_info("bias", TensorProto.FLOAT, [4]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 4]),
+        ],
+    )
+    model = helper.make_model(graph, producer_name="layer_norm_numerical_stability")
+
+    input_array = np.array([[80000.0, 80001.0, 80002.0, 80003.0]], dtype=np.float32)
+    scale_array = np.ones(4, dtype=np.float32)
+    bias_array = np.zeros(4, dtype=np.float32)
+    inputs = {"input": input_array, "scale": scale_array, "bias": bias_array}
+
+    # ONNXRuntime also returns NaN for Large-value, small-variance inputs, so we here
+    # compare against a two-pass reference instead of ORT.
+    mean = input_array.mean(axis=-1, keepdims=True)
+    var = ((input_array - mean) ** 2).mean(axis=-1, keepdims=True)
+    expected = ((input_array - mean) / np.sqrt(var + 1e-5) * scale_array + bias_array).astype(
+        np.float32
+    )
+
+    tvm_output = run_in_tvm(model, inputs=inputs, ir_version=9, opset=17)
+
+    assert np.isfinite(tvm_output.numpy()).all()
+    tvm.testing.assert_allclose(tvm_output.numpy(), expected)
+
+
+def test_rms_norm():
+    # Basic test: default axis=-1
+    rms_norm_node = helper.make_node("RMSNormalization", ["input", "scale"], ["Y"], epsilon=1e-05)
+
+    graph = helper.make_graph(
+        [rms_norm_node],
+        "rms_norm_test",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [2, 8, 32]),
+            helper.make_tensor_value_info("scale", TensorProto.FLOAT, [32]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 8, 32]),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="rms_norm_test")
+    check_correctness(model, opset=23)
+
+    # Test with explicit axis=1 (normalize over last 2 dims)
+    rms_norm_node = helper.make_node(
+        "RMSNormalization", ["input", "scale"], ["Y"], axis=1, epsilon=1e-06
+    )
+
+    graph = helper.make_graph(
+        [rms_norm_node],
+        "rms_norm_axis_test",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT, [4, 8, 16]),
+            helper.make_tensor_value_info("scale", TensorProto.FLOAT, [8, 16]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT, [4, 8, 16]),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="rms_norm_axis_test")
+    check_correctness(model, opset=23)
+
+    # Test with float16 input (stash_type=1 means compute in float32)
+    rms_norm_node = helper.make_node(
+        "RMSNormalization", ["input", "scale"], ["Y"], epsilon=1e-05, stash_type=1
+    )
+
+    graph = helper.make_graph(
+        [rms_norm_node],
+        "rms_norm_fp16_test",
+        inputs=[
+            helper.make_tensor_value_info("input", TensorProto.FLOAT16, [2, 8, 32]),
+            helper.make_tensor_value_info("scale", TensorProto.FLOAT16, [32]),
+        ],
+        outputs=[
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT16, [2, 8, 32]),
+        ],
+    )
+
+    model = helper.make_model(graph, producer_name="rms_norm_fp16_test")
+    check_correctness(model, opset=23, rtol=1e-2, atol=1e-2)
 
 
 # TODO Enable dynamism
@@ -4606,6 +5046,63 @@ def test_nms():
         tvm.testing.assert_allclose(
             tvm_selected[:min_rows], ort_selected[:min_rows], rtol=1e-5, atol=1e-5
         )
+
+
+@pytest.mark.parametrize("with_explicit_max", [False, True])
+def test_nms_max_output_boxes_per_class_zero(with_explicit_max: bool):
+    """ONNX default for max_output_boxes_per_class is 0, yielding empty output."""
+    node_inputs = ["boxes", "scores"]
+    initializer = []
+    if with_explicit_max:
+        node_inputs.append("max_output_boxes_per_class")
+        initializer.append(
+            helper.make_tensor("max_output_boxes_per_class", TensorProto.INT64, [1], [0])
+        )
+
+    nms_node = helper.make_node(
+        "NonMaxSuppression",
+        node_inputs,
+        ["selected_indices"],
+        center_point_box=0,
+    )
+
+    boxes_shape = [1, 4, 4]
+    scores_shape = [1, 1, 4]
+    graph = helper.make_graph(
+        [nms_node],
+        "nms_max_output_boxes_per_class_zero",
+        inputs=[
+            helper.make_tensor_value_info("boxes", TensorProto.FLOAT, boxes_shape),
+            helper.make_tensor_value_info("scores", TensorProto.FLOAT, scores_shape),
+        ],
+        initializer=initializer,
+        outputs=[helper.make_tensor_value_info("selected_indices", TensorProto.INT64, [0, 3])],
+    )
+
+    model = helper.make_model(graph, producer_name="nms_max_output_boxes_per_class_zero")
+    model.ir_version = 8
+    model.opset_import[0].version = 11
+
+    inputs = {
+        "boxes": np.array(
+            [
+                [
+                    [0.0, 0.0, 1.0, 1.0],
+                    [0.0, 0.1, 1.0, 1.1],
+                    [2.0, 2.0, 3.0, 3.0],
+                    [2.0, 2.1, 3.0, 3.1],
+                ]
+            ],
+            dtype=np.float32,
+        ),
+        "scores": np.array([[[0.9, 0.8, 0.7, 0.6]]], dtype=np.float32),
+    }
+
+    check_correctness(model, inputs=inputs, opset=11)
+
+    tvm_out = run_in_tvm(model, inputs=inputs, opset=11)
+    tvm_selected = tvm_out[0].numpy() if isinstance(tvm_out, (list, tuple)) else tvm_out.numpy()  # noqa: UP038
+    assert tvm_selected.shape == (0, 3)
 
 
 def test_nms_algorithm_correctness():

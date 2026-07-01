@@ -74,6 +74,7 @@ def extract_tasks(
     module_equality : Optional[str]
         A string to specify the module equality testing and hashing method.
         It must be one of the followings:
+
           - "structural": Use StructuralEqual/Hash
           - "ignore-tensor": Same as "structural", but ignore tensor raw data during
                               equality testing and hashing.
@@ -222,6 +223,7 @@ def tune_relax(
     module_equality : Optional[str]
         A string to specify the module equality testing and hashing method.
         It must be one of the followings:
+
           - "structural": Use StructuralEqual/Hash
           - "ignore-tensor": Same as "structural", but ignore tensor raw data during
                               equality testing and hashing.
@@ -335,6 +337,7 @@ def _tune_relax(
     module_equality : Optional[str]
         A string to specify the module equality testing and hashing method.
         It must be one of the followings:
+
           - "structural": Use StructuralEqual/Hash
           - "ignore-tensor": Same as "structural", but ignore tensor raw data during
                               equality testing and hashing.
@@ -463,7 +466,8 @@ def compile_relax(
 
     @tvm.transform.module_pass(opt_level=3)
     def _ms_pipeline(mod: tvm.ir.IRModule, _ctx: tvm.transform.PassContext) -> tvm.ir.IRModule:
-        fuse_seq = dispatch_passes + [
+        fuse_seq = [
+            *dispatch_passes,
             relax.transform.LegalizeOps(enable_warning=enable_warning),
             relax.transform.AnnotateTIROpPattern(),
             relax.transform.FoldConstant(),

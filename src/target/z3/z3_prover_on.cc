@@ -68,7 +68,7 @@ public:
   using Base = ExprFunctor<z3::expr(const PrimExpr &)>;
   using Self = Z3Prover::Impl;
 
-  Analyzer* analyzer;
+  AnalyzerObj* analyzer;
   /// @brief Z3 context, a shared ptr, because tilelang want to copy the Analyzer
   // We use a thread_local static Z3 context so all analyzers within the same thread
   // can share a common context, because Z3 initialization is slow on some CPUs
@@ -102,7 +102,7 @@ public:
     return solver;
   }
 
-  Impl(Analyzer * parent): analyzer(parent) {
+  Impl(AnalyzerObj* parent): analyzer(parent) {
     scope_stack_.push_back({});
     solver = CreateSolver(*ctx);
     // default timeout 5ms
@@ -761,7 +761,7 @@ ffi::String Z3Prover::GetModel(const PrimExpr & expr) {
 TVM_DLL int64_t Z3Prover::CountSatisfyingValues(const Var& var, int64_t max_count, int64_t min_consecutive) {
   return impl_->CountSatisfyingValues(var, max_count, min_consecutive);
 }
-Z3Prover::Z3Prover(Analyzer* parent): impl_(new Impl{parent}) {}
+Z3Prover::Z3Prover(AnalyzerObj* parent): impl_(new Impl{parent}) {}
 TVM_DLL Z3Prover::~Z3Prover() {
   delete impl_;
 }

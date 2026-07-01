@@ -26,13 +26,13 @@
 #include <tvm/arith/iter_affine_map.h>
 #include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/s_tir/analysis.h>
 #include <tvm/s_tir/stmt.h>
 #include <tvm/s_tir/transform.h>
 #include <tvm/tirx/buffer.h>
 #include <tvm/tirx/stmt.h>
 #include <tvm/tirx/stmt_functor.h>
-#include <tvm/runtime/logging.h>
 
 #include <optional>
 #include <set>
@@ -46,7 +46,7 @@ using namespace tvm::tirx;
 
 class AsyncDMALowerer : public arith::IRMutatorWithAnalyzer {
  public:
-  explicit AsyncDMALowerer(bool dma_bypass_cache, arith::Analyzer* analyzer)
+  explicit AsyncDMALowerer(bool dma_bypass_cache, arith::AnalyzerObj* analyzer)
       : IRMutatorWithAnalyzer(analyzer), dma_bypass_cache_(dma_bypass_cache) {}
 
   // TODO(leiwang1999): split lower async DMA support for CUDA and Hexagon Backend
@@ -57,7 +57,8 @@ class AsyncDMALowerer : public arith::IRMutatorWithAnalyzer {
     }
 
     // if for loop is not a memcpy of a contiguous region, it might be a cuda cp.async behavior
-    std::optional<MemCpyDetails> mem_copy = IdentifyMemCpy(ffi::GetRef<For>(loop), analyzer_);
+    std::optional<s_tir::MemCpyDetails> mem_copy =
+        s_tir::IdentifyMemCpy(ffi::GetRef<For>(loop), ffi::GetRef<arith::Analyzer>(analyzer_));
     if (!mem_copy.has_value() || mem_copy->dest->region.size() != 1 ||
         mem_copy->source->region.size() != 1) {
       return arith::IRMutatorWithAnalyzer::VisitStmt_(loop);
@@ -174,8 +175,8 @@ Pass LowerAsyncDMA() {
     auto fptr = f.CopyOnWrite();
     arith::Analyzer analyzer;
     bool dma_bypass_cache =
-        ctx->GetConfig<Bool>("tirx.experimental_dma_bypass_cache", Bool(false)).value();
-    fptr->body = AsyncDMALowerer(dma_bypass_cache, &analyzer)(std::move(fptr->body));
+        ctx->GetConfig<bool>("tirx.experimental_dma_bypass_cache", false).value();
+    fptr->body = AsyncDMALowerer(dma_bypass_cache, analyzer.get())(std::move(fptr->body));
     return f;
   };
   return CreatePrimFuncPass(pass_func, 0, "s_tir.LowerAsyncDMA", {});

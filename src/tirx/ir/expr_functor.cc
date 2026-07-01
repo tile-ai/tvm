@@ -48,11 +48,13 @@ void ExprVisitor::VisitExpr_(const LetNode* op) {
 
 void ExprVisitor::VisitExpr_(const CallNode* op) {
   VisitArray(op->args, [this](const PrimExpr& e) { this->VisitExpr(e); });
-  // Also visit PrimExpr values inside annotations (e.g. barrier arguments
-  // stored as CallNode annotations by tile operators like tma_copy).
-  for (const auto& kv : op->annotations) {
-    if (auto opt = kv.second.as<PrimExpr>()) {
-      this->VisitExpr(opt.value());
+  // Also visit PrimExpr values inside attrs (e.g. barrier arguments stored as
+  // CallNode attrs by tile operators like tma_copy).
+  if (const auto* dict_attrs = op->attrs.as<DictAttrsNode>()) {
+    for (const auto& kv : dict_attrs->dict) {
+      if (auto opt = kv.second.as<PrimExpr>()) {
+        this->VisitExpr(opt.value());
+      }
     }
   }
 }
@@ -168,26 +170,28 @@ PrimExpr ExprMutator::VisitExpr_(const CallNode* op) {
   auto fmutate = [this](const PrimExpr& e) { return this->VisitExpr(e); };
   ffi::Array<PrimExpr> args = op->args.Map(fmutate);
 
-  // Also mutate PrimExpr values inside annotations (e.g. barrier arguments
-  // stored as CallNode annotations by tile operators like tma_copy).
-  ffi::Map<ffi::String, ffi::ObjectRef> new_annotations;
-  bool annotations_changed = false;
-  for (const auto& kv : op->annotations) {
-    if (auto opt = kv.second.as<PrimExpr>()) {
-      PrimExpr new_val = this->VisitExpr(opt.value());
-      new_annotations.Set(kv.first, new_val);
-      if (!new_val.same_as(opt.value())) {
-        annotations_changed = true;
+  // Also mutate PrimExpr values inside attrs (e.g. barrier arguments
+  // stored as CallNode attrs by tile operators like tma_copy).
+  ffi::Map<ffi::String, ffi::Any> new_attrs;
+  bool attrs_changed = false;
+  if (const auto* dict_attrs = op->attrs.as<DictAttrsNode>()) {
+    for (const auto& kv : dict_attrs->dict) {
+      if (auto opt = kv.second.as<PrimExpr>()) {
+        PrimExpr new_val = this->VisitExpr(opt.value());
+        new_attrs.Set(kv.first, new_val);
+        if (!new_val.same_as(opt.value())) {
+          attrs_changed = true;
+        }
+      } else {
+        new_attrs.Set(kv.first, kv.second);
       }
-    } else {
-      new_annotations.Set(kv.first, kv.second);
     }
   }
 
-  if (args.same_as(op->args) && !annotations_changed) {
+  if (args.same_as(op->args) && !attrs_changed) {
     return ffi::GetRef<PrimExpr>(op);
   } else {
-    return Call(op->dtype, op->op, args, annotations_changed ? new_annotations : op->annotations);
+    return Call(op->dtype, op->op, args, attrs_changed ? DictAttrs(new_attrs) : op->attrs, op->span);
   }
 }
 
@@ -214,8 +218,37 @@ DEFINE_BIOP_EXPR_MUTATE_(Sub);
 DEFINE_BIOP_EXPR_MUTATE_(Mul);
 DEFINE_BIOP_EXPR_MUTATE_(Div);
 DEFINE_BIOP_EXPR_MUTATE_(Mod);
-DEFINE_BIOP_EXPR_MUTATE_(FloorDiv);
-DEFINE_BIOP_EXPR_MUTATE_(FloorMod);
+
+PrimExpr ExprMutator::VisitExpr_(const FloorDivNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr b = this->VisitExpr(op->b);
+  if (a.same_as(op->a) && b.same_as(op->b)) {
+    return ffi::GetRef<PrimExpr>(op);
+  }
+  if (a.dtype() != op->dtype) {
+    a = Cast(op->dtype, a);
+  }
+  if (b.dtype() != op->dtype) {
+    b = Cast(op->dtype, b);
+  }
+  return FloorDiv(a, b);
+}
+
+PrimExpr ExprMutator::VisitExpr_(const FloorModNode* op) {
+  PrimExpr a = this->VisitExpr(op->a);
+  PrimExpr b = this->VisitExpr(op->b);
+  if (a.same_as(op->a) && b.same_as(op->b)) {
+    return ffi::GetRef<PrimExpr>(op);
+  }
+  if (a.dtype() != op->dtype) {
+    a = Cast(op->dtype, a);
+  }
+  if (b.dtype() != op->dtype) {
+    b = Cast(op->dtype, b);
+  }
+  return FloorMod(a, b);
+}
+
 DEFINE_BIOP_EXPR_MUTATE_(Min);
 DEFINE_BIOP_EXPR_MUTATE_(Max);
 DEFINE_BIOP_EXPR_MUTATE_(EQ);

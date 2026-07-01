@@ -23,9 +23,9 @@ import pytest
 
 import tvm
 import tvm.testing
+from tvm.ir.utils import derived_object
 from tvm.s_tir import meta_schedule as ms
 from tvm.s_tir.meta_schedule.testing.dummy_object import DummyMutator
-from tvm.s_tir.meta_schedule.utils import derived_object
 from tvm.s_tir.schedule import Schedule, Trace
 from tvm.script import tirx as T
 
@@ -36,7 +36,7 @@ MATMUL_M = 32
 
 @tvm.script.ir_module
 class Matmul:
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def main(a: T.handle, b: T.handle, c: T.handle) -> None: # type: ignore
         T.func_attr({"global_symbol": "main"})
         A = T.match_buffer(a, (32, 32), "float32")
@@ -52,7 +52,7 @@ class Matmul:
 
 @tvm.script.ir_module
 class OtherBlock:
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def main(a: T.handle, b: T.handle, c: T.handle) -> None: # type: ignore
         T.func_attr({"global_symbol": "main"})
         A = T.match_buffer(a, (32, 32), "float32")
@@ -324,7 +324,7 @@ def test_meta_schedule_evolutionary_search_fail_init_population():  # pylint: di
     assert candidates is None
 
 
-def test_meta_schedule_evolutionary_search_skip_invalid_measured_trace()  # pylint: disable = invalid-name
+def test_meta_schedule_evolutionary_search_skip_invalid_measured_trace():  # pylint: disable = invalid-name
     # Construct an incompatible measured trace: it references block name "other",
     # which doesn't exist in Matmul. Replaying this trace should fail and be skipped.
     wrong_sch = Schedule(OtherBlock)

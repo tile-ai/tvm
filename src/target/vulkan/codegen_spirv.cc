@@ -129,7 +129,7 @@ void CodeGenSPIRV::InitFuncState() {
   std::fill(workgroup_size_, workgroup_size_ + 3, 1);
   var_map_.clear();
   storage_info_.clear();
-  analyzer_.reset(new arith::Analyzer());
+  analyzer_ = arith::Analyzer();
   builder_.reset(new spirv::IRBuilder(spirv_support_));
   builder_->InitHeader();
   shared_memory_bytes_used_ = 0;
@@ -160,7 +160,7 @@ spirv::Value CodeGenSPIRV::CreateStorageSync(const CallNode* op) {
   uint32_t vulkan_api_version = spirv_support_.vulkan_api_version;
 
   int64_t sync_scope;
-  int64_t memory_semantics = spv::MemorySemanticsSequentiallyConsistentMask;
+  int64_t memory_semantics = spv::MemorySemanticsAcquireReleaseMask;
   if ((sync == "warp") && (vulkan_api_version >= VK_API_VERSION_1_1)) {
     // Synchronize control at the Subgroup level, but memory at the
     // Workgroup level.  This is because different invocations in a
@@ -627,7 +627,7 @@ spirv::Value CodeGenSPIRV::VisitExpr_(const ShuffleNode* op) {
       << "SPIR-V codegen only supports shuffle "
       << "of one vector with one index";
   spirv::Value vector = MakeValue(op->vectors[0]);
-  int index = Downcast<Integer>(op->indices[0])->value;
+  int index = Downcast<IntImm>(op->indices[0])->value;
   spirv::SType etype = builder_->GetSType(op->dtype);
   spirv::Value element = builder_->MakeValue(spv::OpCompositeExtract, etype, vector, index);
   return element;

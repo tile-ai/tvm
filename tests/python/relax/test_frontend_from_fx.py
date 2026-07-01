@@ -3195,11 +3195,12 @@ def test_extended_unary_ops():
     class expected_logical_not:
         @R.function
         def main(inp_0: R.Tensor((1, 3, 10, 10), dtype="float32")) -> R.Tensor(
-            (1, 3, 10, 10), dtype="float32"
+            (1, 3, 10, 10), dtype="bool"
         ):
             with R.dataflow():
-                lv: R.Tensor((1, 3, 10, 10), dtype="float32") = R.logical_not(inp_0)
-                gv: R.Tensor((1, 3, 10, 10), dtype="float32") = lv
+                lv: R.Tensor((1, 3, 10, 10), dtype="bool") = R.astype(inp_0, dtype="bool")
+                lv1: R.Tensor((1, 3, 10, 10), dtype="bool") = R.logical_not(lv)
+                gv: R.Tensor((1, 3, 10, 10), dtype="bool") = lv1
                 R.output(gv)
             return gv
 
@@ -3526,6 +3527,28 @@ def test_extended_unary_ops():
     verify_model(Trunc(), input_info, {}, expected_trunc)
 
 
+def test_pow_integer():
+    input_info = [([4], "int64")]
+
+    class Pow(Module):
+        def forward(self, input):
+            return input.pow(4)
+
+    @tvm.script.ir_module
+    class expected:
+        @R.function
+        def main(inp_0: R.Tensor((4,), dtype="int64")) -> R.Tensor((4,), dtype="int64"):
+            with R.dataflow():
+                lv: R.Tensor((4,), dtype="int64") = R.multiply(inp_0, inp_0)
+                lv1: R.Tensor((4,), dtype="int64") = R.multiply(lv, inp_0)
+                lv2: R.Tensor((4,), dtype="int64") = R.multiply(lv1, inp_0)
+                gv: R.Tensor((4,), dtype="int64") = lv2
+                R.output(gv)
+            return gv
+
+    verify_model(Pow(), input_info, {}, expected)
+
+
 def test_interpolate():
     input_info = [([1, 3, 10, 10], "float32")]
 
@@ -3672,6 +3695,7 @@ def test_interpolate():
     verify_model(Interpolate4(), input_info, {}, expected4)
 
     input_info_5d = [([1, 3, 4, 10, 10], "float32")]
+
     class Interpolate5(Module):
         def forward(self, input):
             return torch.nn.functional.interpolate(
@@ -3681,13 +3705,13 @@ def test_interpolate():
                 mode="trilinear",
                 align_corners=False,
             )
+
     @tvm.script.ir_module
     class expected5:
         @R.function
         def main(input_5: R.Tensor((1, 3, 4, 10, 10), dtype="float32")) -> R.Tensor(
             (1, 3, 8, 20, 20), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 3, 8, 20, 20), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -3713,17 +3737,17 @@ def test_interpolate():
             return torch.nn.functional.interpolate(
                 input,
                 size=None,
-                scale_factor=(2.0,4.0,4.0),
+                scale_factor=(2.0, 4.0, 4.0),
                 mode="trilinear",
                 align_corners=False,
             )
+
     @tvm.script.ir_module
     class expected6:
         @R.function
         def main(input_5: R.Tensor((1, 3, 4, 10, 10), dtype="float32")) -> R.Tensor(
             (1, 3, 8, 40, 40), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 3, 8, 40, 40), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -3748,17 +3772,17 @@ def test_interpolate():
         def forward(self, input):
             return torch.nn.functional.interpolate(
                 input,
-                size=(8,40,40),
+                size=(8, 40, 40),
                 mode="trilinear",
                 align_corners=False,
             )
+
     @tvm.script.ir_module
     class expected7:
         @R.function
         def main(input_5: R.Tensor((1, 3, 4, 10, 10), dtype="float32")) -> R.Tensor(
             (1, 3, 8, 40, 40), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 3, 8, 40, 40), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -3783,17 +3807,17 @@ def test_interpolate():
         def forward(self, input):
             return torch.nn.functional.interpolate(
                 input,
-                size=(8,40,40),
+                size=(8, 40, 40),
                 mode="trilinear",
                 align_corners=True,
             )
+
     @tvm.script.ir_module
     class expected8:
         @R.function
         def main(input_5: R.Tensor((1, 3, 4, 10, 10), dtype="float32")) -> R.Tensor(
             (1, 3, 8, 40, 40), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 3, 8, 40, 40), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -3936,17 +3960,17 @@ def test_interpolate_nhwc_layout():
             return torch.nn.functional.interpolate(
                 input,
                 size=None,
-                scale_factor=(2.0,4.0,4.0),
+                scale_factor=(2.0, 4.0, 4.0),
                 mode="trilinear",
                 align_corners=False,
             )
+
     @tvm.script.ir_module
     class expected_nhwc3:
         @R.function
         def main(input_5: R.Tensor((1, 4, 10, 10, 3), dtype="float32")) -> R.Tensor(
             (1, 8, 40, 40, 3), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 8, 40, 40, 3), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -3975,17 +3999,17 @@ def test_interpolate_nhwc_layout():
             return torch.nn.functional.interpolate(
                 input,
                 size=None,
-                scale_factor=(2.0,4.0,4.0),
+                scale_factor=(2.0, 4.0, 4.0),
                 mode="trilinear",
                 align_corners=True,
             )
+
     @tvm.script.ir_module
     class expected_nhwc4:
         @R.function
         def main(input_5: R.Tensor((1, 4, 10, 10, 3), dtype="float32")) -> R.Tensor(
             (1, 8, 40, 40, 3), dtype="float32"
         ):
-
             with R.dataflow():
                 lv: R.Tensor((1, 8, 40, 40, 3), dtype="float32") = R.image.resize3d(
                     input_5,
@@ -4008,6 +4032,7 @@ def test_interpolate_nhwc_layout():
     with torch.no_grad():
         mod4 = from_fx(graph_model4, input_info_5d, default_image_layout="NDHWC")
     tvm.ir.assert_structural_equal(mod4, expected_nhwc4)
+
 
 def test_addmm():
     input_info = [
@@ -5862,6 +5887,27 @@ def test_flip():
     verify_model(Flip1(), [([2, 2], "float32")], {}, Expected1)
 
 
+def test_flip_multi_axis():
+    class FlipMulti(Module):
+        def forward(self, data):
+            return torch.flip(data, [0, 1])
+
+    @tvm.script.ir_module
+    class ExpectedMulti:
+        @R.function
+        def main(
+            inp_0: R.Tensor((2, 3), dtype="float32"),
+        ) -> R.Tensor((2, 3), dtype="float32"):
+            with R.dataflow():
+                lv: R.Tensor((2, 3), dtype="float32") = R.flip(inp_0, axis=0)
+                lv1: R.Tensor((2, 3), dtype="float32") = R.flip(lv, axis=1)
+                gv: R.Tensor((2, 3), dtype="float32") = lv1
+                R.output(gv)
+            return gv
+
+    verify_model(FlipMulti(), [([2, 3], "float32")], {}, ExpectedMulti)
+
+
 def test_take():
     class Take(Module):
         def forward(self, data, indices):
@@ -6208,24 +6254,28 @@ def test_var():
     verify_model(Var(), [([5, 3], "float32")], {}, Expected)
 
 
-def test_prod():
+@pytest.mark.parametrize(
+    "torch_dtype,relax_dtype",
+    [(torch.float32, "float32"), (torch.bool, "bool")],
+)
+def test_prod(torch_dtype, relax_dtype):
     class Prod(Module):
         def forward(self, x):
-            return torch.prod(x)
+            return torch.prod(x, dtype=torch_dtype)
 
     @tvm.script.ir_module
     class Expected:
         @R.function
         def main(
-            inp_0: R.Tensor((5, 3), dtype="float32"),
-        ) -> R.Tensor((), dtype="float32"):
+            inp_0: R.Tensor((5, 3), dtype=relax_dtype),
+        ) -> R.Tensor((), dtype=relax_dtype):
             with R.dataflow():
-                lv: R.Tensor((), dtype="float32") = R.prod(inp_0, axis=None, keepdims=False)
-                gv: R.Tensor((), dtype="float32") = lv
+                lv: R.Tensor((), dtype=relax_dtype) = R.prod(inp_0, axis=None, keepdims=False)
+                gv: R.Tensor((), dtype=relax_dtype) = lv
                 R.output(gv)
             return gv
 
-    verify_model(Prod(), [([5, 3], "float32")], {}, Expected)
+    verify_model(Prod(), [([5, 3], relax_dtype)], {}, Expected)
 
 
 def test_cumprod():

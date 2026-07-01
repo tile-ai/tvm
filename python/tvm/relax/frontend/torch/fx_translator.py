@@ -564,7 +564,7 @@ class TorchFXImporter(BaseFXGraphImporter):
                 layout_3d = "NDHWC"
             else:
                 layout_3d = "NCDHW"
-                
+
             return self.block_builder.emit(
                 relax.op.image.resize3d(
                     data,
@@ -875,7 +875,7 @@ class TorchFXImporter(BaseFXGraphImporter):
             "log2": self._log2,
             "log10": self._log10,
             "log1p": self._log1p,
-            "logical_not": self._unary_op(relax.op.logical_not),
+            "logical_not": self._logical_not,
             "log_softmax": self._log_softmax,
             "neg": self._unary_op(relax.op.negative),
             "pad": self._pad,
@@ -929,7 +929,7 @@ class TorchFXImporter(BaseFXGraphImporter):
             "outer": lambda node: self.block_builder.emit(
                 relax.op.outer(self.env[node.args[0]], self.env[node.args[1]])
             ),
-            "pow": self._binary_op(relax.op.power, operator.pow),
+            "pow": self._pow,
             "or_": self._binary_op(relax.op.bitwise_or, operator.or_),
             "rshift": self._binary_op(relax.op.right_shift, operator.rshift),
             "rsub": self._rsub,

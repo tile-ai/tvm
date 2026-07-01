@@ -16,6 +16,7 @@
 # under the License.
 # pylint: disable=missing-docstring, invalid-name, unused-argument, not-callable
 import numpy as np
+import tvm_ffi
 from scipy import special
 
 import tvm
@@ -49,7 +50,7 @@ class Module_tanh:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def tanh(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -80,7 +81,7 @@ class Module_sqrt:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def sqrt(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -111,7 +112,7 @@ class Module_rsqrt:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def rsqrt(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -142,7 +143,7 @@ class Module_exp:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def exp(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -173,7 +174,7 @@ class Module_erf:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def erf(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -204,7 +205,7 @@ class Module_sigmoid:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def sigmoid(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -235,7 +236,7 @@ class Module_hardswish:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def hardswish(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -266,7 +267,7 @@ class Module_log:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def log(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -297,7 +298,7 @@ class Module_abs:
         )
         return out
 
-    @T.prim_func
+    @T.prim_func(s_tir=True)
     def abs(
         rxplaceholder: T.Buffer((T.int64(1), T.int64(2), T.int64(2), T.int64(2)), "uint8"),
         rxplaceholder_1: T.Buffer((), "float32"),
@@ -388,5 +389,5 @@ def test_structural():
     ]
     for mod in Modules:
         after = generate_take_op.PassReplaceWithTakeOpPrimFuncs()(mod)
-        assert not tvm.ir.structural_equal(after["main"], mod["main"])
+        assert not tvm_ffi.structural_equal(after["main"], mod["main"])
     print("Passed Structural")

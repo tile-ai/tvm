@@ -20,4 +20,6 @@
 """GPU specific declaration."""
 
 from .scan import cumsum, cumprod
+from .scatter_elements import scatter_elements
+from .scatter_nd import scatter_nd
 from .sort import *

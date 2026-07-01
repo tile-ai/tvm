@@ -49,7 +49,7 @@ static PrimExpr DispatchMetalShuffle(const PrimExpr& e) {
   TVM_FFI_ICHECK(call != nullptr);
   TVM_FFI_ICHECK_EQ(call->args.size(), 5);  // mask, value, warp_id, width, warp_size
   ffi::Array<PrimExpr> metal_args{{call->args[1], call->args[2]}};
-  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), metal_args, call->annotations);
+  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), metal_args, call->attrs);
 }
 
 TVM_REGISTER_OP("tirx.clz")
@@ -138,27 +138,41 @@ TVM_REGISTER_OP("tirx.tvm_warp_shuffle_up")
 TVM_REGISTER_OP("tirx.tvm_warp_shuffle_down")
     .set_attr<FLowerIntrinsic>("metal.FLowerIntrinsic", DispatchMetalShuffle<MetalWarpIntrinsic>);
 
-// Register low-level builtin ops.
+// Register low-level Metal device intrinsics.
 TVM_REGISTER_OP("tirx.metal.simd_shuffle")
     .set_num_inputs(2)
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("lane", "Expr", "The source thread id.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("metal"),
+                                               10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("metal.simd_shuffle"), 10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "simd_shuffle")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque));
 
 TVM_REGISTER_OP("tirx.metal.simd_shuffle_up")
     .set_num_inputs(2)
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("delta", "Expr", "The source lane id offset to be added.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("metal"),
+                                               10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("metal.simd_shuffle_up"),
+                                        10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "simd_shuffle_up")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque));
 
 TVM_REGISTER_OP("tirx.metal.simd_shuffle_down")
     .set_num_inputs(2)
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("delta", "Expr", "The source lane id offset to be subtracted.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("metal"),
+                                               10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName",
+                                        ffi::String("metal.simd_shuffle_down"), 10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "simd_shuffle_down")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque));
 
 }  // namespace intrin
 }  // namespace codegen

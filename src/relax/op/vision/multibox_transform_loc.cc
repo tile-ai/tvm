@@ -179,7 +179,7 @@ StructInfo InferStructInfoMultiboxTransformLoc(const Call& call, const BlockBuil
     }
   }
 
-  ffi::Array<PrimExpr> boxes_shape = {batch, num_anchors, Integer(4)};
+  ffi::Array<PrimExpr> boxes_shape = {batch, num_anchors, IntImm(DataType::Int(32), 4)};
   ffi::Array<PrimExpr> scores_shape = {batch, num_classes, num_anchors};
   ffi::Array<StructInfo> fields = {
       TensorStructInfo(ShapeExpr(boxes_shape), cls_sinfo->dtype, vdev),
@@ -188,9 +188,10 @@ StructInfo InferStructInfoMultiboxTransformLoc(const Call& call, const BlockBuil
 }
 
 TVM_REGISTER_OP("relax.vision.multibox_transform_loc")
-    .describe("Decode SSD/TFLite-style priors and offsets into boxes and softmax scores. If "
-              "cls_pred shape is unknown, N-based loc/anchor shape checks are skipped in "
-              "inference. Very large variances (w,h) can overflow exp in half box sizes.")
+    .describe(
+        "Decode SSD/TFLite-style priors and offsets into boxes and softmax scores. If "
+        "cls_pred shape is unknown, N-based loc/anchor shape checks are skipped in "
+        "inference. Very large variances (w,h) can overflow exp in half box sizes.")
     .set_attrs_type<MultiboxTransformLocAttrs>()
     .set_num_inputs(3)
     .add_argument("cls_pred", "Tensor", "[B,C,N] class logits (pre-softmax).")
@@ -198,7 +199,7 @@ TVM_REGISTER_OP("relax.vision.multibox_transform_loc")
                   "[B,4*N] box encodings (x,y,w,h); TFLite yxhw order remapped to xywh.")
     .add_argument("anchor", "Tensor", "[1,N,4] priors as ltrb (left,top,right,bottom).")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoMultiboxTransformLoc)
-    .set_attr<Bool>("FPurity", Bool(true));
+    .set_attr<bool>("FPurity", true);
 
 }  // namespace relax
 }  // namespace tvm

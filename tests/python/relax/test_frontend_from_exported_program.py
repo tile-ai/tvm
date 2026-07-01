@@ -1062,6 +1062,51 @@ def test_logaddexp():
     verify_model(LogAddExp(), example_args, {}, expected)
 
 
+def test_logical_not():
+    class LogicalNot(Module):
+        def forward(self, input):
+            return torch.logical_not(input)
+
+    @tvm.script.ir_module
+    class expected:
+        @R.function
+        def main(input: R.Tensor((1, 3, 10, 10), dtype="float32")) -> R.Tuple(
+            R.Tensor((1, 3, 10, 10), dtype="bool")
+        ):
+            # block 0
+            with R.dataflow():
+                lv: R.Tensor((1, 3, 10, 10), dtype="bool") = R.astype(input, dtype="bool")
+                lv1: R.Tensor((1, 3, 10, 10), dtype="bool") = R.logical_not(lv)
+                gv: R.Tuple(R.Tensor((1, 3, 10, 10), dtype="bool")) = (lv1,)
+                R.output(gv)
+            return gv
+
+    example_args = (torch.randn(1, 3, 10, 10, dtype=torch.float32),)
+    verify_model(LogicalNot(), example_args, {}, expected)
+
+
+def test_pow_integer():
+    class Pow(Module):
+        def forward(self, input):
+            return input.pow(4)
+
+    @tvm.script.ir_module
+    class expected:
+        @R.function
+        def main(input: R.Tensor((4,), dtype="int64")) -> R.Tuple(R.Tensor((4,), dtype="int64")):
+            # block 0
+            with R.dataflow():
+                lv: R.Tensor((4,), dtype="int64") = R.multiply(input, input)
+                lv1: R.Tensor((4,), dtype="int64") = R.multiply(lv, input)
+                lv2: R.Tensor((4,), dtype="int64") = R.multiply(lv1, input)
+                gv: R.Tuple(R.Tensor((4,), dtype="int64")) = (lv2,)
+                R.output(gv)
+            return gv
+
+    example_args = (torch.tensor([-1, 1, 2, 3], dtype=torch.int64),)
+    verify_model(Pow(), example_args, {}, expected)
+
+
 def test_logsoftmax():
     class LogSoftmax(Module):
         def __init__(self):
@@ -7402,6 +7447,112 @@ def test_index_put():
     verify_model(IndexPutBatchedWithNone(), example_args_batched_none, {}, ExpectedBatchedWithNone)
 
 
+def test_index_put_with_tuple_output():
+    class IndexPutTupleOutput(Module):
+        def forward(self, x, buf, idx):
+            values = x
+            buf[..., idx, idx] = values
+            return x[..., 1], buf
+
+    example_args = (
+        torch.ones(2, 3, 5, dtype=torch.float32),
+        torch.zeros(2, 3, 5, 5, dtype=torch.float32),
+        torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64),
+    )
+
+    exported_program = export(IndexPutTupleOutput(), args=example_args)
+    mod = from_exported_program(exported_program)
+
+    ret_sinfo = mod["main"].ret_struct_info
+    assert isinstance(ret_sinfo, relax.TupleStructInfo)
+
+    tensor_fields = [f for f in ret_sinfo.fields if isinstance(f, relax.TensorStructInfo)]
+    assert len(tensor_fields) >= 2
+
+    assert any(
+        len(f.shape) == 4 and int(f.shape[-2]) == 5 and int(f.shape[-1]) == 5 for f in tensor_fields
+    )
+
+
+def test_m4d_diag_index_put_tuple_output_regression():
+    class M4D(Module):
+        def forward(self, x):
+            b, k, n = 2, 3, 5
+            buf = x.new_zeros(b, k, n, n)
+            idx = torch.arange(n, device=x.device)
+
+            diag = buf[..., idx, idx]
+            diag = torch.nn.functional.elu(diag) + 1.0 + 1e-8
+            buf[..., idx, idx] = diag
+
+            return x[..., :1], buf
+
+    ex_in = torch.zeros(2, 3, 5, dtype=torch.float32)
+    exported_program = export(M4D().eval(), args=(ex_in,))
+
+    exported_targets = [str(getattr(n, "target", "")) for n in exported_program.graph.nodes]
+    assert any("index_put" in target for target in exported_targets)
+
+    # Regression focus: importing this graph should not segfault at Tuple construction.
+    mod = from_exported_program(exported_program)
+    ret_sinfo = mod["main"].ret_struct_info
+    assert isinstance(ret_sinfo, relax.TupleStructInfo)
+
+    tensor_fields = [f for f in ret_sinfo.fields if isinstance(f, relax.TensorStructInfo)]
+    assert len(tensor_fields) >= 2
+    # x: (2, 3, 5) → x[..., :1]: (2, 3, 1)
+    assert any(len(f.shape) == 3 and int(f.shape[-1]) == 1 for f in tensor_fields)
+    # buf: (2, 3, 5, 5) → 4-D with spatial dims 5x5
+    assert any(
+        len(f.shape) == 4 and int(f.shape[-2]) == 5 and int(f.shape[-1]) == 5 for f in tensor_fields
+    )
+
+
+def test_index_put_mutation_through_alias_regression():
+    class IndexPutAlias(Module):
+        def forward(self, x, idx, values):
+            y = torch.ops.aten.alias.default(x)
+            y[idx] = values
+            return x, y
+
+    example_args = (
+        torch.zeros(5, dtype=torch.float32),
+        torch.tensor([1, 3], dtype=torch.int64),
+        torch.tensor([2.0, 4.0], dtype=torch.float32),
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((5,), dtype="float32"),
+            idx: R.Tensor((2,), dtype="int64"),
+            values: R.Tensor((2,), dtype="float32"),
+        ) -> R.Tuple(
+            R.Tensor((5,), dtype="float32"),
+            R.Tensor((5,), dtype="float32"),
+            R.Tensor((5,), dtype="float32"),
+        ):
+            with R.dataflow():
+                lv: R.Tensor((5,), dtype="float32") = R.index_put(
+                    x, (idx,), values, accumulate=False
+                )
+                # ExportedProgram may include an additional mutation output.
+                gv: R.Tuple(
+                    R.Tensor((5,), dtype="float32"),
+                    R.Tensor((5,), dtype="float32"),
+                    R.Tensor((5,), dtype="float32"),
+                ) = (
+                    lv,
+                    lv,
+                    lv,
+                )
+                R.output(gv)
+            return gv
+
+    verify_model(IndexPutAlias(), example_args, {}, Expected)
+
+
 def test_flip():
     class Flip0(Module):
         def forward(self, data):
@@ -7439,6 +7590,47 @@ def test_flip():
 
     verify_model(Flip0(), example_args, {}, Expected0)
     verify_model(Flip1(), example_args, {}, Expected1)
+
+
+def test_flip_multi_axis():
+    class FlipMulti(Module):
+        def forward(self, data):
+            return torch.flip(data, [0, 1])
+
+    class FlipNegMulti(Module):
+        def forward(self, data):
+            return torch.flip(data, dims=[-1, -2])
+
+    @tvm.script.ir_module
+    class ExpectedMulti:
+        @R.function
+        def main(
+            inp_0: R.Tensor((2, 3), dtype="float32"),
+        ) -> R.Tuple(R.Tensor((2, 3), dtype="float32")):
+            with R.dataflow():
+                lv: R.Tensor((2, 3), dtype="float32") = R.flip(inp_0, axis=0)
+                lv1: R.Tensor((2, 3), dtype="float32") = R.flip(lv, axis=1)
+                gv: R.Tuple(R.Tensor((2, 3), dtype="float32")) = (lv1,)
+                R.output(gv)
+            return gv
+
+    @tvm.script.ir_module
+    class ExpectedNegMulti:
+        @R.function
+        def main(
+            inp_0: R.Tensor((2, 3), dtype="float32"),
+        ) -> R.Tuple(R.Tensor((2, 3), dtype="float32")):
+            with R.dataflow():
+                lv: R.Tensor((2, 3), dtype="float32") = R.flip(inp_0, axis=-1)
+                lv1: R.Tensor((2, 3), dtype="float32") = R.flip(lv, axis=-2)
+                gv: R.Tuple(R.Tensor((2, 3), dtype="float32")) = (lv1,)
+                R.output(gv)
+            return gv
+
+    example_args = (torch.randn(2, 3, dtype=torch.float32),)
+
+    verify_model(FlipMulti(), example_args, {}, ExpectedMulti)
+    verify_model(FlipNegMulti(), example_args, {}, ExpectedNegMulti)
 
 
 def test_take():
@@ -7492,6 +7684,7 @@ def test_any():
 
 
 def test_std():
+    # torch.std(x) defaults to correction=1 (Bessel); decomposes to var.correction + sqrt.
     class Std(Module):
         def forward(self, x):
             return torch.std(x)
@@ -7504,8 +7697,9 @@ def test_std():
         ) -> R.Tuple(R.Tensor((), dtype="float32")):
             with R.dataflow():
                 lv: R.Tensor((), dtype="float32") = R.variance(x, axis=None, keepdims=False)
-                lv1: R.Tensor((), dtype="float32") = R.sqrt(lv)
-                gv: R.Tuple(R.Tensor((), dtype="float32")) = (lv1,)
+                lv1: R.Tensor((), dtype="float32") = R.multiply(lv, R.const(15.0 / 14.0, "float32"))
+                lv2: R.Tensor((), dtype="float32") = R.sqrt(lv1)
+                gv: R.Tuple(R.Tensor((), dtype="float32")) = (lv2,)
                 R.output(gv)
             return gv
 
@@ -7514,6 +7708,7 @@ def test_std():
 
 
 def test_var():
+    # torch.var(x) defaults to correction=1 (Bessel).
     class Var(Module):
         def forward(self, x):
             return torch.var(x)
@@ -7526,7 +7721,8 @@ def test_var():
         ) -> R.Tuple(R.Tensor((), dtype="float32")):
             with R.dataflow():
                 lv: R.Tensor((), dtype="float32") = R.variance(x, axis=None, keepdims=False)
-                gv: R.Tuple(R.Tensor((), dtype="float32")) = (lv,)
+                lv1: R.Tensor((), dtype="float32") = R.multiply(lv, R.const(15.0 / 14.0, "float32"))
+                gv: R.Tuple(R.Tensor((), dtype="float32")) = (lv1,)
                 R.output(gv)
             return gv
 
@@ -7534,24 +7730,67 @@ def test_var():
     verify_model(Var(), example_args, {}, Expected)
 
 
-def test_prod():
+def test_var_correction():
+    class VarCorrection2(Module):
+        def forward(self, x):
+            return torch.var(x, dim=-1, correction=2)
+
+    class VarCorrection0(Module):
+        def forward(self, x):
+            return torch.var(x, dim=1, correction=0)
+
+    @tvm.script.ir_module
+    class Expected2:
+        @R.function
+        def main(
+            x: R.Tensor((2, 5), dtype="float32"),
+        ) -> R.Tuple(R.Tensor((2,), dtype="float32")):
+            with R.dataflow():
+                lv: R.Tensor((2,), dtype="float32") = R.variance(x, axis=[-1], keepdims=False)
+                lv1: R.Tensor((2,), dtype="float32") = R.multiply(lv, R.const(5.0 / 3.0, "float32"))
+                gv: R.Tuple(R.Tensor((2,), dtype="float32")) = (lv1,)
+                R.output(gv)
+            return gv
+
+    @tvm.script.ir_module
+    class Expected0:
+        @R.function
+        def main(
+            x: R.Tensor((2, 5), dtype="float32"),
+        ) -> R.Tuple(R.Tensor((2,), dtype="float32")):
+            with R.dataflow():
+                lv: R.Tensor((2,), dtype="float32") = R.variance(x, axis=[1], keepdims=False)
+                gv: R.Tuple(R.Tensor((2,), dtype="float32")) = (lv,)
+                R.output(gv)
+            return gv
+
+    example_args = (torch.randn(2, 5, dtype=torch.float32),)
+    verify_model(VarCorrection2(), example_args, {}, Expected2)
+    verify_model(VarCorrection0(), example_args, {}, Expected0)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,relax_dtype",
+    [(torch.float32, "float32"), (torch.bool, "bool")],
+)
+def test_prod(torch_dtype, relax_dtype):
     class Prod(Module):
         def forward(self, x):
-            return torch.prod(x)
+            return torch.prod(x, dtype=torch_dtype)
 
     @tvm.script.ir_module
     class Expected:
         @R.function
         def main(
-            x: R.Tensor((5, 3), dtype="float32"),
-        ) -> R.Tuple(R.Tensor((), dtype="float32")):
+            x: R.Tensor((5, 3), dtype=relax_dtype),
+        ) -> R.Tuple(R.Tensor((), dtype=relax_dtype)):
             with R.dataflow():
-                lv: R.Tensor((), dtype="float32") = R.prod(x, axis=None, keepdims=False)
-                gv: R.Tuple(R.Tensor((), dtype="float32")) = (lv,)
+                lv: R.Tensor((), dtype=relax_dtype) = R.prod(x, axis=None, keepdims=False)
+                gv: R.Tuple(R.Tensor((), dtype=relax_dtype)) = (lv,)
                 R.output(gv)
             return gv
 
-    example_args = (torch.randn(5, 3, dtype=torch.float32),)
+    example_args = (torch.ones(5, 3, dtype=torch_dtype),)
     verify_model(Prod(), example_args, {}, Expected)
 
 
@@ -7900,6 +8139,8 @@ def test_norm():
 
 
 def test_eye():
+    import pytest
+
     class Eye1(Module):
         def forward(self, input):
             return torch.eye(3, 5, dtype=torch.float32)
@@ -9098,9 +9339,7 @@ def test_cond_nested():
 def test_affine_grid():
     class AffineGrid(Module):
         def forward(self, theta):
-            return torch.nn.functional.affine_grid(
-                theta, [1, 3, 16, 16], align_corners=True
-            )
+            return torch.nn.functional.affine_grid(theta, [1, 3, 16, 16], align_corners=True)
 
     @tvm.script.ir_module
     class expected:
@@ -9129,9 +9368,7 @@ def test_affine_grid_numerically():
 
     class AffineGrid(Module):
         def forward(self, theta):
-            return torch.nn.functional.affine_grid(
-                theta, [2, 3, 8, 12], align_corners=True
-            )
+            return torch.nn.functional.affine_grid(theta, [2, 3, 8, 12], align_corners=True)
 
     model = AffineGrid()
     example_args = (torch.randn(2, 2, 3, dtype=torch.float32),)

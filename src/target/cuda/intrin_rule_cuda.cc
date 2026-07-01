@@ -134,16 +134,18 @@ struct CUDAWarpIntrinsic {
       return Op::Get("tirx.cuda.__shfl_sync");
     } else if (orig_op.same_as(builtin::tvm_warp_shuffle_up())) {
       return Op::Get("tirx.cuda.__shfl_up_sync");
-    } else {
-      TVM_FFI_ICHECK(orig_op.same_as(builtin::tvm_warp_shuffle_down()));
+    } else if (orig_op.same_as(builtin::tvm_warp_shuffle_down())) {
       return Op::Get("tirx.cuda.__shfl_down_sync");
+    } else {
+      TVM_FFI_ICHECK(orig_op.same_as(builtin::tvm_warp_shuffle_xor()));
+      return Op::Get("tirx.cuda.__shfl_xor_sync");
     }
   }
 };
 
 static PrimExpr DispatchCUDAWarpActiveMask(const PrimExpr& e) {
   const CallNode* call = e.as<CallNode>();
-  return Call(call->dtype, Op::Get("tirx.cuda.__activemask"), call->args, call->annotations);
+  return Call(call->dtype, Op::Get("tirx.cuda.__activemask"), call->args, call->attrs);
 }
 
 template <typename T>
@@ -152,7 +154,7 @@ static PrimExpr DispatchCUDAShuffle(const PrimExpr& e) {
   TVM_FFI_ICHECK(call != nullptr);
   TVM_FFI_ICHECK_EQ(call->args.size(), 5);  // mask, value, warp_id, width, warp_size
   ffi::Array<PrimExpr> cuda_args{{call->args[0], call->args[1], call->args[2], call->args[3]}};
-  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), cuda_args, call->annotations);
+  return Call(call->dtype, T()(call->dtype, Downcast<Op>(call->op)), cuda_args, call->attrs);
 }
 
 TVM_REGISTER_OP("tirx.clz")
@@ -178,36 +180,45 @@ TVM_REGISTER_OP("tirx.nearbyint")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.exp")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.exp2")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.exp10")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.erf")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.log")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.log2")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.log10")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.tan")
+    // Now the fast math version of tan and the default version of tan are same.
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMathTan>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.cos")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.cosh")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.sin")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.sinh")
@@ -217,12 +228,17 @@ TVM_REGISTER_OP("tirx.atan")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.tanh")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.sqrt")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
+TVM_REGISTER_OP("tirx.rsqrt")
+    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
+
 TVM_REGISTER_OP("tirx.pow")
+    .set_attr<FLowerIntrinsic>("cuda.fastmath.FLowerIntrinsic", DispatchPureExtern<CUDAFastMath>)
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
 TVM_REGISTER_OP("tirx.popcount")
@@ -237,13 +253,16 @@ TVM_REGISTER_OP("tirx.tvm_warp_shuffle_up")
 TVM_REGISTER_OP("tirx.tvm_warp_shuffle_down")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchCUDAShuffle<CUDAWarpIntrinsic>);
 
+TVM_REGISTER_OP("tirx.tvm_warp_shuffle_xor")
+    .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchCUDAShuffle<CUDAWarpIntrinsic>);
+
 TVM_REGISTER_OP("tirx.tvm_warp_activemask")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchCUDAWarpActiveMask);
 
 TVM_REGISTER_OP("tirx.fmod")
     .set_attr<FLowerIntrinsic>("cuda.FLowerIntrinsic", DispatchPureExtern<CUDAMath>);
 
-// Register low-level builtin ops.
+// Register low-level CUDA device intrinsics.
 // TODO(tvm-team): consider make CUDA its own subfolder and create a file for low-level builtins.
 TVM_REGISTER_OP("tirx.cuda.__shfl_sync")
     .set_num_inputs(4)
@@ -251,8 +270,11 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_sync")
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("lane", "Expr", "The source thread id.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("cuda"), 10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("cuda.__shfl_sync"), 10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__shfl_up_sync")
@@ -261,8 +283,12 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_up_sync")
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("delta", "Expr", "The source lane id offset to be added.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("cuda"), 10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("cuda.__shfl_up_sync"),
+                                        10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_up_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__shfl_down_sync")
@@ -271,14 +297,35 @@ TVM_REGISTER_OP("tirx.cuda.__shfl_down_sync")
     .add_argument("var", "Expr", "The variable to sync.")
     .add_argument("delta", "Expr", "The source lane id offset to be subtracted.")
     .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("cuda"), 10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("cuda.__shfl_down_sync"),
+                                        10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_down_sync")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
+    .set_attr<bool>("cuda.need_warp_shuffle", true);
+
+TVM_REGISTER_OP("tirx.cuda.__shfl_xor_sync")
+    .set_num_inputs(4)
+    .add_argument("mask", "Expr", "The thread mask.")
+    .add_argument("var", "Expr", "The variable to sync.")
+    .add_argument("lane_mask", "Expr", "The lane mask.")
+    .add_argument("width", "Expr", "The warp thread width, must be a power of 2.")
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("cuda"), 10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("cuda.__shfl_xor_sync"),
+                                        10)
+    .set_attr<TGlobalSymbol>("TGlobalSymbol", "__shfl_xor_sync")
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kOpaque))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 TVM_REGISTER_OP("tirx.cuda.__activemask")
     .set_num_inputs(0)
+    .set_attr<tirx::TIRxOpCategory>("TIRxOpCategory", ffi::String("device_intrin"), 10)
+    .set_attr<tirx::TDeviceIntrinsicNamespace>("TDeviceIntrinsicNamespace", ffi::String("cuda"), 10)
+    .set_attr<tirx::TScriptPrinterName>("TScriptPrinterName", ffi::String("cuda.__activemask"), 10)
     .set_attr<TGlobalSymbol>("TGlobalSymbol", "__activemask")
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure))
+    .set_attr<TCallEffectKind>("TCallEffectKind", static_cast<int64_t>(CallEffectKind::kPure))
     .set_attr<bool>("cuda.need_warp_shuffle", true);
 
 }  // namespace intrin

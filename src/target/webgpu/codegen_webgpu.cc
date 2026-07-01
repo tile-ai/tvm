@@ -126,7 +126,7 @@ void CodeGenWebGPU::InitFuncState(const PrimFunc& f) {
 }
 
 CodeGenWebGPU::CodeGenWebGPU(Target target) : target_(target) {
-  enable_subgroups_ = target_->GetAttr<Bool>("supports_subgroups").value_or(Bool(false));
+  enable_subgroups_ = target_->GetAttr<bool>("supports_subgroups").value_or(false);
 }
 
 runtime::FunctionInfo CodeGenWebGPU::AddFunction(const PrimFunc& f, bool skip_readonly_decl) {
@@ -688,7 +688,7 @@ void CodeGenWebGPU::VisitStmt_(const AllocBufferNode* op) {
 
 void CodeGenWebGPU::VisitStmt_(const ForNode* op) {
   std::string begin_str = PrintExpr(op->min);
-  PrimExpr end = is_zero(op->min) ? op->extent : arith::Analyzer().Simplify(op->min + op->extent);
+  PrimExpr end = is_zero(op->min) ? op->extent : arith::Analyzer()->Simplify(op->min + op->extent);
   std::string end_str = PrintExpr(end);
   std::string step_str = op->step.has_value() ? PrintExpr(*op->step) : "";
   std::string vid = AllocVarID(op->loop_var.get());
@@ -726,6 +726,16 @@ void CodeGenWebGPU::VisitStmt_(const WhileNode* op) {
   stream << "}\n";
 }
 
+void CodeGenWebGPU::VisitStmt_(const BreakNode* op) {
+  PrintIndent();
+  stream << "break;\n";
+}
+
+void CodeGenWebGPU::VisitStmt_(const ContinueNode* op) {
+  PrintIndent();
+  stream << "continue;\n";
+}
+
 //-------------------------------------------------
 // Build logic.
 //-------------------------------------------------
@@ -750,8 +760,9 @@ ffi::Module BuildWebGPU(IRModule mod, Target target) {
     TVM_FFI_ICHECK(kv.second->IsInstance<PrimFuncNode>())
         << "CodeGenWebGPU: Can only take PrimFunc";
     auto f = Downcast<PrimFunc>(kv.second);
-    auto calling_conv = f->GetAttr<Integer>(tvm::attr::kCallingConv);
-    TVM_FFI_ICHECK(calling_conv == CallingConv::kDeviceKernelLaunch)
+    auto calling_conv = f->GetAttr<int64_t>(tvm::attr::kCallingConv);
+    TVM_FFI_ICHECK(calling_conv.has_value() &&
+                   calling_conv.value() == static_cast<int64_t>(CallingConv::kDeviceKernelLaunch))
         << "CodeGenWebGPU: expect calling_conv equals CallingConv::kDeviceKernelLaunch";
     auto global_symbol = f->GetAttr<ffi::String>(tvm::attr::kGlobalSymbol);
     TVM_FFI_ICHECK(global_symbol.has_value())

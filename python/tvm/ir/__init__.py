@@ -29,20 +29,12 @@ from .base import (
     assert_structural_equal,
     load_json,
     save_json,
-    structural_equal,
-    structural_hash,
 )
 from .expr import BaseExpr, GlobalVar, PrimExpr, Range, RelaxExpr
 from .function import BaseFunc, CallingConv
 from .global_info import GlobalInfo, DummyGlobalInfo, VDevice
 from .module import IRModule
 from .op import Op, register_intrin_lowering, register_op_attr
-from .type import (
-    FuncType,
-    PointerType,
-    PrimType,
-    TupleType,
-    Type,
-)
+from .type import FuncType, PointerType, PrimType, TupleType, Type
 
-from . import analysis
+from tvm_ffi import Array, Map

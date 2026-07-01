@@ -25,11 +25,11 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/scope_stack.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/tirx/builtin.h>
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/stmt_functor.h>
 #include <tvm/tirx/transform.h>
-#include <tvm/runtime/logging.h>
 
 #include <unordered_set>
 
@@ -45,7 +45,7 @@ class BuiltinLower : public StmtExprMutator {
   static PrimFunc Build(PrimFunc func) {
     ffi::Optional<PrimExpr> device_type = std::nullopt;
     if (auto target = func->GetAttr<Target>(tvm::attr::kTarget)) {
-      device_type = Integer(target.value()->kind->default_device_type);
+      device_type = IntImm(DataType::Int(32), target.value()->kind->default_device_type);
     }
 
     BuiltinLower mutator(device_type);
@@ -240,12 +240,15 @@ class BuiltinLower : public StmtExprMutator {
     // AllocBuffer is flat (no body). Visit buffer fields via base class.
     Stmt stmt = StmtExprMutator::VisitStmt_(op);
     op = stmt.as<AllocBufferNode>();
-    int64_t nbytes = GetVectorBytes(op->buffer->dtype);
     if (op->annotations.count(transform::kDisableLowerTVMBuiltin)) {
-      if (Downcast<Bool>(op->annotations[transform::kDisableLowerTVMBuiltin])) {
+      if (Downcast<IntImm>(op->annotations[transform::kDisableLowerTVMBuiltin])->value) {
         return stmt;
       }
     }
+    if (op->buffer->dtype.is_scalable_vector()) {
+      return stmt;
+    }
+    int64_t nbytes = GetVectorBytes(op->buffer->dtype);
     if (const auto* dev_type = device_type_.as<IntImmNode>();
         dev_type && dev_type->value == kDLCPU) {
       auto storage_scope = Downcast<PointerType>(op->buffer->data->type_annotation)->storage_scope;

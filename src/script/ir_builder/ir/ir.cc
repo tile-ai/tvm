@@ -19,8 +19,8 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
-#include <tvm/script/ir_builder/ir/ir.h>
 #include <tvm/runtime/logging.h>
+#include <tvm/script/ir_builder/ir/ir.h>
 
 #include "./utils.h"
 
@@ -166,6 +166,14 @@ VDevice LookupVDevice(ffi::String target_kind, int device_index) {
   return VDevice();
 }
 
+bool LookupName(const ffi::String& name) {
+  if (IRBuilder::IsInScope()) {
+    IRModuleFrame frame = FindModuleFrame();
+    return frame->global_var_map.find(name) != frame->global_var_map.end();
+  }
+  return false;
+}
+
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
@@ -176,7 +184,8 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("script.ir_builder.ir.ModuleGetAttr", ModuleGetAttr)
       .def("script.ir_builder.ir.ModuleSetAttr", ModuleSetAttr)
       .def("script.ir_builder.ir.ModuleGlobalInfos", ModuleGlobalInfos)
-      .def("script.ir_builder.ir.LookupVDevice", LookupVDevice);
+      .def("script.ir_builder.ir.LookupVDevice", LookupVDevice)
+      .def("script.ir_builder.ir.LookupName", LookupName);
 }
 
 }  // namespace ir
