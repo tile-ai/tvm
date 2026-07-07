@@ -4,8 +4,6 @@
 
 #include "tvm/ffi/string.h"
 #include "tvm/ir/expr.h"
-#include "tvm/tir/analysis.h"
-#include "tvm/arith/analyzer.h"
 
 namespace tvm::arith {
 
