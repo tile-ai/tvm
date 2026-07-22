@@ -51,7 +51,10 @@ class StmtNode : public ffi::Object {
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
-    refl::ObjectDef<StmtNode>().def_ro("span", &StmtNode::span);
+    // Spans are source debug info and must not participate in structural
+    // equality or hashing (same convention as BufferNode::span).
+    refl::ObjectDef<StmtNode>().def_ro("span", &StmtNode::span,
+                                       refl::AttachFieldFlag::SEqHashIgnore());
   }
 
   TVM_OBJECT_ENABLE_SCRIPT_PRINTER();
