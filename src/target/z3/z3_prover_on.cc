@@ -153,6 +153,7 @@ public:
 
   /// @brief Enter a constraint scope
   std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false) {
+    if (!IsValidDType(constraint->dtype)) return nullptr;
     scope_stack_.push_back({});
     scope_stack_.back().push_back(Scope{Scope::Constraint, Var(), PrimExpr(), PrimExpr(), PrimExpr(), constraint});
     solver.push();

@@ -172,5 +172,14 @@ def test_simplify_float_division():
     tvm.ir.assert_structural_equal(ry, sy)
 
 
+def test_vector_constraint_does_not_crash_z3():
+    ana = tvm.arith.Analyzer()
+    condition = tirx.Broadcast(tirx.Var("condition", "bool"), 4)
+    x = tirx.Var("x", "int32")
+
+    with ana.constraint_scope(condition):
+        tvm.ir.assert_structural_equal(ana.simplify(x + 0), x)
+
+
 if __name__ == "__main__":
     tvm.testing.main()
