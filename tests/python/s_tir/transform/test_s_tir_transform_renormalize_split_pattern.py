@@ -177,5 +177,48 @@ def test_analyze_inside_integer_conditional(integer_condition):
     transform(mod)
 
 
+@tvm.script.ir_module
+class BroadcastSelectBefore:
+    @T.prim_func
+    def main(tx: T.int32, a: T.Buffer((4,), "float32"), b: T.Buffer((4,), "float32")):
+        b[T.Ramp(0, 1, 4)] = T.Select(
+            T.Broadcast(tx < 64, 4),
+            a[T.Ramp(0, 1, 4)],
+            T.Broadcast(T.float32(0), 4),
+        )
+
+
+@tvm.script.ir_module
+class BroadcastSelectExpected:
+    @T.prim_func
+    def main(tx: T.int32, a: T.Buffer((4,), "float32"), b: T.Buffer((4,), "float32")):
+        b[T.Ramp(0, 1, 4)] = T.Select(
+            tx // 64 < 1,
+            a[T.Ramp(0, 1, 4)],
+            T.Broadcast(T.float32(0), 4),
+        )
+
+
+@tvm.script.ir_module
+class PerLaneSelect:
+    @T.prim_func
+    def main(tx: T.int32, a: T.Buffer((4,), "float32"), b: T.Buffer((4,), "float32")):
+        b[T.Ramp(0, 1, 4)] = T.Select(
+            T.Ramp(tx, 1, 4) < T.Broadcast(64, 4),
+            a[T.Ramp(0, 1, 4)],
+            T.Broadcast(T.float32(0), 4),
+        )
+
+
+def test_vector_select_conditions():
+    transform = tvm.s_tir.transform.RenormalizeSplitPattern()
+
+    after = transform(BroadcastSelectBefore)
+    tvm.ir.assert_structural_equal(after, BroadcastSelectExpected)
+
+    after = transform(PerLaneSelect)
+    tvm.ir.assert_structural_equal(after, PerLaneSelect)
+
+
 if __name__ == "__main__":
     tvm.testing.main()

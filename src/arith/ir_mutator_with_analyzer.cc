@@ -28,10 +28,26 @@
 #include <tvm/tirx/analysis.h>
 #include <tvm/tirx/op.h>
 
+#include <optional>
+
 namespace tvm {
 namespace arith {
 
 using namespace tirx;
+
+namespace {
+
+ffi::Optional<PrimExpr> ExtractScalarCondition(const PrimExpr& condition) {
+  if (condition.dtype().is_scalar()) {
+    return condition;
+  }
+  if (const auto* broadcast = condition.as<BroadcastNode>()) {
+    return broadcast->value;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
 
 void IRMutatorWithAnalyzer::MarkBufferMapShapes(const tirx::PrimFunc& func) {
   // Mark the all the symbolic buffer shape values in the buffer map as positive value.
@@ -223,30 +239,46 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const LetNode* op) {
 
 PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const SelectNode* op) {
   PrimExpr cond = this->VisitExpr(op->condition);
+  PrimExpr result_cond = cond;
   PrimExpr true_value, false_value;
-  constraint_scope_.WithNewScope([&]() {
-    constraint_scope_.Current().Emplace(analyzer_, cond);
-    true_value = VisitExpr(op->true_value);
-  });
-  {
-    PrimExpr neg_cond = analyzer_->rewrite_simplify(Not(cond));
+
+  ffi::Optional<PrimExpr> scalar_cond = ExtractScalarCondition(cond);
+  if (scalar_cond.has_value()) {
+    PrimExpr constraint = scalar_cond.value();
+    // Select accepts a scalar condition for vector values.  Keep a uniform
+    // broadcast scalar so downstream code generators do not emit a vector as
+    // the condition of a scalar conditional expression.
+    result_cond = constraint;
     constraint_scope_.WithNewScope([&]() {
-      constraint_scope_.Current().Emplace(analyzer_, neg_cond);
+      constraint_scope_.Current().Emplace(analyzer_, constraint);
+      true_value = VisitExpr(op->true_value);
+    });
+
+    PrimExpr neg_constraint = analyzer_->rewrite_simplify(Not(constraint));
+    constraint_scope_.WithNewScope([&]() {
+      constraint_scope_.Current().Emplace(analyzer_, neg_constraint);
       false_value = VisitExpr(op->false_value);
     });
+
+    if (is_zero(constraint)) {
+      return false_value;
+    }
+    if (is_one(constraint)) {
+      return true_value;
+    }
+  } else {
+    // A per-lane condition has no single truth value that can be used as
+    // an analyzer constraint while visiting the whole vector expression.
+    true_value = VisitExpr(op->true_value);
+    false_value = VisitExpr(op->false_value);
   }
-  if (is_zero(cond)) {
-    return false_value;
-  }
-  if (is_one(cond)) {
-    return true_value;
-  }
+
   // normal path
-  if (cond.same_as(op->condition) && true_value.same_as(op->true_value) &&
+  if (result_cond.same_as(op->condition) && true_value.same_as(op->true_value) &&
       false_value.same_as(op->false_value)) {
     return ffi::GetRef<PrimExpr>(op);
   } else {
-    return Select(cond, true_value, false_value);
+    return Select(result_cond, true_value, false_value, op->span);
   }
 }
 
