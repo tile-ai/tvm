@@ -5,10 +5,13 @@
 #include <tvm/tirx/builtin.h>
 #include "z3++.h"
 
+#include <algorithm>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "tvm/ffi/cast.h"
 #include "tvm/ffi/object.h"
@@ -78,8 +81,42 @@ public:
   /// @brief Z3 solver instance
   z3::solver solver {*ctx};
 
-  /// @brief Memorize pure expressions
-  std::unordered_map<PrimExpr, z3::expr, StructuralHash, ExprDeepEqual> memo_;
+  /// @brief Memoized PrimExpr -> slot in z3_pool_. Holds no z3 handles, so
+  /// its pointer-hashed bucket order cannot affect z3 object lifetime.
+  std::unordered_map<PrimExpr, size_t, StructuralHash, ExprDeepEqual> memo_;
+
+  /// @brief Slots owning the memoized z3 handles, plus a free-slot stack.
+  /// Handles are created and released only at fixed points of the execution
+  /// path (never in hash-bucket order), so Z3's ast-id recycling -- and thus
+  /// solver behavior under rlimit -- stays deterministic across processes.
+  std::vector<std::optional<z3::expr>> z3_pool_;
+  std::vector<size_t> free_slots_;
+
+  void MemoPut(const PrimExpr &e, const z3::expr &ex) {
+    auto [it, inserted] = memo_.emplace(e, 0);
+    if (!inserted) return;  // already memoized: keep the existing entry
+    if (free_slots_.empty()) {
+      it->second = z3_pool_.size();
+      z3_pool_.emplace_back(ex);
+    } else {
+      it->second = free_slots_.back();
+      free_slots_.pop_back();
+      z3_pool_[it->second] = ex;
+    }
+  }
+
+  void MemoErase(const PrimExpr &e) {
+    auto it = memo_.find(e);
+    if (it == memo_.end()) return;
+    z3_pool_[it->second].reset();
+    free_slots_.push_back(it->second);
+    memo_.erase(it);
+  }
+
+  const z3::expr* MemoGet(const PrimExpr &e) const {
+    auto it = memo_.find(e);
+    return it == memo_.end() ? nullptr : &*z3_pool_[it->second];
+  }
 
   bool is_assume = false;
 
@@ -110,7 +147,25 @@ public:
     // SetTimeoutMs(5);
     // use rlimit, not timeout to ensure determinstic behavior
     SetRLimit(1e4);
+    impl_id_ = impl_counter_++;
+    if (FILE *lf = Z3LogFile()) { fprintf(lf, "IMPL_NEW %ld\n", impl_id_); fflush(lf); }
   }
+
+  ~Impl() {
+    if (FILE *lf = Z3LogFile()) { fprintf(lf, "IMPL_DEL %ld\n", impl_id_); fflush(lf); }
+  }
+
+  // Determinism-debug logging, enabled via TL_Z3_LOG=<path>; no-op when unset.
+  static FILE *Z3LogFile() {
+    static FILE *f = [] {
+      const char *p = getenv("TL_Z3_LOG");
+      return p ? fopen(p, "a") : nullptr;
+    }();
+    return f;
+  }
+  inline static long impl_counter_ = 0;
+  inline static long z3_log_seq_ = 0;
+  long impl_id_ = -1;
 
   /// @brief Create a Free z3 expression from PrimExprNode
   z3::expr Create(const PrimExprNode *op) {
@@ -119,10 +174,13 @@ public:
     std::string name = ns.GetNewName(ref);
     /// TVM max_val can't handle uint64 max correctly, so we special case it here
     if(dtype.is_bool()) {
-      return ctx->bool_const(name.c_str());
+      z3::expr be = ctx->bool_const(name.c_str());
+      if (FILE *lf = Z3LogFile()) { fprintf(lf, "NEWVAR %s id=%u\n", name.c_str(), be.id()); fflush(lf); }
+      return be;
     }
     else {
       z3::expr e = ctx->int_const(name.c_str());
+      if (FILE *lf = Z3LogFile()) { fprintf(lf, "NEWVAR %s id=%u\n", name.c_str(), e.id()); fflush(lf); }
       if(dtype.is_uint() && dtype.bits() == 64) {
         solver.add(ctx->int_val(0) <= e && e <= ctx->int_val((uint64_t)UINT64_MAX));
       } else {
@@ -154,6 +212,10 @@ public:
   /// @brief Enter a constraint scope
   std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false) {
     if (!IsValidDType(constraint->dtype)) return nullptr;
+    if (FILE *lf = Z3LogFile()) {
+      std::stringstream ss; ss << "CONSTR " << impl_id_ << " assume=" << is_assume << ' ' << constraint << "\n";
+      fputs(ss.str().c_str(), lf); fflush(lf);
+    }
     scope_stack_.push_back({});
     scope_stack_.back().push_back(Scope{Scope::Constraint, Var(), PrimExpr(), PrimExpr(), PrimExpr(), constraint});
     solver.push();
@@ -166,13 +228,13 @@ public:
       return [this, side_effect_exprs]() {
         solver.pop();
         for (const auto& expr : side_effect_exprs) {
-          memo_.erase(expr);
+          MemoErase(expr);
         }
         scope_stack_.pop_back();
       };
     } else {
       for(const auto & expr: side_effect_exprs) {
-        memo_.erase(expr);
+        MemoErase(expr);
       }
       return [this]() {
         solver.pop();
@@ -232,6 +294,15 @@ public:
     constr.push_back(!ConvertBool(expr));
     auto result = solver.check(constr);
     constr.pop_back();
+    if (FILE *lf = Z3LogFile()) {
+      std::stringstream st, es;
+      st << solver.statistics();
+      es << expr;
+      fprintf(lf, "=== Q%ld CANPROVE result=%d expr=%s\n%s\n--- stats\n%s\n=== END\n",
+              z3_log_seq_++, static_cast<int>(result), es.str().c_str(),
+              std::string(GetSMTLIB2(expr)).c_str(), st.str().c_str());
+      fflush(lf);
+    }
     return result == z3::unsat;
   }
 
@@ -239,6 +310,10 @@ public:
   /// @brief Bind a variable to a value or a range
   void Bind(const Var & var, const PrimExpr & value, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
+    if (FILE *lf = Z3LogFile()) {
+      std::stringstream ss; ss << "BIND " << impl_id_ << ' ' << var << " = " << value << "\n";
+      fputs(ss.str().c_str(), lf); fflush(lf);
+    }
     scope_stack_.back().push_back(Scope{
       Scope::BindValue,
       var,
@@ -246,12 +321,16 @@ public:
     });
     // we add the binding whenever the value is pure,
     // because non-pure parts are handling by creating free variables in VisitExpr
-    memo_.emplace(var, ConvertInt(value));
+    MemoPut(var, ConvertInt(value));
   }
 
   /// @brief Bind a variable to a range
   void Bind(const Var & var, const Range & range, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
+    if (FILE *lf = Z3LogFile()) {
+      std::stringstream ss; ss << "BINDR " << impl_id_ << ' ' << var << " in [" << range->min << ", +" << range->extent << ")\n";
+      fputs(ss.str().c_str(), lf); fflush(lf);
+    }
     scope_stack_.back().push_back(Scope{
       Scope::BindRange,
       var,
@@ -262,7 +341,7 @@ public:
     // 1. Create a placeholder for the var, and save it in the memo
     //    if the var is overrided later, we can just update the memo, and the old placeholder will be ignored
     auto var_expr = Create(var.as<PrimExprNode>());
-    memo_.emplace(var, var_expr);
+    MemoPut(var, var_expr);
 
     // 2. Add constraint on the placeholder
     //    when min_expr >= max_expr, the range is empty, which is under undefined behavior
@@ -289,9 +368,14 @@ public:
     ctx = other_.ctx;
     // 3. copy other objects
     ns = other_.ns;
-    for(auto & item: other_.memo_) {
-      memo_.emplace(item.first, item.second);
-    }
+    // Replay live memo entries in slot order: deterministic, unlike the
+    // pointer-hashed iteration order of memo_ itself.
+    std::vector<std::pair<size_t, const PrimExpr*>> live;
+    live.reserve(other_.memo_.size());
+    for (auto &kv : other_.memo_) live.emplace_back(kv.second, &kv.first);
+    std::sort(live.begin(), live.end(),
+              [](auto &a, auto &b) { return a.first < b.first; });
+    for (auto &[idx, e] : live) MemoPut(*e, *other_.z3_pool_[idx]);
     for(auto a: other_.solver.assertions()) {
       solver.add(a);
     }
@@ -442,9 +526,18 @@ public:
     solver.pop();
     solver.set("model", false);
 
+    if (FILE *lf = Z3LogFile()) {
+      std::stringstream vals;
+      for (auto v : found_values) vals << v << ",";
+      fprintf(lf, "=== Q%ld COUNTSAT var=%s max=%lld count=%lld values=%s\n=== END\n",
+              z3_log_seq_++, var->name_hint.c_str(), static_cast<long long>(max_count),
+              static_cast<long long>(count), vals.str().c_str());
+      fflush(lf);
+    }
+
     // Clear any side effects from visiting the variable
     for (const auto& expr : side_effect_exprs_) {
-      memo_.erase(expr);
+      MemoErase(expr);
     }
     side_effect_exprs_.clear();
 
@@ -486,7 +579,7 @@ private:
     this->is_assume = is_assume;
     auto res = VisitBool(e);
     for(auto & expr: side_effect_exprs_) {
-      memo_.erase(expr);
+      MemoErase(expr);
     }
     side_effect_exprs_.clear();
     this->is_assume = false;
@@ -497,7 +590,7 @@ private:
     this->is_assume = is_assume;
     auto res = VisitInt(e);
     for(auto & expr: side_effect_exprs_) {
-      memo_.erase(expr);
+      MemoErase(expr);
     }
     side_effect_exprs_.clear();
     this->is_assume = false;
@@ -506,19 +599,19 @@ private:
 
   /// @brief Visit expression with memoization
   z3::expr VisitExpr(const PrimExpr & e) override {
-    if(memo_.count(e)) {
-      return memo_.at(e);
+    if (const z3::expr* hit = MemoGet(e)) {
+      return *hit;
     }
     auto res =  Base::VisitExpr(e);
     auto side_effect = SideEffect(e);
     if(side_effect <= CallEffectKind::kPure) {
-      memo_.emplace(e, res);
+      MemoPut(e, res);
     } else if(side_effect <= CallEffectKind::kReadState) {
-      memo_.emplace(e, res);
+      MemoPut(e, res);
       side_effect_exprs_.emplace_back(e);
     } else {
       if(is_assume) {
-        memo_.emplace(e, res);
+        MemoPut(e, res);
       }
       side_effect_exprs_.emplace_back(e);
     }
@@ -573,7 +666,7 @@ private:
 
   z3::expr VisitExpr_(const LetNode *op) override {
     if (IsValidDType(op->var->dtype)) {
-      memo_.emplace(op->var, VisitInt(op->value));
+      MemoPut(op->var, VisitInt(op->value));
     }
     return VisitExpr(op->body);
   }
