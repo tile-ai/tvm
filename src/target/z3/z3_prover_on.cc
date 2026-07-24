@@ -147,25 +147,7 @@ public:
     // SetTimeoutMs(5);
     // use rlimit, not timeout to ensure determinstic behavior
     SetRLimit(1e4);
-    impl_id_ = impl_counter_++;
-    if (FILE *lf = Z3LogFile()) { fprintf(lf, "IMPL_NEW %ld\n", impl_id_); fflush(lf); }
   }
-
-  ~Impl() {
-    if (FILE *lf = Z3LogFile()) { fprintf(lf, "IMPL_DEL %ld\n", impl_id_); fflush(lf); }
-  }
-
-  // Determinism-debug logging, enabled via TL_Z3_LOG=<path>; no-op when unset.
-  static FILE *Z3LogFile() {
-    static FILE *f = [] {
-      const char *p = getenv("TL_Z3_LOG");
-      return p ? fopen(p, "a") : nullptr;
-    }();
-    return f;
-  }
-  inline static long impl_counter_ = 0;
-  inline static long z3_log_seq_ = 0;
-  long impl_id_ = -1;
 
   /// @brief Create a Free z3 expression from PrimExprNode
   z3::expr Create(const PrimExprNode *op) {
@@ -174,13 +156,10 @@ public:
     std::string name = ns.GetNewName(ref);
     /// TVM max_val can't handle uint64 max correctly, so we special case it here
     if(dtype.is_bool()) {
-      z3::expr be = ctx->bool_const(name.c_str());
-      if (FILE *lf = Z3LogFile()) { fprintf(lf, "NEWVAR %s id=%u\n", name.c_str(), be.id()); fflush(lf); }
-      return be;
+      return ctx->bool_const(name.c_str());
     }
     else {
       z3::expr e = ctx->int_const(name.c_str());
-      if (FILE *lf = Z3LogFile()) { fprintf(lf, "NEWVAR %s id=%u\n", name.c_str(), e.id()); fflush(lf); }
       if(dtype.is_uint() && dtype.bits() == 64) {
         solver.add(ctx->int_val(0) <= e && e <= ctx->int_val((uint64_t)UINT64_MAX));
       } else {
@@ -212,10 +191,6 @@ public:
   /// @brief Enter a constraint scope
   std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false) {
     if (!IsValidDType(constraint->dtype)) return nullptr;
-    if (FILE *lf = Z3LogFile()) {
-      std::stringstream ss; ss << "CONSTR " << impl_id_ << " assume=" << is_assume << ' ' << constraint << "\n";
-      fputs(ss.str().c_str(), lf); fflush(lf);
-    }
     scope_stack_.push_back({});
     scope_stack_.back().push_back(Scope{Scope::Constraint, Var(), PrimExpr(), PrimExpr(), PrimExpr(), constraint});
     solver.push();
@@ -294,15 +269,6 @@ public:
     constr.push_back(!ConvertBool(expr));
     auto result = solver.check(constr);
     constr.pop_back();
-    if (FILE *lf = Z3LogFile()) {
-      std::stringstream st, es;
-      st << solver.statistics();
-      es << expr;
-      fprintf(lf, "=== Q%ld CANPROVE result=%d expr=%s\n%s\n--- stats\n%s\n=== END\n",
-              z3_log_seq_++, static_cast<int>(result), es.str().c_str(),
-              std::string(GetSMTLIB2(expr)).c_str(), st.str().c_str());
-      fflush(lf);
-    }
     return result == z3::unsat;
   }
 
@@ -310,10 +276,6 @@ public:
   /// @brief Bind a variable to a value or a range
   void Bind(const Var & var, const PrimExpr & value, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
-    if (FILE *lf = Z3LogFile()) {
-      std::stringstream ss; ss << "BIND " << impl_id_ << ' ' << var << " = " << value << "\n";
-      fputs(ss.str().c_str(), lf); fflush(lf);
-    }
     scope_stack_.back().push_back(Scope{
       Scope::BindValue,
       var,
@@ -327,10 +289,6 @@ public:
   /// @brief Bind a variable to a range
   void Bind(const Var & var, const Range & range, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
-    if (FILE *lf = Z3LogFile()) {
-      std::stringstream ss; ss << "BINDR " << impl_id_ << ' ' << var << " in [" << range->min << ", +" << range->extent << ")\n";
-      fputs(ss.str().c_str(), lf); fflush(lf);
-    }
     scope_stack_.back().push_back(Scope{
       Scope::BindRange,
       var,
@@ -525,15 +483,6 @@ public:
 
     solver.pop();
     solver.set("model", false);
-
-    if (FILE *lf = Z3LogFile()) {
-      std::stringstream vals;
-      for (auto v : found_values) vals << v << ",";
-      fprintf(lf, "=== Q%ld COUNTSAT var=%s max=%lld count=%lld values=%s\n=== END\n",
-              z3_log_seq_++, var->name_hint.c_str(), static_cast<long long>(max_count),
-              static_cast<long long>(count), vals.str().c_str());
-      fflush(lf);
-    }
 
     // Clear any side effects from visiting the variable
     for (const auto& expr : side_effect_exprs_) {
