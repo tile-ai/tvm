@@ -94,6 +94,26 @@ def get_ref_data():
     return list(itertools.product(x, y))
 
 
+def test_lower_vector_access_ptr():
+    buffer = tvm.tirx.decl_buffer((8,), "float32x2", name="A")
+    access_ptr = buffer.access_ptr(access_mask=3, offset=2, extent=4)
+
+    assert access_ptr.op.name == "tirx.tvm_access_ptr"
+    assert int(access_ptr.args[2]) == 2
+    assert int(access_ptr.args[3]) == 4
+    assert int(access_ptr.args[4]) == 3
+
+    lowered = lower_intrin([buffer], access_ptr)
+    assert lowered.op.name == "tirx.address_of"
+
+    load = lowered.args[0]
+    assert isinstance(load, tvm.tirx.BufferLoad)
+    assert load.buffer.data.same_as(buffer.data)
+    assert str(load.buffer.dtype) == "float32x2"
+    assert len(load.indices) == 1
+    assert int(load.indices[0]) == 2
+
+
 @tvm.testing.requires_llvm
 def test_lower_floordiv():
     data = get_ref_data()

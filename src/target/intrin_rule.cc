@@ -23,10 +23,10 @@
  */
 #include "intrin_rule.h"
 
+#include <tvm/runtime/logging.h>
 #include <tvm/tirx/buffer.h>
 #include <tvm/tirx/op.h>
 #include <tvm/tirx/op_attr_types.h>
-#include <tvm/runtime/logging.h>
 
 namespace tvm {
 namespace codegen {
@@ -135,12 +135,9 @@ TVM_REGISTER_OP("tirx.tvm_access_ptr")
       Var buffer_var = Downcast<Var>(call->args[1]);
       PrimExpr offset = call->args[2];
       TVM_FFI_ICHECK(call->dtype.is_handle());
-      if (dtype.lanes() != 1) {
-        offset = offset * make_const(offset.dtype(), dtype.lanes());
-        offset = Ramp(offset, make_const(offset.dtype(), 1), dtype.lanes());
-      }
-      Buffer dummy_buf(buffer_var, dtype.element_of(), {offset + 1}, {}, 0, buffer_var->name_hint,
-                       0, 0, kDefault);
+      // Access-pointer offsets are measured in units of dtype, including its lanes.
+      Buffer dummy_buf(buffer_var, dtype, {offset + 1}, {}, 0, buffer_var->name_hint, 0, 0,
+                       kDefault);
       BufferLoad buf_load(dummy_buf, {offset});
       return Call(DataType::Handle(), builtin::address_of(), {buf_load});
     });
