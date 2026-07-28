@@ -29,6 +29,7 @@ def test_dict_attrs():
     assert len(dattr) == 4
     assert len([x for x in dattr.keys()]) == 4
     assert len(dattr.items()) == 4
+    assert dattr.__dict__ == {"x": 1, "y": 10, "name": "xyz", "padding": [0, 0]}
 
 
 def test_attrs_equal():

@@ -79,6 +79,16 @@ class Attrs(Object):
 class DictAttrs(Attrs):
     """Dictionary attributes."""
 
+    @property
+    def __dict__(self):
+        """Return the underlying key-value map as a Python dict.
+
+        Defining this property explicitly prevents tvm_ffi from trying to
+        install the reflected C++ field named ``__dict__``.  Python reserves
+        that class attribute, so installing it via ``setattr`` fails.
+        """
+        return dict(self._dict())
+
     def _dict(self):
         """Get internal dict"""
         return _ffi_api.DictAttrsGetDict(self)
