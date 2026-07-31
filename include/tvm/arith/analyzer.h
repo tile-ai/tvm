@@ -725,7 +725,8 @@ class Z3Prover {
    *                        consecutive integers. E.g., with min_consecutive=4:
    *                        {0,1,2,3,16,17,18,19} is valid, {0,1,4,5} is invalid.
    * \return The number of distinct values that satisfy the constraints,
-   *         -1 if the problem is unsatisfiable or an error occurred,
+   *         0 if the problem is unsatisfiable,
+   *         -1 if Z3 returns unknown or an error occurred,
    *         -2 if the min_consecutive constraint is not satisfied.
    */
   TVM_DLL int64_t CountSatisfyingValues(const Var& var, int64_t max_count = 2048, int64_t min_consecutive = 1);
