@@ -440,7 +440,8 @@ public:
    * \param var The variable to count values for
    * \param max_count Safety limit on enumeration
    * \param min_consecutive Minimum consecutive count requirement (0 to disable)
-   * \return Number of satisfying values, -1 on error, -2 if min_consecutive constraint not met
+   * \return Number of satisfying values, -1 if Z3 returns unknown or an error
+   * occurs, -2 if min_consecutive constraint not met
    */
   int64_t CountSatisfyingValues(const Var& var, int64_t max_count, int64_t min_consecutive = 1) {
     if (!IsValidDType(var->dtype)) {
@@ -455,11 +456,16 @@ public:
 
     int64_t count = 0;
     std::vector<int64_t> found_values;
+    bool result_unknown = false;
 
     while (count < max_count) {
       auto result = solver.check();
-      if (result != z3::sat) {
-        break;  // No more solutions
+      if (result == z3::unsat) {
+        break;  // No more solutions.
+      }
+      if (result == z3::unknown) {
+        result_unknown = true;
+        break;
       }
 
       z3::model m = solver.get_model();
@@ -489,6 +495,12 @@ public:
       MemoErase(expr);
     }
     side_effect_exprs_.clear();
+
+    // A partial model count is not an exact result. Keep UNSAT distinct: if
+    // the first check is UNSAT, count remains zero and is returned as such.
+    if (result_unknown) {
+      return -1;
+    }
 
     // Check minimum consecutive constraint if enabled
     if (min_consecutive > 0 && count > 0) {
