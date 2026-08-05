@@ -181,5 +181,22 @@ def test_vector_constraint_does_not_crash_z3():
         tvm.ir.assert_structural_equal(ana.simplify(x + 0), x)
 
 
+def test_z3_context_scope_clone_lifetime():
+    x = tirx.Var("x", "int32")
+
+    with tvm.arith.Z3ContextScope():
+        analyzer = tvm.arith.Analyzer()
+        analyzer.bind(x, tvm.ir.Range.from_min_extent(0, 16))
+
+    # Clone while a different scope is active.  The clone must retain the
+    # source Analyzer's context instead of mixing handles from two contexts.
+    with tvm.arith.Z3ContextScope():
+        cloned = analyzer.clone()
+
+    del analyzer
+    assert cloned.can_prove(x >= 0)
+    assert cloned.can_prove(x < 16)
+
+
 if __name__ == "__main__":
     tvm.testing.main()

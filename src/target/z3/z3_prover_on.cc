@@ -1,12 +1,36 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/extra/structural_equal.h>
+#include <tvm/ffi/extra/structural_hash.h>
 #include <tvm/runtime/logging.h>
-#include <tvm/tirx/expr.h>
-#include <tvm/tirx/op.h>
+#include <tvm/tirx/analysis.h>
 #include <tvm/tirx/builtin.h>
-#include "z3++.h"
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/op_attr_types.h>
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -17,13 +41,8 @@
 #include "tvm/ffi/object.h"
 #include "tvm/ffi/string.h"
 #include "tvm/ir/expr.h"
-#include <tvm/ffi/extra/structural_equal.h>
-#include <tvm/ffi/extra/structural_hash.h>
 #include "tvm/runtime/data_type.h"
-#include <tvm/tirx/analysis.h>
-#include <tvm/tirx/expr_functor.h>
-#include "tvm/arith/analyzer.h"
-#include <tvm/tirx/op_attr_types.h>
+#include "z3++.h"
 
 namespace tvm::arith {
 
@@ -64,7 +83,48 @@ struct Namespace {
   }
 };
 
-} // namespace
+struct Z3ContextState {
+  std::shared_ptr<z3::context> fallback_context;
+  std::shared_ptr<z3::context> scoped_context;
+  size_t scope_depth{0};
+};
+
+Z3ContextState& GetZ3ContextState() {
+  static thread_local Z3ContextState state;
+  return state;
+}
+
+std::shared_ptr<z3::context> GetCurrentZ3Context() {
+  auto& state = GetZ3ContextState();
+  if (state.scope_depth != 0) {
+    TVM_FFI_ICHECK(state.scoped_context != nullptr);
+    return state.scoped_context;
+  }
+  if (state.fallback_context == nullptr) {
+    state.fallback_context = std::make_shared<z3::context>();
+  }
+  return state.fallback_context;
+}
+
+}  // namespace
+
+void EnterZ3ContextScope() {
+  auto& state = GetZ3ContextState();
+  if (state.scope_depth == 0) {
+    state.scoped_context = std::make_shared<z3::context>();
+  }
+  ++state.scope_depth;
+}
+
+void ExitZ3ContextScope() {
+  auto& state = GetZ3ContextState();
+  TVM_FFI_ICHECK_GT(state.scope_depth, 0U)
+      << "ExitZ3ContextScope called without a matching EnterZ3ContextScope";
+  --state.scope_depth;
+  if (state.scope_depth == 0) {
+    state.scoped_context.reset();
+  }
+}
 
 class Z3Prover::Impl : ExprFunctor<z3::expr(const PrimExpr &)> {
 public:
@@ -73,13 +133,12 @@ public:
 
   Analyzer* analyzer;
   /// @brief Z3 context, a shared ptr, because tilelang want to copy the Analyzer
-  // We use a thread_local static Z3 context so all analyzers within the same thread
-  // can share a common context, because Z3 initialization is slow on some CPUs
-  // (e.g., AMD EPYC 7502 32-Core). Using thread_local ensures thread safety.
-  inline static thread_local std::shared_ptr<z3::context> ctx { new z3::context() };
+  // Analyzers created in one compile scope share a context. Keeping the pointer
+  // on each prover also lets cloned Analyzers safely outlive that scope.
+  std::shared_ptr<z3::context> ctx;
 
   /// @brief Z3 solver instance
-  z3::solver solver {*ctx};
+  std::optional<z3::solver> solver;
 
   /// @brief Memoized PrimExpr -> slot in z3_pool_. Holds no z3 handles, so
   /// its pointer-hashed bucket order cannot affect z3 object lifetime.
@@ -131,17 +190,17 @@ public:
 
   /// @brief Create a z3 solver with custom options
   static z3::solver CreateSolver(z3::context & ctx) {
-    z3::solver solver(ctx);
+    z3::solver result(ctx);
     // here we disable model generation to speed up the solving process
-    solver.set("model", false);
+    result.set("model", false);
     // ensure determinstic behavior
-    solver.set("random_seed", (unsigned)42);
-    return solver;
+    result.set("random_seed", (unsigned)42);
+    return result;
   }
 
-  Impl(Analyzer * parent): analyzer(parent) {
+  Impl(Analyzer* parent)
+      : analyzer(parent), ctx(GetCurrentZ3Context()), solver(CreateSolver(*ctx)) {
     scope_stack_.push_back({});
-    solver = CreateSolver(*ctx);
     // default timeout 5ms
     // Z3's implementation of timeout, when setting timeout T ms, it will stop at T - 1 ms
     // SetTimeoutMs(5);
@@ -161,11 +220,11 @@ public:
     else {
       z3::expr e = ctx->int_const(name.c_str());
       if(dtype.is_uint() && dtype.bits() == 64) {
-        solver.add(ctx->int_val(0) <= e && e <= ctx->int_val((uint64_t)UINT64_MAX));
+        solver->add(ctx->int_val(0) <= e && e <= ctx->int_val((uint64_t)UINT64_MAX));
       } else {
         auto min_val = Downcast<IntImm>(min_value(dtype))->value;
         auto max_val = Downcast<IntImm>(max_value(dtype))->value;
-        solver.add(ctx->int_val(min_val) <= e && e <= ctx->int_val(max_val));
+        solver->add(ctx->int_val(min_val) <= e && e <= ctx->int_val(max_val));
       }
       return e;
     }
@@ -193,15 +252,15 @@ public:
     if (!IsValidDType(constraint->dtype)) return nullptr;
     scope_stack_.push_back({});
     scope_stack_.back().push_back(Scope{Scope::Constraint, Var(), PrimExpr(), PrimExpr(), PrimExpr(), constraint});
-    solver.push();
+    solver->push();
     this->is_assume = is_assume;
-    solver.add(VisitBool(constraint));
+    solver->add(VisitBool(constraint));
     this->is_assume = false;
     auto side_effect_exprs = std::move(side_effect_exprs_);
     side_effect_exprs_.clear();
     if(is_assume) {
       return [this, side_effect_exprs]() {
-        solver.pop();
+        solver->pop();
         for (const auto& expr : side_effect_exprs) {
           MemoErase(expr);
         }
@@ -212,7 +271,7 @@ public:
         MemoErase(expr);
       }
       return [this]() {
-        solver.pop();
+        solver->pop();
         scope_stack_.pop_back();
       };
     }
@@ -267,7 +326,7 @@ public:
     if (!IsValidDType(expr->dtype)) return false;
     z3::expr_vector constr(*ctx);
     constr.push_back(!ConvertBool(expr));
-    auto result = solver.check(constr);
+    auto result = solver->check(constr);
     constr.pop_back();
     return result == z3::unsat;
   }
@@ -308,23 +367,26 @@ public:
       int64_t min_value = *tirx::as_const_int(range->min);
       int64_t max_value = *tirx::as_const_int(range->min + range->extent);
       if(min_value < max_value) {
-        solver.add(ctx->int_val(min_value) <= var_expr);
-        solver.add(var_expr < ctx->int_val(max_value));
+        solver->add(ctx->int_val(min_value) <= var_expr);
+        solver->add(var_expr < ctx->int_val(max_value));
       }
     } else {
-      solver.add(ConvertBool(range->extent <= 0 || (range->min <= var && var < range->min + range->extent)));
+      solver->add(ConvertBool(range->extent <= 0 ||
+                              (range->min <= var && var < range->min + range->extent)));
     }
   }
 
   void CopyFrom(const Self & other_) {
-    // 1. create a new solver
-    //    because this->solver depends on this->ctx
-    //    we need to deconstruct the old solver, and create a new one depending on other_.ctx
-    solver = CreateSolver(*other_.ctx);
-    // 2. copy the context
-    //    the context is a shared_ptr, we can just copy the pointer
+    // Z3 handles cannot move between contexts. Destroy every handle owned by
+    // this fresh clone before adopting the source Analyzer's context.
+    solver.reset();
+    memo_.clear();
+    z3_pool_.clear();
+    free_slots_.clear();
     ctx = other_.ctx;
-    // 3. copy other objects
+    solver.emplace(CreateSolver(*ctx));
+
+    // Copy other objects.
     ns = other_.ns;
     // Replay live memo entries in slot order: deterministic, unlike the
     // pointer-hashed iteration order of memo_ itself.
@@ -334,27 +396,26 @@ public:
     std::sort(live.begin(), live.end(),
               [](auto &a, auto &b) { return a.first < b.first; });
     for (auto &[idx, e] : live) MemoPut(*e, *other_.z3_pool_[idx]);
-    for(auto a: other_.solver.assertions()) {
-      solver.add(a);
+    for (auto a : other_.solver->assertions()) {
+      solver->add(a);
     }
-    // 4. copy timeout options
-    //    but other solver options are not copied
+    // Copy timeout options, but not other solver options.
     SetTimeoutMs(other_.timeout_ms);
     SetRLimit(other_.rlimit);
-    // 5. copy the scope stack, which containing comments for SMTLIB2 generation
+    // Copy the scope stack, which contains comments for SMTLIB2 generation.
     scope_stack_ = other_.scope_stack_;
   }
 
   /// @brief Set timeout in milliseconds
   void SetTimeoutMs(unsigned timeout_ms) {
     this->timeout_ms = timeout_ms;
-    solver.set("timeout", timeout_ms);
+    solver->set("timeout", timeout_ms);
   }
 
   /// @brief Set max steps
   void SetRLimit(unsigned rlimit) {
     this->rlimit = rlimit;
-    solver.set("rlimit", rlimit);
+    solver->set("rlimit", rlimit);
   }
 
   /// @brief Get the SMTLIB2 representation of the current solver state
@@ -362,7 +423,7 @@ public:
     std::stringstream ss;
     ss << "(set-option :timeout " << timeout_ms << ")\n";
     AddScopeDebugMsg(ss);
-    ss <<  solver.to_smt2();
+    ss << solver->to_smt2();
     return ss.str();
   }
 
@@ -391,28 +452,28 @@ public:
     ss << "(set-option :timeout " << timeout_ms << ")\n";
     AddScopeDebugMsg(ss);
     ss << "; Trying to prove: " << expr << "\n";
-    solver.push();
-    solver.add(!ConvertBool(expr));
-    ss << solver.to_smt2();
-    solver.pop();
+    solver->push();
+    solver->add(!ConvertBool(expr));
+    ss << solver->to_smt2();
+    solver->pop();
     return ss.str();
   }
 
   /// @brief Get the statistics of the solver
   ffi::String GetStats() {
     std::stringstream ss;
-    ss << solver.statistics();
+    ss << solver->statistics();
     return ss.str();
   }
 
   ffi::String GetModel(const PrimExpr & expr) {
-    solver.set("model", true);
-    solver.push();
-    solver.add(!ConvertBool(expr));
-    auto result = solver.check();
+    solver->set("model", true);
+    solver->push();
+    solver->add(!ConvertBool(expr));
+    auto result = solver->check();
     ffi::String model_str;
     if (result == z3::sat) {
-      z3::model m = solver.get_model();
+      z3::model m = solver->get_model();
       std::map<std::string, z3::expr> model_map;
       for(unsigned i = 0; i < m.size(); i++) {
         z3::func_decl d = m[i];
@@ -424,8 +485,8 @@ public:
       }
       model_str = ss.str();
     }
-    solver.pop();
-    solver.set("model", false);
+    solver->pop();
+    solver->set("model", false);
     return model_str;
   }
 
@@ -447,8 +508,8 @@ public:
       return -1;
     }
 
-    solver.set("model", true);
-    solver.push();
+    solver->set("model", true);
+    solver->push();
 
     // Convert the TVM variable to Z3 expression
     z3::expr z3_var = VisitInt(var);
@@ -457,12 +518,12 @@ public:
     std::vector<int64_t> found_values;
 
     while (count < max_count) {
-      auto result = solver.check();
+      auto result = solver->check();
       if (result != z3::sat) {
         break;  // No more solutions
       }
 
-      z3::model m = solver.get_model();
+      z3::model m = solver->get_model();
       z3::expr val_expr = m.eval(z3_var, true);
 
       // Extract the integer value from Z3 expression
@@ -478,11 +539,11 @@ public:
       count++;
 
       // Add blocking clause: var != val (exclude this solution)
-      solver.add(z3_var != ctx->int_val(val));
+      solver->add(z3_var != ctx->int_val(val));
     }
 
-    solver.pop();
-    solver.set("model", false);
+    solver->pop();
+    solver->set("model", false);
 
     // Clear any side effects from visiting the variable
     for (const auto& expr : side_effect_exprs_) {
@@ -743,11 +804,11 @@ private:
 
       // Add constraint that shift amount should be non-negative
       // This is a common assumption in many programming languages
-      solver.add(b_expr >= 0);
+      solver->add(b_expr >= 0);
 
       // Also limit shift amount to avoid unrealistic large shifts
       // We'll limit to 64 bits (reasonable for most use cases)
-      solver.add(b_expr < 64);
+      solver->add(b_expr < 64);
 
       unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
       z3::expr a_bv = z3::int2bv(bit_width, a_expr);

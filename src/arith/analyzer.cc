@@ -541,6 +541,10 @@ TVM_FFI_STATIC_INIT_BLOCK() {
     auto self = std::make_shared<Analyzer>();
     *ret = BuildAnalyzerFactory(self);
   });
+  refl::GlobalDef().def_packed("arith.EnterZ3ContextScope",
+                               [](ffi::PackedArgs, ffi::Any*) { EnterZ3ContextScope(); });
+  refl::GlobalDef().def_packed("arith.ExitZ3ContextScope",
+                               [](ffi::PackedArgs, ffi::Any*) { ExitZ3ContextScope(); });
 }
 
 }  // namespace arith

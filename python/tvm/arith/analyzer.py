@@ -100,6 +100,21 @@ class ConstraintScope:
         self._fexit()
 
 
+class Z3ContextScope:
+    """Share one fresh Z3 context across Analyzers created in this scope.
+
+    The outermost scope creates the context. Nested scopes on the same thread
+    reuse it, and exiting the outermost scope releases its ownership.
+    """
+
+    def __enter__(self):
+        _ffi_api.EnterZ3ContextScope()
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        _ffi_api.ExitZ3ContextScope()
+
+
 class Analyzer:
     """Integer arithmetic analyzer
 
@@ -159,7 +174,7 @@ class Analyzer:
             The maximum number of steps.
         """
         self._set_z3_rlimit(max_step)
-    
+
     def get_z3_stats(self) -> str:
         """Get z3 statistics.
 
