@@ -35,8 +35,15 @@ using namespace tirx;
 void IRVisitorWithAnalyzer::VisitStmt_(const ForNode* op) {
   constraint_scope_.WithNewScope([&]() {
     analyzer_.Bind(op->loop_var, Range::FromMinExtent(op->min, op->extent));
-    constraint_scope_.Current().Emplace(&analyzer_, op->extent > 0);
-    StmtExprVisitor::VisitStmt_(op);
+    this->VisitExpr(op->min);
+    this->VisitExpr(op->extent);
+    if (op->step.has_value()) {
+      this->VisitExpr(*op->step);
+    }
+    constraint_scope_.WithNewScope([&]() {
+      constraint_scope_.Current().Emplace(&analyzer_, op->extent > 0);
+      this->VisitStmt(op->body);
+    });
   });
 }
 
