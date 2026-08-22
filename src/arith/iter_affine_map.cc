@@ -2009,6 +2009,11 @@ PrimExpr IterMapRewriter::SplitFloorModConst(IterSplitExpr lhs, PrimExpr base, P
 
   // We handle scale!=1 in above code, hence we only consider floormod(x, rhs) below
   // where x=floormod(floordiv(iter, lower_factor), extent) + base
+  bool inner_mod_can_wrap =
+      !analyzer_->CanProve(lhs->source->extent <= lhs->lower_factor * lhs->extent);
+  if (inner_mod_can_wrap && !CanProveDivisible(lhs->extent, rhs)) {
+    return PrimExpr();
+  }
   auto pair = PadDividendToDivisor(lhs, base, rhs);
   IterSplitExpr padded = pair.first;
   if (!padded.defined()) {
