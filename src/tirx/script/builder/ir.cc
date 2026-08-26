@@ -896,7 +896,11 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("script.ir_builder.tirx.Float4E2M1Unpacked", Float4E2M1Unpacked)
-      .TVM_FFI_REFL_DEF_GLOBAL_LANES("script.ir_builder.tirx.Float4E2M1Unpacked", Float4E2M1Unpacked);
+      .TVM_FFI_REFL_DEF_GLOBAL_LANES("script.ir_builder.tirx.Float4E2M1Unpacked", Float4E2M1Unpacked)
+      .def("script.ir_builder.tirx.Float6E2M3FNUnpacked", Float6E2M3FNUnpacked)
+      .TVM_FFI_REFL_DEF_GLOBAL_LANES("script.ir_builder.tirx.Float6E2M3FNUnpacked", Float6E2M3FNUnpacked)
+      .def("script.ir_builder.tirx.Float6E3M2FNUnpacked", Float6E3M2FNUnpacked)
+      .TVM_FFI_REFL_DEF_GLOBAL_LANES("script.ir_builder.tirx.Float6E3M2FNUnpacked", Float6E3M2FNUnpacked);
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {

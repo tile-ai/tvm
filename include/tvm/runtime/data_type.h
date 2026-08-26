@@ -73,7 +73,11 @@ class DataType {
     kCustomBegin = 129,
     kTensorFloat32 = 130,
     // SM100 FP4 E2M1 with 8-bit unpacked shared-memory storage (TMA ALIGN16B).
-    kFloat4_e2m1_unpacked = 131
+    kFloat4_e2m1_unpacked = 131,
+    // FP6 with 8-bit unpacked shared-memory storage (TMA 16U6_ALIGN16B;
+    // CUTLASS float_e2m3_unpacksmem_t / float_e3m2_unpacksmem_t).
+    kFloat6_e2m3fn_unpacked = 132,
+    kFloat6_e3m2fn_unpacked = 133
   };
   /*! \brief default constructor */
   DataType() { data_ = DataType::Void(); }
@@ -110,7 +114,8 @@ class DataType {
     if (code == kFloat4_e2m1fn) {
       TVM_FFI_ICHECK_EQ(bits, 4);
     }
-    if (code == kFloat4_e2m1_unpacked) {
+    if (code == kFloat4_e2m1_unpacked || code == kFloat6_e2m3fn_unpacked ||
+        code == kFloat6_e3m2fn_unpacked) {
       TVM_FFI_ICHECK_EQ(bits, 8);
     }
     if (code == kTensorFloat32) {
@@ -166,8 +171,9 @@ class DataType {
   }
   /*! \return whether type is any 6-bit custom Float6 variant. */
   bool is_float6() const {
-    return bits() == 6 &&
-           (code() == DataType::kFloat6_e2m3fn || code() == DataType::kFloat6_e3m2fn);
+    return (bits() == 6 &&
+            (code() == DataType::kFloat6_e2m3fn || code() == DataType::kFloat6_e3m2fn)) ||
+           is_float6_unpacked();
   }
   /*! \return whether type is any FP4 E2M1 logical variant (packed or unpacked). */
   bool is_float4() const { return is_float4_e2m1fn() || is_float4_e2m1_unpacked(); }
@@ -199,6 +205,20 @@ class DataType {
    * (CUTLASS float_e2m1_unpacksmem_t) for tcgen05 f8f6f4 / mxf8f6f4. */
   bool is_float4_e2m1_unpacked() const {
     return bits() == 8 && code() == DataType::kFloat4_e2m1_unpacked;
+  }
+  /*! \return whether type is the 8-bit Float6E2M3FN unpacked storage
+   * (CUTLASS float_e2m3_unpacksmem_t) for f8f6f4 / mxf8f6f4. */
+  bool is_float6_e2m3fn_unpacked() const {
+    return bits() == 8 && code() == DataType::kFloat6_e2m3fn_unpacked;
+  }
+  /*! \return whether type is the 8-bit Float6E3M2FN unpacked storage
+   * (CUTLASS float_e3m2_unpacksmem_t) for f8f6f4 / mxf8f6f4. */
+  bool is_float6_e3m2fn_unpacked() const {
+    return bits() == 8 && code() == DataType::kFloat6_e3m2fn_unpacked;
+  }
+  /*! \return whether type is any 8-bit unpacked FP6 storage variant. */
+  bool is_float6_unpacked() const {
+    return is_float6_e2m3fn_unpacked() || is_float6_e3m2fn_unpacked();
   }
   /*! \return whether type is a tfloat32 type. */
   bool is_tfloat32() const { return bits() == 32 && code() == DataType::kTensorFloat32; }
@@ -402,6 +422,24 @@ class DataType {
    */
   static DataType Float4E2M1Unpacked(int lanes = 1) {
     return DataType(kFloat4_e2m1_unpacked, 8, lanes);
+  }
+
+  /*!
+   * \brief Construct float6 e2m3 unpacked shared-memory datatype.
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType Float6E2M3FNUnpacked(int lanes = 1) {
+    return DataType(kFloat6_e2m3fn_unpacked, 8, lanes);
+  }
+
+  /*!
+   * \brief Construct float6 e3m2 unpacked shared-memory datatype.
+   * \param lanes The number of lanes
+   * \return The constructed data type.
+   */
+  static DataType Float6E3M2FNUnpacked(int lanes = 1) {
+    return DataType(kFloat6_e3m2fn_unpacked, 8, lanes);
   }
 
   /*!
