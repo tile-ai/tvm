@@ -261,6 +261,21 @@ def test_nested_floormod_requires_divisible_extents():
     assert_iter_map_simplify({divisible: flm(x, 8)}, var_dom([(x, 128)]))
 
 
+def test_bijective_floormod_rejects_cyclic_offset():
+    x = tvm.tirx.Var("x", "int32")
+    flm = tvm.tirx.floormod
+    dom_map = var_dom([(x, 128)])
+
+    cyclic_shift = flm(x + 1, 128)
+    assert_iter_sum_failure([cyclic_shift], dom_map, check_level="bijective")
+    assert_iter_map_simplify({cyclic_shift: cyclic_shift}, dom_map, check_level="bijective")
+    assert_iter_map_simplify({cyclic_shift: cyclic_shift}, dom_map)
+
+    # An offset divisible by the modulus does not change the mapping.
+    wrapped_identity = flm(x + 128, 128)
+    assert_iter_sum_pattern({wrapped_identity: (128, 0)}, dom_map, check_level="bijective")
+
+
 def test_predicate():
     x = tvm.tirx.Var("x", "int32")
     y = tvm.tirx.Var("y", "int32")

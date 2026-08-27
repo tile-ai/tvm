@@ -2032,6 +2032,18 @@ PrimExpr IterMapRewriter::SplitFloorModConst(IterSplitExpr lhs, PrimExpr base, P
     return PrimExpr();
   }
 
+  // An offset whose modulo phase is not zero rotates the values around the
+  // modulo domain.  The current IterSplit representation does not retain that
+  // rotation, and InverseAffineIterMap would therefore invert
+  // (x + base) % rhs as x % rhs.  Padding-aware modes preserve the original
+  // expression through a padded IterMark, but a bijective rewrite has no such
+  // metadata.  Reject it instead of returning a semantically different map.
+  if (check_level_ == IterMapLevel::Bijective && !analyzer_->CanProveEqual(pair.second, 0)) {
+    ErrorLogger(this) << "Cannot represent as a bijective IterMap: FloorMod offset " << base
+                      << " may induce a cyclic shift modulo " << rhs;
+    return PrimExpr();
+  }
+
   // floormod(floormod(floordiv(iter, lower_factor), c1c2), c1)
   // = floormod(floordiv(iter, lower_factor), c1), where c1=rhs
   return IterSplitExpr(padded->source,
