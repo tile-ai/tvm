@@ -133,8 +133,10 @@ public:
 
   Analyzer* analyzer;
   /// @brief Z3 context, a shared ptr, because tilelang want to copy the Analyzer
-  // Analyzers created in one compile scope share a context. Keeping the pointer
-  // on each prover also lets cloned Analyzers safely outlive that scope.
+  // Before materialization this aliases the compile scope's context; when
+  // the solver materializes it is replaced by a context private to this
+  // prover (see Materialize), which clones of a materialized prover then
+  // share so their copied handles stay valid.
   std::shared_ptr<z3::context> ctx;
 
   /// @brief Z3 solver instance
@@ -228,6 +230,16 @@ public:
   /// for these entries, so CanProve answers are unchanged.
   void Materialize() {
     if (solver) return;
+    // The solver gets its own context: verdicts under the deterministic
+    // rlimit budget depend on the context's accumulated AST state (ids feed
+    // the search heuristics), so sharing a context couples every solver's
+    // borderline answers to whichever analyzers happened to be created
+    // before it. A private context makes each analyzer's answers a pure
+    // function of its own journal and query history. Unmaterialized clones
+    // still share the scope context captured at construction, which keeps
+    // Z3ContextScope's lifetime guarantees for exprs created before this
+    // point (there are none) trivially intact.
+    ctx = std::make_shared<z3::context>();
     solver.emplace(CreateSolver(*ctx));
     if (timeout_ms != UINT_MAX) {
       solver->set("timeout", timeout_ms);
@@ -408,6 +420,12 @@ public:
 
   /// @brief Binded
   /// @brief Bind a variable to a value or a range
+  /// A bind journaled inside a live constraint scope is dropped with that
+  /// scope. The eager path differed only cosmetically: it kept the var's
+  /// memo translation after the scope's solver frame (and with it the
+  /// var's range asserts) was popped, leaving an unconstrained placeholder
+  /// -- observably the same as translating the var as a fresh free
+  /// variable on demand, which is what a later query on the journal does.
   void Bind(const Var & var, const PrimExpr & value, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
     scope_stack_.back().push_back(Scope{
