@@ -83,48 +83,17 @@ struct Namespace {
   }
 };
 
-struct Z3ContextState {
-  std::shared_ptr<z3::context> fallback_context;
-  std::shared_ptr<z3::context> scoped_context;
-  size_t scope_depth{0};
-};
-
-Z3ContextState& GetZ3ContextState() {
-  static thread_local Z3ContextState state;
-  return state;
-}
-
-std::shared_ptr<z3::context> GetCurrentZ3Context() {
-  auto& state = GetZ3ContextState();
-  if (state.scope_depth != 0) {
-    TVM_FFI_ICHECK(state.scoped_context != nullptr);
-    return state.scoped_context;
-  }
-  if (state.fallback_context == nullptr) {
-    state.fallback_context = std::make_shared<z3::context>();
-  }
-  return state.fallback_context;
-}
-
 }  // namespace
 
-void EnterZ3ContextScope() {
-  auto& state = GetZ3ContextState();
-  if (state.scope_depth == 0) {
-    state.scoped_context = std::make_shared<z3::context>();
-  }
-  ++state.scope_depth;
-}
+// Deprecated no-ops, kept only for downstream callers of
+// arith.EnterZ3ContextScope / arith.ExitZ3ContextScope (Z3ContextScope in
+// Python). Shared per-compile z3 contexts are gone: every materialized
+// solver owns a private context (see Z3Prover::Impl::Materialize), which
+// subsumes the per-compile isolation these scopes provided. Remove together
+// with the remaining call sites.
+void EnterZ3ContextScope() {}
 
-void ExitZ3ContextScope() {
-  auto& state = GetZ3ContextState();
-  TVM_FFI_ICHECK_GT(state.scope_depth, 0U)
-      << "ExitZ3ContextScope called without a matching EnterZ3ContextScope";
-  --state.scope_depth;
-  if (state.scope_depth == 0) {
-    state.scoped_context.reset();
-  }
-}
+void ExitZ3ContextScope() {}
 
 class Z3Prover::Impl : ExprFunctor<z3::expr(const PrimExpr &)> {
 public:
@@ -132,9 +101,10 @@ public:
   using Self = Z3Prover::Impl;
 
   Analyzer* analyzer;
-  /// @brief Z3 context, a shared ptr, because tilelang want to copy the Analyzer
-  // Analyzers created in one compile scope share a context. Keeping the pointer
-  // on each prover also lets cloned Analyzers safely outlive that scope.
+  /// @brief Z3 context owning every handle of this prover.
+  // Null until the solver materializes; Materialize creates a context
+  // private to this prover, which clones of a materialized prover then
+  // share (shared_ptr) so their copied handles stay valid.
   std::shared_ptr<z3::context> ctx;
 
   /// @brief Z3 solver instance
@@ -199,14 +169,14 @@ public:
   }
 
   Impl(Analyzer* parent)
-      : analyzer(parent), ctx(GetCurrentZ3Context()) {
-    // The solver is created lazily (see Materialize). Analyzers are
-    // constructed in large numbers as cheap scratch objects, and only a tiny
-    // fraction ever reaches the Z3 fallback of CanProve; creating the solver
-    // (and translating every Bind into z3 constraints) eagerly made every
-    // Analyzer pay Z3's initialization cost up front. Until the first
-    // operation that actually needs the solver, Bind/EnterConstraint only
-    // journal their arguments into scope_stack_.
+      : analyzer(parent) {
+    // The solver (and its context) is created lazily (see Materialize).
+    // Analyzers are constructed in large numbers as cheap scratch objects,
+    // and only a tiny fraction ever reaches the Z3 fallback of CanProve;
+    // creating the solver (and translating every Bind into z3 constraints)
+    // eagerly made every Analyzer pay Z3's initialization cost up front.
+    // Until the first operation that actually needs the solver,
+    // Bind/EnterConstraint only journal their arguments into scope_stack_.
     scope_stack_.push_back({});
     scope_side_effects_.push_back({});
     // default timeout 5ms
@@ -228,6 +198,14 @@ public:
   /// for these entries, so CanProve answers are unchanged.
   void Materialize() {
     if (solver) return;
+    // The solver gets its own context: verdicts under the deterministic
+    // rlimit budget depend on the context's accumulated AST state (ids feed
+    // the search heuristics), so sharing a context couples every solver's
+    // borderline answers to whichever analyzers happened to be created
+    // before it. A private context makes each analyzer's answers a pure
+    // function of its own journal and query history. Unmaterialized provers
+    // hold no context (and no z3 state) at all.
+    ctx = std::make_shared<z3::context>();
     solver.emplace(CreateSolver(*ctx));
     if (timeout_ms != UINT_MAX) {
       solver->set("timeout", timeout_ms);
@@ -408,6 +386,12 @@ public:
 
   /// @brief Binded
   /// @brief Bind a variable to a value or a range
+  /// A bind journaled inside a live constraint scope is dropped with that
+  /// scope. The eager path differed only cosmetically: it kept the var's
+  /// memo translation after the scope's solver frame (and with it the
+  /// var's range asserts) was popped, leaving an unconstrained placeholder
+  /// -- observably the same as translating the var as a fresh free
+  /// variable on demand, which is what a later query on the journal does.
   void Bind(const Var & var, const PrimExpr & value, bool allow_override = false) {
     if (!IsValidDType(var->dtype)) return;
     scope_stack_.back().push_back(Scope{
