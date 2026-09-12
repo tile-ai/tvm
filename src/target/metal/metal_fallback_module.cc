@@ -42,11 +42,12 @@ class MetalFallbackModuleNode : public ffi::ModuleObj {
  public:
   MetalFallbackModuleNode(ffi::Map<ffi::String, ffi::Bytes> smap, ffi::String fmt,
                           ffi::Map<ffi::String, runtime::FunctionInfo> fmap,
-                          ffi::Map<ffi::String, ffi::String> source)
+                          ffi::Map<ffi::String, ffi::String> source, int metal_language_version)
       : smap_(std::move(smap)),
         fmt_(std::move(fmt)),
         fmap_(std::move(fmap)),
-        source_(std::move(source)) {}
+        source_(std::move(source)),
+        metal_language_version_(metal_language_version) {}
 
   // Mirror the real module's kind so consumers cannot distinguish at the
   // kind/api layer.  Saved bytes load back as a real MetalModuleNode on a
@@ -72,11 +73,13 @@ class MetalFallbackModuleNode : public ffi::ModuleObj {
     // mirror the change here.  The dependency is one-way: this file
     // follows; metal_module.mm does not reference this file.
     //
-    // 3 fields only — the source map is in-memory inspection material and
-    // is NEVER serialized (matches upstream behavior for all backends).
+    // 4 fields [fmt][metal_language_version][fmap][smap] — the source map is
+    // in-memory inspection material and is NEVER serialized (matches
+    // upstream behavior for all backends).
     std::string buffer;
     support::BytesOutStream stream(&buffer);
     stream.Write(fmt_);
+    stream.Write(metal_language_version_);
     stream.Write(fmap_);
     stream.Write(smap_);
     return ffi::Bytes(std::move(buffer));
@@ -117,13 +120,17 @@ class MetalFallbackModuleNode : public ffi::ModuleObj {
   ffi::Map<ffi::String, runtime::FunctionInfo> fmap_;
   // In-memory source map for InspectSource — never serialized.
   ffi::Map<ffi::String, ffi::String> source_;
+  // MSL version the kernels were generated for (major * 10 + minor).
+  int metal_language_version_;
 };
 
 ffi::Module MetalFallbackModuleCreate(ffi::Map<ffi::String, ffi::Bytes> smap, ffi::String fmt,
                                       ffi::Map<ffi::String, runtime::FunctionInfo> fmap,
-                                      ffi::Map<ffi::String, ffi::String> source) {
+                                      ffi::Map<ffi::String, ffi::String> source,
+                                      int metal_language_version) {
   auto n = ffi::make_object<MetalFallbackModuleNode>(std::move(smap), std::move(fmt),
-                                                     std::move(fmap), std::move(source));
+                                                     std::move(fmap), std::move(source),
+                                                     metal_language_version);
   return ffi::Module(n);
 }
 
