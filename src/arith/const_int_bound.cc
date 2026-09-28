@@ -26,6 +26,7 @@
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/tirx/builtin.h>
 #include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op_attr_types.h>
 
 #include <algorithm>
 #include <optional>
@@ -34,7 +35,6 @@
 #include "int_operator.h"
 #include "pattern_match.h"
 #include "scalable_expression.h"
-#include <tvm/tirx/op_attr_types.h>
 
 namespace tvm {
 namespace arith {
@@ -288,14 +288,15 @@ class ConstIntBoundAnalyzer::Impl
     if (b.min_value > 0) {
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
 
-      // Try to get tighter bounds using modular set information
-      if (parent_ && b.min_value == b.max_value) {
+      // Truncating remainders can be negative. The modular bound below
+      // describes non-negative residues, so only use it for non-negative a.
+      if (parent_ && a.min_value >= 0 && b.min_value == b.max_value) {
         ModularSet mod_a = parent_->modular_set(op->a);
         int64_t modulus = b.min_value;
         int64_t gcd_coeff_mod = ZeroAwareGCD(mod_a->coeff, modulus);
 
         // If gcd_coeff_mod > 1, we can get tighter bounds
-        // The result will be of the form gcd_coeff_mod * k + (base % modulus)
+        // The result will be of the form gcd_coeff_mod * k + (base % gcd_coeff_mod)
         // where k ranges to cover [0, modulus - gcd_coeff_mod]
         //
         // Example: expr = (bx * 2048 + tx * 16) % 7168
@@ -305,10 +306,9 @@ class ConstIntBoundAnalyzer::Impl
         //          Without this optimization: bound = [0, 7167]
         //          With this optimization: bound = [0, 7152]
         if (gcd_coeff_mod > 1) {
-          int64_t base_mod = mod_a->base % modulus;
-          if (base_mod < 0) base_mod += modulus;
+          int64_t base_mod = mod_a->base % gcd_coeff_mod;
+          if (base_mod < 0) base_mod += gcd_coeff_mod;
           int64_t tight_max = modulus - gcd_coeff_mod + base_mod;
-          if (tight_max >= modulus) tight_max -= modulus;
           return MakeBound(base_mod, tight_max);
         }
       }
@@ -372,7 +372,7 @@ class ConstIntBoundAnalyzer::Impl
         int64_t gcd_coeff_mod = ZeroAwareGCD(mod_a->coeff, modulus);
 
         // If gcd_coeff_mod > 1, we can get tighter bounds
-        // The result will be of the form gcd_coeff_mod * k + (base % modulus)
+        // The result will be of the form gcd_coeff_mod * k + (base % gcd_coeff_mod)
         // where k ranges to cover [0, modulus - gcd_coeff_mod]
         //
         // Example: expr = (bx * 2048 + tx * 16) % 7168
@@ -383,10 +383,9 @@ class ConstIntBoundAnalyzer::Impl
         //          Without this optimization: bound = [0, 7167]
         //          With this optimization: bound = [0, 7152]
         if (gcd_coeff_mod > 1) {
-          int64_t base_mod = mod_a->base % modulus;
-          if (base_mod < 0) base_mod += modulus;
+          int64_t base_mod = mod_a->base % gcd_coeff_mod;
+          if (base_mod < 0) base_mod += gcd_coeff_mod;
           int64_t tight_max = modulus - gcd_coeff_mod + base_mod;
-          if (tight_max >= modulus) tight_max -= modulus;
           return MakeBound(base_mod, tight_max);
         }
       }
@@ -855,7 +854,7 @@ class ConstIntBoundAnalyzer::Impl
     };
 
     for (const auto& subexpr : ExtractConstraints(cond)) {
-      if(SideEffect(subexpr) > tirx::CallEffectKind::kPure) {
+      if (SideEffect(subexpr) > tirx::CallEffectKind::kPure) {
         continue;
       }
       // NOTE: The canonical form always uses <= or <, but a
