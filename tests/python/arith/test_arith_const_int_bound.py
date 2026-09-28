@@ -191,7 +191,62 @@ class TestFloorModBound(BaseCompare):
         TestCase(x % y, (0, 9), {x: (-9, 4), y: (4, 10)}),
         TestCase(x % y, (0, 9), {x: (NEG_INF, POS_INF), y: (4, 10)}),
         TestCase(x % y, (0, 9), {x: (1, POS_INF), y: (4, 10)}),
+        TestCase((x * 192 + 127) % 128, (63, 127), {x: (0, POS_INF)}),
     )
+
+
+@pytest.mark.parametrize("remainder", [tvm.tirx.floormod, tvm.tirx.truncmod])
+@pytest.mark.parametrize(
+    "coefficient,offset,modulus",
+    [
+        (192, 127, 128),
+        (192, -65, 128),
+        (64, 63, 128),
+        (128, 127, 128),
+        (192, 64, 128),
+        (192, 0, 128),
+        (96, 63, 64),
+        (7, 5, 4),
+    ],
+)
+@pytest.mark.parametrize("lower,upper", [(0, 8), (-8, -1), (-8, 8)])
+def test_modular_remainder_bounds_contain_values(
+    remainder, coefficient, offset, modulus, lower, upper
+):
+    x = tvm.tirx.Var("x", "int64")
+    analyzer = tvm.arith.Analyzer()
+    analyzer.update(x, ConstIntBound(lower, upper))
+    bound = analyzer.const_int_bound(remainder(coefficient * x + offset, modulus))
+
+    for value in range(lower, upper + 1):
+        dividend = coefficient * value + offset
+        if remainder is tvm.tirx.truncmod and dividend < 0:
+            expected = -((-dividend) % modulus)
+        else:
+            expected = dividend % modulus
+        assert bound.min_value <= expected <= bound.max_value, (
+            f"{remainder.__name__}({dividend}, {modulus}) = {expected} "
+            f"is outside [{bound.min_value}, {bound.max_value}]"
+        )
+
+
+def test_symbolic_tail_guard_with_modular_remainder():
+    batch = tvm.tirx.Var("batch", "int32")
+    index = tvm.tirx.Var("index", "int32")
+    thread = tvm.tirx.Var("thread", "int32")
+    analyzer = tvm.arith.Analyzer()
+    analyzer.update(batch, ConstIntBound(0, POS_INF))
+    analyzer.bind(thread, tvm.ir.Range(0, 128))
+    extent = (batch * 192 - 1) // 128 + 1
+
+    with analyzer.constraint_scope(index >= 0), analyzer.constraint_scope(index < extent):
+        analyzer.bind(index, tvm.ir.Range(0, extent))
+        with analyzer.constraint_scope(extent > 0):
+            # batch=1, index=1, thread=64 satisfies the loop constraints but
+            # fails this guard, so the padded lanes must not be proved safe.
+            assert not analyzer.can_prove(
+                index * 128 + thread < batch * 192, tvm.arith.ProofStrength.SYMBOLIC_BOUND
+            )
 
 
 class TestMinMaxBound(BaseCompare):
