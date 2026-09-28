@@ -306,6 +306,35 @@ private:
 
 
 /*!
+ * \brief Device facts that decide which "metal" target attributes a device supports.
+ *
+ * Queried once per device when the workspace initializes.  Python target
+ * detection reads them through "device_api.metal.get_target_property" to
+ * populate the matching attributes of the "metal" target kind, the same way
+ * the Vulkan device API reports its VulkanDeviceProperties.
+ */
+struct MetalDeviceProperties {
+  /*!
+   * \brief Highest Metal Shading Language version the device can compile,
+   * encoded as major * 10 + minor (for example 31 for MSL 3.1).
+   */
+  int metal_language_version;
+  bool supports_bfloat16;
+  bool supports_simdgroup_permute;
+  bool supports_simdgroup_reduction;
+  bool supports_simdgroup_matrix;
+  bool supports_metal4;
+};
+
+/*!
+ * \brief Map a metal_language_version attribute value to the MTLLanguageVersion enum.
+ * \param version The version encoded as major * 10 + minor.
+ * \return The matching enum value.
+ * \note Throws when this build's SDK does not know the requested version.
+ */
+MTLLanguageVersion MetalLanguageVersionFromNumber(int version);
+
+/*!
  * \brief Process global Metal workspace.
  */
 class MetalWorkspace final : public DeviceAPI {
@@ -314,6 +343,8 @@ class MetalWorkspace final : public DeviceAPI {
   std::vector<id<MTLDevice>> devices;
   // Warp size constant
   std::vector<int> warp_size;
+  // Target-relevant properties of each device, parallel to `devices`.
+  std::vector<MetalDeviceProperties> device_properties;
   MetalWorkspace();
   // Destructor
   ~MetalWorkspace();
@@ -327,6 +358,13 @@ class MetalWorkspace final : public DeviceAPI {
   // override device API
   void SetDevice(Device dev) final;
   void GetAttr(Device dev, DeviceAttrKind kind, ffi::Any* rv) final;
+  /*!
+   * \brief Report one "metal" target attribute supported by the device.
+   * \param dev The device to query.
+   * \param property The target attribute name, e.g. "supports_bfloat16".
+   * \param rv The value; left unset when the property is unknown.
+   */
+  void GetTargetProperty(Device dev, const std::string& property, ffi::Any* rv);
   void* AllocDataSpace(Device dev, size_t nbytes, size_t alignment, DLDataType type_hint) final;
   void FreeDataSpace(Device dev, void* ptr) final;
   TVMStreamHandle CreateStream(Device dev) final;

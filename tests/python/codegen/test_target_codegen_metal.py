@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import numpy as np
+import pytest
 
 import tvm
 import tvm.testing
@@ -232,6 +233,69 @@ def test_export_load_with_fallback(monkeypatch, tmp_path):
 
     lib_path = str(tmp_path / "lib.so")
     host_lib.export_library(lib_path)
+
+
+@tvm.testing.requires_gpu
+@tvm.testing.requires_metal
+def test_target_from_device_reports_device_properties():
+    dev = tvm.metal()
+    target = tvm.target.Target.from_device(dev)
+
+    assert int(target.attrs["max_shared_memory_per_block"]) == dev.max_shared_memory_per_block
+    assert int(target.attrs["max_threads_per_block"]) == dev.max_threads_per_block
+    assert int(target.attrs["thread_warp_size"]) == dev.warp_size
+    assert int(target.attrs["metal_language_version"]) >= 23
+    for name in (
+        "supports_bfloat16",
+        "supports_simdgroup_permute",
+        "supports_simdgroup_reduction",
+        "supports_simdgroup_matrix",
+        "supports_metal4",
+    ):
+        assert name in target.attrs, name
+    if bool(target.attrs["supports_bfloat16"]):
+        assert int(target.attrs["metal_language_version"]) >= 31
+    if bool(target.attrs["supports_metal4"]):
+        assert int(target.attrs["metal_language_version"]) == 40
+
+
+@tvm.testing.requires_gpu
+@tvm.testing.requires_metal
+def test_module_compiles_with_target_language_version(tmp_path):
+    n = 16
+
+    @I.ir_module
+    class Module:
+        @T.prim_func
+        def main(A: T.Buffer((n,), "float32"), B: T.Buffer((n,), "float32")):
+            T.func_attr({"tirx.noalias": True})
+            for i in T.thread_binding(n, thread="threadIdx.x"):
+                with T.sblock("B"):
+                    v_i = T.axis.spatial(n, i)
+                    T.reads(A[v_i])
+                    T.writes(B[v_i])
+                    B[v_i] = A[v_i] + 1.0
+
+    dev = tvm.metal()
+    a = np.arange(n).astype("float32")
+
+    # The version travels with the module through export and load.
+    target = tvm.target.Target({"kind": "metal", "metal_language_version": 30})
+    lib_path = str(tmp_path / "lib.so")
+    tvm.compile(Module, target=target).export_library(lib_path)
+    loaded = tvm.runtime.load_module(lib_path)
+    a_nd = tvm.runtime.tensor(a, dev)
+    b_nd = tvm.runtime.empty((n,), "float32", dev)
+    loaded["main"](a_nd, b_nd)
+    tvm.testing.assert_allclose(b_nd.numpy(), a + 1.0, atol=1e-5, rtol=1e-5)
+
+    # A module generated for a newer MSL than the device compiles is rejected.
+    detected = tvm.target.Target.from_device(dev)
+    too_new = int(detected.attrs["metal_language_version"]) + 1
+    target = tvm.target.Target({"kind": "metal", "metal_language_version": too_new})
+    f = tvm.compile(Module, target=target)
+    with pytest.raises(Exception, match="compiles at most MSL"):
+        f(a_nd, b_nd)
 
 
 if __name__ == "__main__":
