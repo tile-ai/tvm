@@ -28,6 +28,7 @@
 
 #include <cctype>
 #include <iomanip>
+#include <limits>
 
 #include "../../arith/pattern_match.h"
 #include "codegen_params.h"
@@ -482,16 +483,20 @@ inline void PrintConst(const FloatImmNode* op, std::ostream& os, CodeGenC* p) { 
     case 64:
     case 32: {
       std::ostringstream temp;
-      temp << std::scientific << op->value;
+      temp << std::scientific << std::setprecision(std::numeric_limits<double>::max_digits10 - 1)
+           << op->value;
       if (op->dtype.bits() == 32) temp << 'f';
       p->MarkConst(temp.str());
       os << temp.str();
       break;
     }
     case 16: {
-      os << '(';
-      p->PrintType(op->dtype, os);
-      os << ')' << std::scientific << op->value << 'f';
+      std::ostringstream temp;
+      temp << '(';
+      p->PrintType(op->dtype, temp);
+      temp << ')' << std::scientific
+           << std::setprecision(std::numeric_limits<double>::max_digits10 - 1) << op->value << 'f';
+      os << temp.str();
       break;
     }
     default:
@@ -688,7 +693,8 @@ void CodeGenC::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*)
       // When inside a select, combine conditions to prevent OOB access.
       std::string result = name_supply_->FreshName("condval");
       std::string cond = PrintExpr(op->args[0]);
-      std::string outer_cond = select_condition_stack_.empty() ? "" : select_condition_stack_.back();
+      std::string outer_cond =
+          select_condition_stack_.empty() ? "" : select_condition_stack_.back();
 
       this->PrintIndent();
       PrintType(op->dtype, this->stream);
