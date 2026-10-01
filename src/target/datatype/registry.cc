@@ -51,6 +51,9 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   Registry::Global()->Register("tfloat32", 130);
   // SM100 FP4 E2M1 with 8-bit unpacked shared-memory storage
   Registry::Global()->Register("float4_e2m1_unpacked", 131);
+  // FP6 with 8-bit unpacked shared-memory storage (16U6_ALIGN16B)
+  Registry::Global()->Register("float6_e2m3fn_unpacked", 132);
+  Registry::Global()->Register("float6_e3m2fn_unpacked", 133);
 }
 
 Registry* Registry::Global() {
