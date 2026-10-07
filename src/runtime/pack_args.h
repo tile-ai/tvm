@@ -49,6 +49,7 @@ constexpr unsigned int kDLGridConstant = 30U;
  * \brief argument union type of 32bit.
  */
 union ArgUnion32 {
+  uint16_t v_uint16;
   int32_t v_int32;
   uint32_t v_uint32;
   float v_float32;
@@ -58,6 +59,7 @@ union ArgUnion32 {
  * \brief argument union type of 64 bit, for use by Vulkan and Metal runtime.
  */
 union ArgUnion64 {
+  uint16_t v_uint16[4];
   int32_t v_int32[2];
   uint32_t v_uint32[2];
   float v_float32[2];
@@ -137,6 +139,7 @@ enum ArgConvertCode {
   INT64_TO_INT32,
   INT64_TO_UINT32,
   FLOAT64_TO_FLOAT32,
+  FLOAT64_TO_BFLOAT16,
   FLOAT64_TO_FLOAT64,
   HANDLE_TO_HANDLE,
   HANDLE_TO_TENSORMAP,
@@ -153,6 +156,8 @@ inline ArgConvertCode GetArgConvertCode(DLDataType t) {
   } else if (t.code == kDLFloat) {
     if (t.bits == 64U) return FLOAT64_TO_FLOAT64;
     if (t.bits == 32U) return FLOAT64_TO_FLOAT32;
+  } else if (t.code == kDLBfloat && t.bits == 16U) {
+    return FLOAT64_TO_BFLOAT16;
   } else if (t.code == kDLOpaqueHandle) {
     return HANDLE_TO_HANDLE;
   } else if (t.code == kDLGridConstant) {
@@ -160,6 +165,16 @@ inline ArgConvertCode GetArgConvertCode(DLDataType t) {
   }
   TVM_FFI_THROW(InternalError) << "Cannot handle " << t << " as device function argument";
   TVM_FFI_UNREACHABLE();
+}
+
+inline uint16_t Float64ToBFloat16(double value) {
+  float value_f32 = static_cast<float>(value);
+  uint32_t bits;
+  std::memcpy(&bits, &value_f32, sizeof(bits));
+  // Preserve NaNs instead of allowing rounding to turn them into infinity.
+  if ((bits & 0x7fffffffU) > 0x7f800000U) return 0x7fc0U;
+  // Round to nearest, ties to even.
+  return static_cast<uint16_t>((bits + 0x7fffU + ((bits >> 16) & 1U)) >> 16);
 }
 
 template <int N, typename F>
@@ -194,6 +209,11 @@ inline ffi::Function PackFuncVoidAddr_(F f, const std::vector<ArgConvertCode>& c
         case FLOAT64_TO_FLOAT32: {
           holder[i].v_float32 = static_cast<float>(raw_args[i].v_float64);
           addr[i] = &(holder[i]);
+          break;
+        }
+        case FLOAT64_TO_BFLOAT16: {
+          holder[i].v_uint16 = Float64ToBFloat16(raw_args[i].v_float64);
+          addr[i] = &(holder[i].v_uint16);
           break;
         }
         case HANDLE_TO_TENSORMAP: {
@@ -242,6 +262,10 @@ inline ffi::Function PackFuncNonBufferArg_(F f, int base,
           holder[i].v_float32[0] = static_cast<float>(raw_args[base + i].v_float64);
           break;
         }
+        case FLOAT64_TO_BFLOAT16: {
+          holder[i].v_uint16[0] = Float64ToBFloat16(raw_args[base + i].v_float64);
+          break;
+        }
         case HANDLE_TO_HANDLE:
         case HANDLE_TO_REFERENCE:
         case HANDLE_TO_TENSORMAP: {
@@ -260,50 +284,44 @@ inline ffi::Function PackFuncPackedArgAligned_(F f, const std::vector<ArgConvert
   int num_args = static_cast<int>(codes.size());
   auto ret = [f, codes, num_args](ffi::PackedArgs args, ffi::Any* ret) {
     TempArray<uint64_t, N> pack_(num_args);
-    int32_t* pack = reinterpret_cast<int32_t*>(pack_.data());
-    int32_t* ptr = pack;
-    static_assert(sizeof(void*) % sizeof(int32_t) == 0, "invariant");
+    uint8_t* pack = reinterpret_cast<uint8_t*>(pack_.data());
+    uint8_t* ptr = pack;
     const TVMFFIAny* raw_args = reinterpret_cast<const TVMFFIAny*>(args.data());
 
-    // function to ensure alignment so fields are properly aligned
-    // factor: how many multiple of i32 we need to align to
-    auto ensure_alignment_to_multiple_of_i32 = [&](size_t factor) {
-      while ((ptr - pack) % factor != 0) {
+    auto push_arg = [&](auto value) {
+      using T = decltype(value);
+      while ((ptr - pack) % alignof(T) != 0) {
         ++ptr;
       }
+      std::memcpy(ptr, &value, sizeof(T));
+      ptr += sizeof(T);
     };
 
     for (int i = 0; i < num_args; ++i) {
       switch (codes[i]) {
         case HANDLE_TO_HANDLE: {
-          ensure_alignment_to_multiple_of_i32(sizeof(void*) / sizeof(int32_t));
-          std::memcpy(ptr, &(raw_args[i].v_ptr), sizeof(void*));
-          ptr += sizeof(void*) / sizeof(int32_t);
+          push_arg(raw_args[i].v_ptr);
           break;
         }
         case INT64_TO_INT64:
         case FLOAT64_TO_FLOAT64: {
-          ensure_alignment_to_multiple_of_i32(2);
-          std::memcpy(ptr, &(raw_args[i].v_int64), sizeof(int64_t));
-          ptr += 2;
+          push_arg(raw_args[i].v_int64);
           break;
         }
         case INT64_TO_INT32: {
-          ensure_alignment_to_multiple_of_i32(1);
-          *ptr = static_cast<int32_t>(raw_args[i].v_int64);
-          ++ptr;
+          push_arg(static_cast<int32_t>(raw_args[i].v_int64));
           break;
         }
         case INT64_TO_UINT32: {
-          ensure_alignment_to_multiple_of_i32(1);
-          *reinterpret_cast<uint32_t*>(ptr) = static_cast<uint32_t>(raw_args[i].v_int64);
-          ++ptr;
+          push_arg(static_cast<uint32_t>(raw_args[i].v_int64));
           break;
         }
         case FLOAT64_TO_FLOAT32: {
-          ensure_alignment_to_multiple_of_i32(1);
-          *reinterpret_cast<float*>(ptr) = static_cast<float>(raw_args[i].v_float64);
-          ++ptr;
+          push_arg(static_cast<float>(raw_args[i].v_float64));
+          break;
+        }
+        case FLOAT64_TO_BFLOAT16: {
+          push_arg(Float64ToBFloat16(raw_args[i].v_float64));
           break;
         }
         case HANDLE_TO_REFERENCE:
@@ -314,7 +332,7 @@ inline ffi::Function PackFuncPackedArgAligned_(F f, const std::vector<ArgConvert
         }
       }
     }
-    f(args, ret, pack, (ptr - pack) * sizeof(int32_t));
+    f(args, ret, pack, ptr - pack);
   };
   return ffi::Function(ret);
 }

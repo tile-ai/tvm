@@ -158,7 +158,7 @@ inline DataType APIType(DataType t) {
   if (t.is_handle()) return t;
   TVM_FFI_ICHECK_EQ(t.lanes(), 1) << "Cannot pass vector type through packed API.";
   if (t.is_bool() || t.is_uint() || t.is_int()) return DataType::Int(64);
-  TVM_FFI_ICHECK(t.is_float());
+  TVM_FFI_ICHECK(t.is_float() || t.is_bfloat16());
   return DataType::Float(64);
 }
 

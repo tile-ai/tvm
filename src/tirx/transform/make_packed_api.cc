@@ -88,7 +88,7 @@ class ReturnRewriter : public StmtMutator {
     } else if (dtype.is_int() || dtype.is_uint()) {
       info.type_index = ffi::TypeIndex::kTVMFFIInt;
       info.expr = Cast(DataType::Int(64), val);
-    } else if (dtype.is_float()) {
+    } else if (dtype.is_float() || dtype.is_bfloat16()) {
       info.type_index = ffi::TypeIndex::kTVMFFIFloat;
       info.expr = Cast(DataType::Float(64), val);
     } else if (dtype.is_void()) {

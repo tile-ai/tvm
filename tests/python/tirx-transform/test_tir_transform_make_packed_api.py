@@ -329,15 +329,18 @@ def test_bool_parameter():
     tvm.ir.assert_structural_equal(After, Expected)
 
 
-def test_float_parameter():
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_float_parameter(dtype):
     """Float parameter emits type check accepting float, int, or bool."""
+
+    scalar_type = getattr(T, dtype)
 
     @I.ir_module
     class Before:
         @T.prim_func
-        def main(arg: T.float32) -> T.int32:
+        def main(arg: scalar_type) -> T.int32:
             T.func_attr({"target": T.target("llvm", host="llvm")})
-            if arg > T.float32(0):
+            if arg > scalar_type(0):
                 return 10
             else:
                 return 20
@@ -360,11 +363,11 @@ def test_float_parameter():
             )
             assert num_args == 1, (
                 "TypeError",
-                ["Expected ", "1", " arguments", " when calling:\n  `", "main(arg: float32)", "`"],
+                ["Expected ", "1", " arguments", " when calling:\n  `", f"main(arg: {dtype})", "`"],
             )
             assert not T.isnullptr(args), (
                 "TypeError",
-                ["args pointer is NULL", " when calling:\n  `", "main(arg: float32)", "`"],
+                ["args pointer is NULL", " when calling:\n  `", f"main(arg: {dtype})", "`"],
             )
             arg_type_index: T.int32 = T.tvm_struct_get(args, 0, 13, "int32")
             assert arg_type_index == 3 or arg_type_index == 1 or arg_type_index == 2, (
@@ -373,18 +376,18 @@ def test_float_parameter():
                     "Mismatched type on argument #",
                     "0",
                     " when calling:\n  `",
-                    "main(arg: float32)",
+                    f"main(arg: {dtype})",
                     "`,\n  expected ",
                     "float",
                 ],
             )
-            arg: T.float32 = T.Select(
+            arg: scalar_type = T.Select(
                 arg_type_index == 3,
-                T.Cast("float32", T.tvm_struct_get(args, 0, 15, "float64")),
-                T.Cast("float32", T.tvm_struct_get(args, 0, 15, "int64")),
+                T.Cast(dtype, T.tvm_struct_get(args, 0, 15, "float64")),
+                T.Cast(dtype, T.tvm_struct_get(args, 0, 15, "int64")),
             )
             with T.attr(0, "compute_scope", "main_compute_"):
-                if arg > T.float32(0.0):
+                if arg > scalar_type(0.0):
                     T.tvm_struct_set(result, 0, 13, 1)
                     T.tvm_struct_set(result, 0, 14, 0)
                     T.tvm_struct_set(result, 0, 15, T.Cast("int64", 10))
