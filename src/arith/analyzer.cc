@@ -71,6 +71,20 @@ void Analyzer::Bind(const Var& var, const PrimExpr& expr, bool allow_override) {
   this->z3_prover.Bind(var, expr, allow_override);
 }
 
+void Analyzer::BindLazyBounds(const Var& var, const PrimExpr& expr, bool allow_override) {
+  PrimExpr new_expr = expr;
+  new_expr = this->canonical_simplify(new_expr);
+  new_expr = this->rewrite_simplify(new_expr);
+
+  this->const_int_bound.UpdateDefinition(var, new_expr, allow_override);
+  this->modular_set.Update(var, this->modular_set(new_expr), allow_override);
+  this->rewrite_simplify.Update(var, new_expr, allow_override);
+  this->canonical_simplify.Update(var, new_expr, allow_override);
+  this->int_set.Update(var, this->int_set(new_expr), allow_override);
+  this->transitive_comparisons.Bind(var, expr, allow_override);
+  this->z3_prover.Bind(var, expr, allow_override);
+}
+
 void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
   TVM_FFI_ICHECK(range.defined());
   if (tirx::is_one(range->extent)) {
@@ -474,6 +488,11 @@ static FnFactory BuildAnalyzerFactory(std::shared_ptr<tvm::arith::Analyzer> self
     } else if (name == "int_set") {
       return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
         *ret = self->int_set(args[0].cast<PrimExpr>(), args[1].cast<tvm::ffi::Map<Var, IntSet>>());
+      });
+    } else if (name == "bind_lazy_bounds") {
+      return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {
+        bool allow_override = args.size() >= 3 && args[2].cast<bool>();
+        self->BindLazyBounds(args[0].cast<Var>(), args[1].cast<PrimExpr>(), allow_override);
       });
     } else if (name == "bind") {
       return Function([self](tvm::ffi::PackedArgs args, tvm::ffi::Any* ret) {

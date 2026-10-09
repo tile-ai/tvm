@@ -133,6 +133,7 @@ class Analyzer:
         self._const_int_bound_update = mod_factory("const_int_bound_update")
         self._const_int_bound_is_bound = mod_factory("const_int_bound_is_bound")
         self._bind = mod_factory("bind")
+        self._bind_lazy_bounds = mod_factory("bind_lazy_bounds")
         self._modular_set = mod_factory("modular_set")
         self._simplify = mod_factory("Simplify")
         self._rewrite_simplify = mod_factory("rewrite_simplify")
@@ -359,6 +360,33 @@ class Analyzer:
             Whether to allow overriding an existing binding for the variable.
         """
         return self._bind(var, expr, allow_override)
+
+    def bind_lazy_bounds(
+        self,
+        var: tirx.Var,
+        expr: tirx.PrimExpr,
+        allow_override: bool = False,
+    ) -> None:
+        """Bind a variable to an expression with lazily evaluated bounds.
+
+        Identical to bind except for the const-int-bound sub-analyzer:
+        instead of snapshotting the value's bound at bind time, the
+        definition is stored and the bound is derived on demand under the
+        constraints active at query time. Use when binds and constraints
+        are replayed in an order unrelated to program order.
+
+        Parameters
+        ----------
+        var : tvm.tirx.Var
+            The variable.
+
+        expr : tirx.PrimExpr
+            The expression to bind to.
+
+        allow_override : bool
+            Whether to allow overriding an existing binding for the variable.
+        """
+        return self._bind_lazy_bounds(var, expr, allow_override)
 
     def constraint_scope(self, constraint: tirx.PrimExpr) -> ConstraintScope:
         """Create a constraint scope.

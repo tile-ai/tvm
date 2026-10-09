@@ -99,6 +99,9 @@ class ConstIntBoundAnalyzer::Impl
   explicit Impl(Analyzer* parent) : parent_(parent) {}
   void CopyFrom(const Impl& other) {
     this->var_map_ = other.var_map_;
+    this->lazy_def_map_ = other.lazy_def_map_;
+    this->lazy_memo_ = other.lazy_memo_;
+    this->constraint_epoch_ = other.constraint_epoch_;
     this->additional_info_ = other.additional_info_;
     this->bound_ = nullptr;
   }
@@ -113,7 +116,7 @@ class ConstIntBoundAnalyzer::Impl
     BoundInfo(PrimExpr expr, Entry bound) : expr(expr), bound(bound) {}
   };
 
-  bool IsBound(const Var& var) const { return var_map_.find(var) != var_map_.end(); }
+  bool IsBound(const Var& var) const { return var_map_.count(var) || lazy_def_map_.count(var); }
 
   void Bind(const Var& var, const Range& range, bool allow_override) {
     Entry a = VisitExpr(range->min);
@@ -129,13 +132,22 @@ class ConstIntBoundAnalyzer::Impl
       auto it = var_map_.find(var);
       if (it != var_map_.end()) {
         TVM_FFI_ICHECK(it->second == info)
-            << "Trying to update var \'" << var << "\'"
-            << " with a different const bound: "
+            << "Trying to update var \'" << var << "\'" << " with a different const bound: "
             << "original=" << ConstIntBound(it->second.min_value, it->second.max_value)
             << ", new=" << ConstIntBound(info.min_value, info.max_value);
       }
     }
     var_map_[var] = info;
+  }
+
+  void UpdateDefinition(const Var& var, const PrimExpr& expr, bool allow_override) {
+    if (!allow_override) {
+      TVM_FFI_ICHECK(!var_map_.count(var) && !lazy_def_map_.count(var))
+          << "Trying to update var \'" << var << "\' with a definition, but it is already bound";
+    }
+    var_map_.erase(var);
+    lazy_memo_.erase(var);
+    lazy_def_map_[var] = expr;
   }
 
   Entry VisitExpr_(const LetNode* op) final {
@@ -161,6 +173,8 @@ class ConstIntBoundAnalyzer::Impl
   }
 
   Entry VisitExpr(const PrimExpr& expr) final {
+    bool parent_touched_lazy = touched_lazy_;
+    touched_lazy_ = false;
     Entry res = ExprFunctor::VisitExpr(expr);
     tirx::ExprDeepEqual equal;
     // a linear search over additional info
@@ -170,7 +184,11 @@ class ConstIntBoundAnalyzer::Impl
         res = Intersect(res, info.bound);
       }
     }
-    if (bound_) {
+    // A subtree that consulted a lazy definition has constraint-dependent
+    // bounds; the caller-provided memo table outlives constraint scopes, so
+    // such results must stay out of it (its consistency check would
+    // rightfully fire on the next scope).
+    if (bound_ && !touched_lazy_) {
       auto val = bound_->find(expr);
       if (val != bound_->end()) {
         auto everything = Everything(expr->dtype);
@@ -182,6 +200,7 @@ class ConstIntBoundAnalyzer::Impl
       }
       (*bound_)[expr] = ConstIntBound(res.min_value, res.max_value);
     }
+    touched_lazy_ = parent_touched_lazy || touched_lazy_;
     return res;
   }
 
@@ -460,9 +479,38 @@ class ConstIntBoundAnalyzer::Impl
     auto it = var_map_.find(v);
     if (it != var_map_.end()) {
       return it->second;
-    } else {
-      return Everything(op->dtype);
     }
+    if (auto lazy = LazyDefinitionBound(v)) {
+      return lazy.value();
+    }
+    return Everything(op->dtype);
+  }
+
+  /*!
+   * \brief Bound of a var bound to a definition rather than a snapshot.
+   *
+   * Evaluated on demand so the result reflects the constraints active at
+   * query time, then memoized per constraint epoch. A definition chain
+   * (`v2 = v1 * 2` with `v1` itself lazily bound) recurses; a cycle cannot
+   * come from well-formed input and degrades to Everything.
+   */
+  std::optional<Entry> LazyDefinitionBound(const Var& v) {
+    auto def_it = lazy_def_map_.find(v);
+    if (def_it == lazy_def_map_.end()) {
+      return std::nullopt;
+    }
+    touched_lazy_ = true;
+    auto memo_it = lazy_memo_.find(v);
+    if (memo_it != lazy_memo_.end() && memo_it->second.first == constraint_epoch_) {
+      return memo_it->second.second;
+    }
+    if (!lazy_eval_stack_.insert(v.get()).second) {
+      return Everything(v->dtype);
+    }
+    Entry res = VisitExpr(def_it->second);
+    lazy_eval_stack_.erase(v.get());
+    lazy_memo_[v] = {constraint_epoch_, res};
+    return res;
   }
 
   Entry VisitExpr_(const SizeVarNode* op) final {
@@ -470,9 +518,11 @@ class ConstIntBoundAnalyzer::Impl
     auto it = var_map_.find(v);
     if (it != var_map_.end()) {
       return it->second;
-    } else {
-      return MakeBound(0, kPosInf);
     }
+    if (auto lazy = LazyDefinitionBound(v)) {
+      return Intersect(lazy.value(), MakeBound(0, kPosInf));
+    }
+    return MakeBound(0, kPosInf);
   }
 
   Entry VisitLeftShift(const CallNode* op) {
@@ -577,9 +627,11 @@ class ConstIntBoundAnalyzer::Impl
     if (info.size() == 0) return nullptr;
     size_t old_size = additional_info_.size();
     additional_info_.insert(additional_info_.end(), info.begin(), info.end());
+    ++constraint_epoch_;
     auto frecover = [old_size, this]() {
       if (additional_info_.size() > old_size) {
         additional_info_.resize(old_size);
+        ++constraint_epoch_;
       }
     };
     return frecover;
@@ -591,6 +643,17 @@ class ConstIntBoundAnalyzer::Impl
   Analyzer* parent_;
   // internal variable map
   std::unordered_map<Var, Entry> var_map_;
+  // vars bound to a definition instead of a bound snapshot; their bounds
+  // are evaluated on demand under the constraints active at query time
+  std::unordered_map<Var, PrimExpr> lazy_def_map_;
+  // per-constraint-epoch memo for lazy definitions
+  std::unordered_map<Var, std::pair<size_t, Entry>> lazy_memo_;
+  // bumped whenever additional_info_ changes, invalidating lazy_memo_
+  size_t constraint_epoch_{0};
+  // recursion guard for lazy definition chains
+  std::unordered_set<const VarNode*> lazy_eval_stack_;
+  // whether the current VisitExpr subtree consulted a lazy definition
+  bool touched_lazy_{false};
   // additional bound info
   std::vector<BoundInfo> additional_info_;
   // look up table for memorization
@@ -963,6 +1026,11 @@ void ConstIntBoundAnalyzer::Bind(const Var& var, const Range& range, bool allow_
 }
 
 bool ConstIntBoundAnalyzer::IsBound(const Var& var) const { return impl_->IsBound(var); }
+
+void ConstIntBoundAnalyzer::UpdateDefinition(const Var& var, const PrimExpr& expr,
+                                             bool allow_override) {
+  impl_->UpdateDefinition(var, expr, allow_override);
+}
 
 std::function<void()> ConstIntBoundAnalyzer::EnterConstraint(const PrimExpr& constraint) {
   return impl_->EnterConstraint(constraint);

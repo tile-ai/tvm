@@ -166,6 +166,24 @@ class ConstIntBoundAnalyzer {
   TVM_DLL void Bind(const Var& var, const Range& range, bool allow_override = false);
 
   /*!
+   * \brief Bind var to a definition whose bounds are evaluated on demand.
+   *
+   * Unlike Update, no bound snapshot is taken: each query derives the
+   * bound from \p expr under the constraints active at query time, and the
+   * result is memoized per constraint scope. Bounds therefore keep
+   * tightening as constraints are entered, at the cost of re-evaluating
+   * the definition once per constraint scope. Intended for analyses that
+   * replay collected constraint sets in an order unrelated to the program
+   * order (see tile-ai/tilelang#3220); eager Update remains the right
+   * choice on simplification hot paths.
+   *
+   * \param var The variable.
+   * \param expr The defining expression.
+   * \param allow_override Whether we allow overriding an existing binding.
+   */
+  TVM_DLL void UpdateDefinition(const Var& var, const PrimExpr& expr, bool allow_override = false);
+
+  /*!
    * \brief Check if a variable is bound to a range.
    * \param var The variable.
    * \return Whether the variable is bound to a range.
@@ -822,6 +840,22 @@ class TVM_DLL Analyzer {
    *        between variables.
    */
   void Bind(const Var& var, const PrimExpr& expr, bool allow_override = false);
+  /*!
+   * \brief Bind var to expr with lazily evaluated integer bounds.
+   *
+   * Identical to Bind except for const_int_bound: instead of snapshotting
+   * the value's bound at bind time, the definition is stored and the bound
+   * is derived on demand under the constraints active at query time (see
+   * ConstIntBoundAnalyzer::UpdateDefinition). Use when binds and
+   * constraints are replayed in an order unrelated to program order, so a
+   * bound cannot be widened by an unlucky replay position. The other
+   * sub-analyzers behave exactly as in Bind.
+   *
+   * \param var The variable of interest.
+   * \param expr The bound expression
+   * \param allow_override whether we allow override of existing information.
+   */
+  void BindLazyBounds(const Var& var, const PrimExpr& expr, bool allow_override = false);
   /*!
    * \brief Notify all the sub-analyzers that var
    *        is created and bound to a range.
