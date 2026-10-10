@@ -330,7 +330,7 @@ inline ffi::Optional<PrimExpr> TryConstFold<tirx::Min>(PrimExpr a, PrimExpr b) {
   TVM_ARITH_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pa && pb) return IntImm(rtype, std::min(pa->value, pb->value));
-    if (fa && fb) return FloatImm(rtype, std::min(fa->value, fb->value));
+    if (fa && fb) return FloatImm(rtype, std::fmin(fa->value, fb->value));
   });
   if (a.same_as(b)) return a;
   return std::nullopt;
@@ -341,7 +341,7 @@ inline ffi::Optional<PrimExpr> TryConstFold<tirx::Max>(PrimExpr a, PrimExpr b) {
   TVM_ARITH_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pa && pb) return IntImm(rtype, std::max(pa->value, pb->value));
-    if (fa && fb) return FloatImm(rtype, std::max(fa->value, fb->value));
+    if (fa && fb) return FloatImm(rtype, std::fmax(fa->value, fb->value));
   });
   if (a.same_as(b)) return a;
   return std::nullopt;
