@@ -745,8 +745,15 @@ ffi::Optional<arith::IntConstraints> ConditionalBoundsContext::TrySolveCondition
         if (obj.same_as(e)) {
           return;
         } else if (const VarNode* var = obj.as<VarNode>()) {
-          if (var->dtype.is_int() || var->dtype.is_uint()) {
+          // The linear solver subtracts terms and constructs negative
+          // coefficients. Unsigned arithmetic is modular, not signed integer
+          // arithmetic; admitting it can both infer unsound ranges and attempt
+          // to construct a negative unsigned literal. Leave these conditions
+          // unresolved so access analysis conservatively preserves their bounds.
+          if (var->dtype.is_int() && var->dtype.is_scalar()) {
             cand_vars.push_back(ffi::GetRef<Var>(var));
+          } else {
+            is_simple = false;
           }
         } else {
           is_simple &= obj->IsInstance<AddNode>() || obj->IsInstance<SubNode>() ||

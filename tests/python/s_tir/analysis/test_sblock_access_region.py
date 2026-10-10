@@ -291,6 +291,55 @@ def test_match_buffer():
     tvm.ir.assert_structural_equal(block_inner.writes, ret[1])
 
 
+@pytest.mark.parametrize("dtype", ["uint32", "uint64"])
+@pytest.mark.parametrize("relation", ["eq", "ne", "lt", "ge", "wrap"])
+def test_unsigned_branch_keeps_conservative_access_regions(dtype, relation):
+    """Unsigned control values must not enter the signed linear solver."""
+    tir = tvm.tirx
+    control = tir.Var("control", dtype)
+    one = tir.const(1, dtype)
+    maximum = tir.const((1 << int(dtype[4:])) - 1, dtype)
+    condition = {
+        "eq": control == one,
+        "ne": control != one,
+        "lt": control < maximum,
+        "ge": control >= one,
+        "wrap": control + maximum < one,
+    }[relation]
+    source = tir.decl_buffer((8,), "float32", name="source")
+    output = tir.decl_buffer((8,), "float32", name="output")
+    index = tir.Var("index", "int32")
+    branch = tir.IfThenElse(
+        condition,
+        tir.BufferStore(output, source[index], [index]),
+        tir.BufferStore(output, source[7 - index], [index]),
+    )
+    body = tir.For(index, 0, 8, tir.ForKind.SERIAL, branch)
+    block = tir.SBlock([], [], [], "unsigned_control", body)
+    read, write = s_tir.analysis.get_sblock_read_write_region(
+        block, {source.data: source, output.data: output}
+    )
+    tvm.ir.assert_structural_equal(read, [tir.BufferRegion(source, [Range(0, 8)])])
+    tvm.ir.assert_structural_equal(write, [tir.BufferRegion(output, [Range(0, 8)])])
+    tvm.ir.assert_structural_equal(block.body, body)
+
+
+def test_signed_branch_still_refines_access_regions():
+    tir = tvm.tirx
+    source = tir.decl_buffer((8,), "float32", name="source")
+    output = tir.decl_buffer((8,), "float32", name="output")
+    index = tir.Var("index", "int32")
+    branch = tir.IfThenElse(index < 4, tir.BufferStore(output, source[index], [index]), None)
+    block = tir.SBlock(
+        [], [], [], "signed_control", tir.For(index, 0, 8, tir.ForKind.SERIAL, branch)
+    )
+    read, write = s_tir.analysis.get_sblock_read_write_region(
+        block, {source.data: source, output.data: output}
+    )
+    tvm.ir.assert_structural_equal(read, [tir.BufferRegion(source, [Range(0, 4)])])
+    tvm.ir.assert_structural_equal(write, [tir.BufferRegion(output, [Range(0, 4)])])
+
+
 def test_access_in_if_then_else_func():
     block = access_in_if_then_else_func.body.block.body.block
     alloc_buffers = access_in_if_then_else_func.body.block.alloc_buffers
