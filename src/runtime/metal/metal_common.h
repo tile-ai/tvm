@@ -30,10 +30,10 @@
 #import <Metal/MTLCommandQueue.h>
 #import <Metal/MTLDevice.h>
 #import <Metal/MTLLibrary.h>
+#include <tvm/ffi/error.h>
 #include <tvm/ffi/function.h>
 #include <tvm/runtime/base.h>
 #include <tvm/runtime/device_api.h>
-#include <tvm/ffi/error.h>
 
 #include <memory>
 #include <mutex>
@@ -133,7 +133,8 @@ class Stream {
    * Used when we need a separate command buffer that we can commit
    * and waitUntilCompleted on independently.
    */
-  virtual id<MTLCommandBuffer> GetCommandBuffer(std::string label = "", bool attach_error_callback = true) {
+  virtual id<MTLCommandBuffer> GetCommandBuffer(std::string label = "",
+                                                bool attach_error_callback = true) {
     id<MTLCommandBuffer> cb = [queue_ commandBuffer];
     if (!label.empty()) {
       cb.label = [NSString stringWithUTF8String:label.c_str()];
@@ -293,17 +294,19 @@ class Stream {
 };
 
 class MetalRawStream final : public Stream {
-public:
-  explicit MetalRawStream(id<MTLCommandBuffer> commandBuffer): Stream(nullptr) {
+ public:
+  explicit MetalRawStream(id<MTLCommandBuffer> commandBuffer) : Stream(nullptr) {
     buffer_ = commandBuffer;
   }
-  id<MTLCommandBuffer> GetCommandBuffer(std::string label = "", bool attach_error_callback = true) override {
+  void SetCommandBuffer(id<MTLCommandBuffer> commandBuffer) { buffer_ = commandBuffer; }
+  id<MTLCommandBuffer> GetCommandBuffer(std::string label = "",
+                                        bool attach_error_callback = true) override {
     return buffer_;
   }
-private:
+
+ private:
   id<MTLCommandBuffer> buffer_;
 };
-
 
 /*!
  * \brief Process global Metal workspace.
