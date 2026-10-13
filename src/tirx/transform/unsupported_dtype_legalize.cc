@@ -268,7 +268,7 @@ class ComputeLegalizer : public StmtExprMutator {
   }
 
   PrimExpr VisitExpr_(const LetNode* op) final {
-    PrimExpr value = PromoteToTarget(op->value);
+    PrimExpr value = PromoteToTarget(this->VisitExpr(op->value));
     Var var = op->var;
     if (value.dtype() != op->value.dtype()) {
       var = op->var.copy_with_dtype(op->value.dtype());
@@ -298,7 +298,7 @@ class ComputeLegalizer : public StmtExprMutator {
   DEFINE_BIOP_EXPR_LEGALIZE(NENode, operator!=);
 
   Stmt VisitStmt_(const BindNode* op) final {
-    PrimExpr value = PromoteToTarget(op->value);
+    PrimExpr value = PromoteToTarget(this->VisitExpr(op->value));
     Var var = op->var;
     if (value.dtype() != op->value.dtype()) {
       var = op->var.copy_with_dtype(op->value.dtype());
