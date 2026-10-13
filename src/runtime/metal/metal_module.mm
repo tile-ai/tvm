@@ -65,6 +65,22 @@ static bool MetalDeviceSupportsMetal4(id<MTLDevice> device) {
   return false;
 }
 
+// Highest MSL version below 4.0 that the running OS compiles.  MSL 3.0
+// (macOS 13) adds device atomic<float>; MSL 3.1 (macOS 14) adds bfloat.
+static MTLLanguageVersion MetalDefaultLanguageVersion() {
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000
+  if (@available(macOS 14.0, *)) {
+    return MTLLanguageVersion3_1;
+  }
+#endif
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000
+  if (@available(macOS 13.0, *)) {
+    return MTLLanguageVersion3_0;
+  }
+#endif
+  return MTLLanguageVersion2_3;
+}
+
 // Module to support thread-safe multi-GPU execution.
 // The runtime will contain a per-device module table
 // The modules will be lazily loaded
@@ -139,7 +155,7 @@ class MetalModuleNode final : public ffi::ModuleObj {
 
     if (fmt_ == "metal") {
       MTLCompileOptions* opts = [[MTLCompileOptions alloc] init];
-      MTLLanguageVersion language_version = MTLLanguageVersion2_3;
+      MTLLanguageVersion language_version = MetalDefaultLanguageVersion();
 #if defined(TVM_METAL_HAS_MSL_4_0)
       if (MetalDeviceSupportsMetal4(w->devices[device_id])) {
         language_version = MTLLanguageVersion4_0;
