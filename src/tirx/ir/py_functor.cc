@@ -555,14 +555,14 @@ class PyStmtExprMutatorNode : public ffi::Object, public StmtExprMutator {
   using StmtExprMutator::VisitExpr;
   using StmtExprMutator::VisitStmt;
 
-  void DefaultVisitExpr(const PrimExpr& expr) {
+  PrimExpr DefaultVisitExpr(const PrimExpr& expr) {
     static FExprType vtable = InitExprVTable();
-    vtable(expr, this);
+    return vtable(expr, this);
   }
 
-  void DefaultVisitStmt(const Stmt& stmt) {
+  Stmt DefaultVisitStmt(const Stmt& stmt) {
     static FStmtType vtable = InitStmtVTable();
-    vtable(stmt, this);
+    return vtable(stmt, this);
   }
 
   static void RegisterReflection() {
