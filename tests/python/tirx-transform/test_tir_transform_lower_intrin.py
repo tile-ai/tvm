@@ -16,6 +16,7 @@
 # under the License.
 # ruff: noqa: RUF005
 import numpy as np
+import pytest
 
 import tvm
 import tvm.testing
@@ -112,6 +113,33 @@ def test_lower_vector_access_ptr():
     assert str(load.buffer.dtype) == "float32x2"
     assert len(load.indices) == 1
     assert int(load.indices[0]) == 2
+
+
+@pytest.mark.parametrize("lanes", [1, 4])
+@pytest.mark.parametrize("shift", [0, 1, 2])
+def test_lower_q_multiply_shift_power_of_two(lanes, shift):
+    dtype = "int32" if lanes == 1 else f"int32x{lanes}"
+    x = tvm.tirx.Var("x", dtype)
+    expr = tvm.tirx.call_intrin(
+        dtype,
+        "tirx.q_multiply_shift",
+        x,
+        tvm.tirx.const(1 << 30, dtype),
+        tvm.tirx.const(31, dtype),
+        tvm.tirx.const(shift, dtype),
+    )
+    lowered = lower_intrin([x], expr)
+
+    if shift == 1:
+        # Multiplication by 0.5 followed by a left shift of one is the identity.
+        # In particular, it must not introduce a rounding factor with a negative shift.
+        expected = x
+    elif shift > 1:
+        expected = x << tvm.tirx.const(shift - 1, dtype)
+    else:
+        rounding = tvm.tirx.const(1, dtype) << tvm.tirx.const(-shift, dtype)
+        expected = (x + rounding) >> tvm.tirx.const(1 - shift, dtype)
+    tvm.ir.assert_structural_equal(tvm.arith.Analyzer().simplify(lowered), expected)
 
 
 @tvm.testing.requires_llvm

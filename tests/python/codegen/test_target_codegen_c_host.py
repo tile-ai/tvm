@@ -16,12 +16,45 @@
 # under the License.
 
 import numpy as np
+import pytest
 
 import tvm
 import tvm.testing
 from tvm.contrib import utils
 from tvm.script import ir as I
 from tvm.script import tirx as T
+
+
+@pytest.mark.parametrize("shift", [0, 1, 2])
+def test_q_multiply_shift_power_of_two(shift):
+    if shift == 1:
+        values = [-(2**31), -1234567, -1, 0, 1, 1234567, 2**31 - 1]
+    else:
+        values = [0, 1, 2, 3, 7, 1234567, 2**28 - 1]
+    n = len(values)
+
+    @T.prim_func
+    def multiply(A: T.Buffer((n,), "int32"), B: T.Buffer((n,), "int32")):
+        T.func_attr({"global_symbol": "multiply", "tirx.noalias": True})
+        for i in range(n):
+            B[i] = T.q_multiply_shift(A[i], 1 << 30, 31, shift)
+
+    module = tvm.compile(multiply, target="c")
+    temp = utils.tempdir()
+    path = temp.relpath("multiply.so")
+    module.export_library(path)
+    module = tvm.runtime.load_module(path)
+    a = tvm.runtime.tensor(np.array(values, dtype="int32"))
+    b = tvm.runtime.tensor(np.zeros(n, dtype="int32"))
+    module["multiply"](a, b)
+
+    if shift == 1:
+        expected = values
+    elif shift > 1:
+        expected = [value << (shift - 1) for value in values]
+    else:
+        expected = [(value + (1 << -shift)) >> (1 - shift) for value in values]
+    np.testing.assert_equal(b.numpy(), np.array(expected, dtype="int32"))
 
 
 def test_add():
