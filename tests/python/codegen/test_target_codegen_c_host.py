@@ -61,6 +61,32 @@ def test_add():
     check_c()
 
 
+def test_shift_unsigned_amount_preserves_signed_lhs():
+    @I.ir_module
+    class Module:
+        @T.prim_func
+        def main(
+            A: T.Buffer((4,), "int32"),
+            N: T.Buffer((4,), "uint32"),
+            Right: T.Buffer((4,), "int64"),
+        ):
+            for i in T.serial(4):
+                Right[i] = A[i] >> N[i]
+
+    mhost = tvm.compile(Module, target="c")
+    temp = utils.tempdir()
+    path_dso = temp.relpath("temp.so")
+    mhost.export_library(path_dso)
+    func = tvm.runtime.load_module(path_dso)["main"]
+
+    a = tvm.runtime.tensor(np.array([-256, -64, -16, -1], dtype="int32"))
+    n = tvm.runtime.tensor(np.array([4, 3, 2, 1], dtype="uint32"))
+    right = tvm.runtime.tensor(np.zeros(4, dtype="int64"))
+    func(a, n, right)
+
+    np.testing.assert_array_equal(right.numpy(), np.array([-16, -8, -4, -1], dtype="int64"))
+
+
 def test_reinterpret():
     nn = 1024
 
