@@ -725,8 +725,9 @@ class Z3Prover {
   /*!
    * \brief Count the number of integer values that satisfy the current constraints.
    *
-   * This method uses Z3's model enumeration (AllSAT) to count how many distinct
-   * values of the given variable satisfy all current constraints. This is useful
+   * This method uses model enumeration and bounded membership queries to count
+   * distinct values of the given variable satisfying all current constraints. Other
+   * variables remain existentially quantified in each query. This is useful
    * for determining the exact number of threads that will reach a synchronization
    * point when the condition involves non-range constraints like modulo operations.
    *
@@ -740,11 +741,14 @@ class Z3Prover {
    *                        Values must form groups of at least this many
    *                        consecutive integers. E.g., with min_consecutive=4:
    *                        {0,1,2,3,16,17,18,19} is valid, {0,1,4,5} is invalid.
-   * \return The number of distinct values that satisfy the constraints,
-   *         -1 if the problem is unsatisfiable or an error occurred,
+   * \return The number of distinct values that satisfy the constraints, capped
+   *         at max_count, or zero if no values satisfy the constraints.
+   *         Returns -1 if solving is incomplete (including resource exhaustion)
+   *         or the variable's dtype is unsupported,
    *         -2 if the min_consecutive constraint is not satisfied.
    */
-  TVM_DLL int64_t CountSatisfyingValues(const Var& var, int64_t max_count = 2048, int64_t min_consecutive = 1);
+  TVM_DLL int64_t CountSatisfyingValues(const Var& var, int64_t max_count = 2048,
+                                        int64_t min_consecutive = 1);
 
  private:
   friend class Analyzer;

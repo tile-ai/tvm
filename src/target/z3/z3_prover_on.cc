@@ -586,10 +586,9 @@ public:
   /*!
    * \brief Count the number of distinct integer values satisfying current constraints.
    *
-   * Uses Z3's model enumeration (AllSAT pattern) to count solutions:
-   * 1. Find a satisfying assignment
-   * 2. Add a blocking clause to exclude it
-   * 3. Repeat until UNSAT
+   * Probe small solution sets with model enumeration.  For a bounded domain,
+   * switch to temporary equality assumptions before blocking clauses grow
+   * expensive.  Other variables remain existential in each membership query.
    *
    * \param var The variable to count values for
    * \param max_count Safety limit on enumeration
@@ -600,60 +599,107 @@ public:
     if (!IsValidDType(var->dtype)) {
       return -1;
     }
+    if (max_count <= 0) {
+      return 0;
+    }
+
+    // Limit membership queries when a wide domain has only a few solutions.
+    constexpr uint64_t kMaxCandidates = 16384;
+    constexpr int64_t kProbeCount = 16;
+    auto bound = analyzer->const_int_bound(var);
+    auto modular = analyzer->modular_set(var);
+    int64_t first = bound->min_value;
+    int64_t last = bound->max_value;
+    int64_t stride = modular->coeff;
+    std::optional<uint64_t> candidates;
+    if (first != ConstIntBound::kNegInf && last != ConstIntBound::kPosInf && first <= last &&
+        stride >= 0) {
+      if (stride == 0) {
+        candidates = first <= modular->base && modular->base <= last ? 1 : 0;
+        first = modular->base;
+        stride = 1;
+      } else {
+        int64_t remainder = first % stride;
+        if (remainder < 0) remainder += stride;
+        int64_t offset = modular->base >= remainder ? modular->base - remainder
+                                                    : stride - (remainder - modular->base);
+        // Unsigned subtraction also handles ranges crossing zero without
+        // overflowing int64_t.  Only add the offset after checking it fits.
+        uint64_t distance = static_cast<uint64_t>(last) - static_cast<uint64_t>(first);
+        if (static_cast<uint64_t>(offset) > distance) {
+          candidates = 0;
+        } else if ((distance - offset) / stride < kMaxCandidates) {
+          first += offset;
+          candidates = (distance - offset) / stride + 1;
+        }
+      }
+    }
 
     Materialize();
+    struct CountScope {
+      Impl* self;
+      unsigned depth;
+      ~CountScope() {
+        self->solver->pop(Z3_solver_get_num_scopes(*self->ctx, *self->solver) - depth);
+        self->solver->set("model", false);
+        for (const auto& expr : self->side_effect_exprs_) self->MemoErase(expr);
+        self->side_effect_exprs_.clear();
+      }
+    } scope{this, Z3_solver_get_num_scopes(*ctx, *solver)};
     solver->set("model", true);
     solver->push();
-
-    // Convert the TVM variable to Z3 expression
     z3::expr z3_var = VisitInt(var);
-
-    int64_t count = 0;
     std::vector<int64_t> found_values;
-
-    while (count < max_count) {
-      auto result = solver->check();
-      if (result != z3::sat) {
-        break;  // No more solutions
-      }
-
-      z3::model m = solver->get_model();
-      z3::expr val_expr = m.eval(z3_var, true);
-
-      // Extract the integer value from Z3 expression
+    int64_t probe_limit = candidates ? std::min(max_count, kProbeCount) : max_count;
+    if (candidates) solver->push();
+    z3::check_result result = z3::sat;
+    while (static_cast<int64_t>(found_values.size()) < probe_limit) {
+      result = solver->check();
+      if (result != z3::sat) break;
+      z3::expr value = solver->get_model().eval(z3_var, true);
       int64_t val;
-      if (val_expr.is_numeral()) {
-        val = val_expr.get_numeral_int64();
-      } else {
-        // If we can't get a concrete value, stop enumeration
-        break;
-      }
-
+      if (!value.is_numeral() || !value.is_numeral_i64(val)) return -1;
       found_values.push_back(val);
-      count++;
-
-      // Add blocking clause: var != val (exclude this solution)
       solver->add(z3_var != ctx->int_val(val));
     }
+    if (candidates) solver->pop();
 
-    solver->pop();
-    solver->set("model", false);
-
-    // Clear any side effects from visiting the variable
-    for (const auto& expr : side_effect_exprs_) {
-      MemoErase(expr);
+    if (candidates && result != z3::unsat &&
+        static_cast<int64_t>(found_values.size()) < max_count) {
+      // Drop the probe's exclusions.  Each query fixes only the counted value,
+      // so it can cheaply simplify the constraints without accumulating clauses.
+      solver->set("model", false);
+      size_t num_probed = found_values.size();
+      result = z3::unsat;
+      int64_t value = first;
+      for (uint64_t i = 0; i < *candidates; ++i) {
+        auto probe_end = found_values.begin() + num_probed;
+        if (std::find(found_values.begin(), probe_end, value) == probe_end) {
+          z3::expr assumption = z3_var == ctx->int_val(value);
+          result = solver->check(1, &assumption);
+          if (result == z3::unknown) break;
+          if (result == z3::sat) found_values.push_back(value);
+          if (static_cast<int64_t>(found_values.size()) == max_count) break;
+        }
+        if (i + 1 < *candidates) value += stride;
+      }
     }
-    side_effect_exprs_.clear();
+    // UNKNOWN is not exhaustion: returning a partial count can misclassify a
+    // full thread group or produce the wrong participant count for a barrier.
+    if (result == z3::unknown) return -1;
+    int64_t count = static_cast<int64_t>(found_values.size());
 
     // Check minimum consecutive constraint if enabled
-    if (min_consecutive > 0 && count > 0) {
+    if (min_consecutive > 1 && count > 0) {
       // Sort the values to check consecutive groups
       std::sort(found_values.begin(), found_values.end());
 
       // Check that all values form groups of at least min_consecutive consecutive numbers
       int64_t consecutive_count = 1;
       for (size_t i = 1; i < found_values.size(); i++) {
-        if (found_values[i] == found_values[i - 1] + 1) {
+        if (found_values[i] > found_values[i - 1] &&
+            static_cast<uint64_t>(found_values[i]) - static_cast<uint64_t>(found_values[i - 1]) ==
+                1) {
           // Consecutive value
           consecutive_count++;
         } else {
