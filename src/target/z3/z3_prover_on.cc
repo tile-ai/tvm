@@ -183,7 +183,7 @@ public:
     // Z3's implementation of timeout, when setting timeout T ms, it will stop at T - 1 ms
     // SetTimeoutMs(5);
     // use rlimit, not timeout to ensure determinstic behavior
-    SetRLimit(1e4);
+    SetRLimit(1e5);
   }
 
   /// @brief Create the solver on first use and replay the recorded journal.
