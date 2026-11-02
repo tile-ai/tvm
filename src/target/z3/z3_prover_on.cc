@@ -210,9 +210,9 @@ public:
     if (timeout_ms != UINT_MAX) {
       solver->set("timeout", timeout_ms);
     }
-    if (rlimit != UINT_MAX) {
-      solver->set("rlimit", rlimit);
-    }
+    // The constructor always sets a budget. UINT_MAX is also a valid explicit
+    // budget; only zero requests unlimited resources.
+    solver->set("rlimit", rlimit);
     TVM_FFI_ICHECK_EQ(scope_side_effects_.size(), scope_stack_.size());
     for (size_t si = 0; si < scope_stack_.size(); ++si) {
       for (const Scope& s : scope_stack_[si]) {
