@@ -250,6 +250,27 @@ void BinaryOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, Span span) {  // NOLINT(*)
   }
 }
 
+void ShiftOpMatchTypes(PrimExpr& lhs, PrimExpr& rhs, Span span) {  // NOLINT(*)
+  TVM_FFI_CHECK(lhs.defined(), ValueError) << "`lhs` is null in the binary operator";
+  TVM_FFI_CHECK(rhs.defined(), ValueError) << "`rhs` is null in the binary operator";
+  if (lhs.dtype() == rhs.dtype()) return;
+
+  BroadcastToMatchLanes(lhs, rhs);
+  BroadcastToMatchLanes(rhs, lhs);
+
+  DataType ltype = lhs.dtype();
+  DataType rtype = rhs.dtype();
+
+  TVM_FFI_ICHECK(ltype.is_scalable_vector() == rtype.is_scalable_vector())
+      << "Can't match scalable and fixed length vectors";
+
+  bool lanes_match = ltype.is_scalable_vector() ? ltype.vscale_factor() == rtype.vscale_factor()
+                                                : ltype.lanes() == rtype.lanes();
+  TVM_FFI_ICHECK(lanes_match) << "Cannot match type " << ltype << " vs " << rtype;
+
+  rhs = cast(ltype, rhs, span);
+}
+
 PrimExpr ret(PrimExpr value, Span span) {
   TVM_FFI_ICHECK(value.defined());
   return tirx::Call(value.dtype(), tirx::builtin::ret(), {value}, span);
@@ -760,7 +781,7 @@ PrimExpr operator>>(PrimExpr a, PrimExpr b) { return right_shift(a, b); }
 PrimExpr right_shift(PrimExpr a, PrimExpr b, Span span) {
   type_check_integer_args(a, b, ">> operator (right shift)");
 
-  BinaryOpMatchTypes(a, b, span);
+  ShiftOpMatchTypes(a, b, span);
   TVM_INDEX_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pb)
@@ -782,7 +803,7 @@ PrimExpr right_shift(PrimExpr a, PrimExpr b, Span span) {
 PrimExpr operator<<(PrimExpr a, PrimExpr b) { return left_shift(a, b); }
 PrimExpr left_shift(PrimExpr a, PrimExpr b, Span span) {
   type_check_integer_args(a, b, "<< operator (left shift)");
-  BinaryOpMatchTypes(a, b, span);
+  ShiftOpMatchTypes(a, b, span);
   TVM_INDEX_CONST_PROPAGATION({
     const DataType& rtype = a.dtype();
     if (pb)
