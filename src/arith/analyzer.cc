@@ -24,10 +24,13 @@
 #include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/ir/transform.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/tirx/builtin.h>
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/op.h>
+
+#include <limits>
 
 #include "./scalable_expression.h"
 #include "const_fold.h"
@@ -36,13 +39,25 @@
 namespace tvm {
 namespace arith {
 
+TVM_REGISTER_PASS_CONFIG_OPTION("arith.z3_rlimit", Integer);
+
 Analyzer::Analyzer()
     : const_int_bound(this),
       modular_set(this),
       rewrite_simplify(this),
       canonical_simplify(this),
       int_set(this),
-      z3_prover(this) {}
+      z3_prover(this) {
+  // Capture the compilation default now, even if Z3 materializes only after
+  // this PassContext exits. Explicit per-analyzer settings can still override it.
+  auto limit = transform::PassContext::Current()->GetConfig<Integer>("arith.z3_rlimit");
+  if (limit.defined()) {
+    int64_t value = limit.value()->value;
+    TVM_FFI_CHECK(value >= 0 && value <= std::numeric_limits<unsigned>::max(), ValueError)
+        << "arith.z3_rlimit must be between 0 and " << std::numeric_limits<unsigned>::max();
+    z3_prover.SetRLimit(static_cast<unsigned>(value));
+  }
+}
 
 std::unique_ptr<Analyzer> Analyzer::Clone() const {
   auto cloned = std::make_unique<Analyzer>();

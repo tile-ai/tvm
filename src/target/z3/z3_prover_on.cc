@@ -183,7 +183,7 @@ public:
     // Z3's implementation of timeout, when setting timeout T ms, it will stop at T - 1 ms
     // SetTimeoutMs(5);
     // use rlimit, not timeout to ensure determinstic behavior
-    SetRLimit(1e4);
+    SetRLimit(1e5);
   }
 
   /// @brief Create the solver on first use and replay the recorded journal.
@@ -210,9 +210,9 @@ public:
     if (timeout_ms != UINT_MAX) {
       solver->set("timeout", timeout_ms);
     }
-    if (rlimit != UINT_MAX) {
-      solver->set("rlimit", rlimit);
-    }
+    // The constructor always sets a budget. UINT_MAX is also a valid explicit
+    // budget; only zero requests unlimited resources.
+    solver->set("rlimit", rlimit);
     TVM_FFI_ICHECK_EQ(scope_side_effects_.size(), scope_stack_.size());
     for (size_t si = 0; si < scope_stack_.size(); ++si) {
       for (const Scope& s : scope_stack_[si]) {
