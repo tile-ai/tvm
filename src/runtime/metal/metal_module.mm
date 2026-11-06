@@ -45,25 +45,11 @@
 #include "metal_common.h"
 #include "tvm/runtime/device_api.h"
 
-#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000) || \
-    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000)
-#define TVM_METAL_HAS_MSL_4_0 1
-#endif
-
 namespace tvm {
 namespace runtime {
 
 /*! \brief Maximum number of GPU supported in MetalModule. */
 static constexpr const int kMetalMaxNumDevice = 32;
-
-static bool MetalDeviceSupportsMetal4(id<MTLDevice> device) {
-#if defined(TVM_METAL_HAS_MSL_4_0)
-  if (@available(macOS 26.0, iOS 26.0, *)) {
-    return [device supportsFamily:MTLGPUFamilyMetal4];
-  }
-#endif
-  return false;
-}
 
 // Module to support thread-safe multi-GPU execution.
 // The runtime will contain a per-device module table
@@ -74,14 +60,17 @@ class MetalModuleNode final : public ffi::ModuleObj {
   // src/target/metal/metal_fallback_module.h.  The per-kernel `smap`
   // payload is Map<String, Bytes> regardless of whether the format is
   // text MSL ("metal") or compiled metallib ("metallib") — text vs binary
-  // distinction lives in `fmt`.
+  // distinction lives in `fmt`.  `metal_language_version` is the MSL version
+  // codegen assumed (major * 10 + minor); fmt="metal" sources are compiled
+  // with exactly that version on every device.
   MetalModuleNode(ffi::Map<ffi::String, ffi::Bytes> smap, ffi::String fmt,
                   ffi::Map<ffi::String, FunctionInfo> fmap,
-                  ffi::Map<ffi::String, ffi::String> source)
+                  ffi::Map<ffi::String, ffi::String> source, int metal_language_version)
       : smap_(std::move(smap)),
         fmt_(std::move(fmt)),
         fmap_(std::move(fmap)),
-        source_(std::move(source)) {}
+        source_(std::move(source)),
+        metal_language_version_(metal_language_version) {}
 
   const char* kind() const final { return "metal"; }
 
@@ -93,14 +82,16 @@ class MetalModuleNode final : public ffi::ModuleObj {
   ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final;
 
   ffi::Bytes SaveToBytes() const final {
-    // 3 fields [fmt][fmap][smap].  Source map is in-memory inspection only
-    // and is NEVER serialized — matches the cross-backend rule.
+    // 4 fields [fmt][metal_language_version][fmap][smap].  Source map is
+    // in-memory inspection only and is NEVER serialized — matches the
+    // cross-backend rule.
     // MetalFallbackModuleNode::SaveToBytes (in
     // src/target/metal/metal_fallback_module.cc) MUST mirror this format
     // byte-for-byte; see one-way comment there.
     std::string result;
     support::BytesOutStream stream(&result);
     stream.Write(fmt_);
+    stream.Write(metal_language_version_);
     stream.Write(fmap_);
     stream.Write(smap_);
     return ffi::Bytes(std::move(result));
@@ -138,14 +129,13 @@ class MetalModuleNode final : public ffi::ModuleObj {
     const ffi::Bytes& source = (*kernel).second;
 
     if (fmt_ == "metal") {
+      const int device_language_version =
+          w->device_properties[device_id].metal_language_version;
+      TVM_FFI_ICHECK_LE(metal_language_version_, device_language_version)
+          << "Metal module was generated for MSL " << metal_language_version_ << " but device "
+          << device_id << " compiles at most MSL " << device_language_version;
       MTLCompileOptions* opts = [[MTLCompileOptions alloc] init];
-      MTLLanguageVersion language_version = MTLLanguageVersion2_3;
-#if defined(TVM_METAL_HAS_MSL_4_0)
-      if (MetalDeviceSupportsMetal4(w->devices[device_id])) {
-        language_version = MTLLanguageVersion4_0;
-      }
-#endif
-      opts.languageVersion = language_version;
+      opts.languageVersion = metal::MetalLanguageVersionFromNumber(metal_language_version_);
       opts.fastMathEnabled = YES;
       // Per-kernel payload is bytes; treat as UTF-8 MSL source.
       std::string source_str(source.data(), source.size());
@@ -211,6 +201,8 @@ class MetalModuleNode final : public ffi::ModuleObj {
   ffi::Map<ffi::String, FunctionInfo> fmap_;
   // In-memory source map for InspectSource — never serialized.
   ffi::Map<ffi::String, ffi::String> source_;
+  // MSL version the kernels were generated for (major * 10 + minor).
+  int metal_language_version_;
   // function information.
   std::vector<DeviceEntry> finfo_;
   // internal mutex when updating the module
@@ -330,11 +322,12 @@ ffi::Optional<ffi::Function> MetalModuleNode::GetFunction(const ffi::String& nam
 
 static ffi::Module MetalModuleCreateImpl(ffi::Map<ffi::String, ffi::Bytes> smap, ffi::String fmt,
                                          ffi::Map<ffi::String, FunctionInfo> fmap,
-                                         ffi::Map<ffi::String, ffi::String> source) {
+                                         ffi::Map<ffi::String, ffi::String> source,
+                                         int metal_language_version) {
   ffi::ObjectPtr<MetalModuleNode> n;
   AUTORELEASEPOOL {
     n = ffi::make_object<MetalModuleNode>(std::move(smap), std::move(fmt), std::move(fmap),
-                                          std::move(source));
+                                          std::move(source), metal_language_version);
   };
   return ffi::Module(n);
 }
@@ -342,14 +335,16 @@ static ffi::Module MetalModuleCreateImpl(ffi::Map<ffi::String, ffi::Bytes> smap,
 static ffi::Module MetalModuleLoadFromBytes(const ffi::Bytes& bytes) {
   support::BytesInStream stream(bytes);
   ffi::String fmt;
+  int metal_language_version;
   ffi::Map<ffi::String, FunctionInfo> fmap;
   ffi::Map<ffi::String, ffi::Bytes> smap;
   stream.Read(&fmt);
+  TVM_FFI_ICHECK(stream.Read(&metal_language_version));
   TVM_FFI_ICHECK(stream.Read(&fmap));
   stream.Read(&smap);
   // Source map is not serialized — reconstructed empty on load.
   return MetalModuleCreateImpl(std::move(smap), std::move(fmt), std::move(fmap),
-                               ffi::Map<ffi::String, ffi::String>());
+                               ffi::Map<ffi::String, ffi::String>(), metal_language_version);
 }
 
 void SetMetalStream(TVMStreamHandle stream) {
@@ -371,9 +366,10 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("ffi.Module.load_from_bytes.metal", MetalModuleLoadFromBytes)
       .def("ffi.Module.create.metal",
            [](ffi::Map<ffi::String, ffi::Bytes> smap, ffi::String fmt,
-              ffi::Map<ffi::String, FunctionInfo> fmap, ffi::Map<ffi::String, ffi::String> source) {
+              ffi::Map<ffi::String, FunctionInfo> fmap, ffi::Map<ffi::String, ffi::String> source,
+              int metal_language_version) {
              return MetalModuleCreateImpl(std::move(smap), std::move(fmt), std::move(fmap),
-                                          std::move(source));
+                                          std::move(source), metal_language_version);
            })
       .def("metal.SetStream", SetMetalStream);
 }

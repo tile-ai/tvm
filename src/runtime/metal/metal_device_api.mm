@@ -42,6 +42,100 @@ MetalWorkspace* MetalWorkspace::Global() {
   return inst;
 }
 
+namespace {
+
+// Highest Metal Shading Language version the running OS can compile, encoded
+// as major * 10 + minor.  The SDK guards keep older toolchains building; the
+// @available checks keep the answer correct on older systems.
+int MaximumMetalLanguageVersion() {
+  int version = 23;
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 120000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 150000)
+  if (@available(macOS 12.0, iOS 15.0, *)) version = 24;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 160000)
+  if (@available(macOS 13.0, iOS 16.0, *)) version = 30;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 170000)
+  if (@available(macOS 14.0, iOS 17.0, *)) version = 31;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000)
+  if (@available(macOS 15.0, iOS 18.0, *)) version = 32;
+#endif
+  return version;
+}
+
+bool SupportsFamily(id<MTLDevice> device, MTLGPUFamily family) {
+  if (@available(macOS 10.15, iOS 13.0, *)) return [device supportsFamily:family];
+  return false;
+}
+
+MetalDeviceProperties QueryDeviceProperties(id<MTLDevice> device) {
+  // Feature availability follows the Metal feature set tables:
+  // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+  const bool apple6 = SupportsFamily(device, MTLGPUFamilyApple6);
+  const bool apple7 = SupportsFamily(device, MTLGPUFamilyApple7);
+  const bool mac2 = SupportsFamily(device, MTLGPUFamilyMac2);
+  bool metal4 = false;
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000)
+  if (@available(macOS 26.0, iOS 26.0, *)) {
+    metal4 = [device supportsFamily:MTLGPUFamilyMetal4];
+  }
+#endif
+  // MSL 4.0 is only offered to devices in the Metal 4 family; every other
+  // device stops at the highest 3.x version the OS provides.
+  const int language_version = metal4 ? 40 : MaximumMetalLanguageVersion();
+  MetalDeviceProperties properties;
+  properties.metal_language_version = language_version;
+  properties.supports_bfloat16 = language_version >= 31 && (apple6 || mac2);
+  properties.supports_simdgroup_permute = apple6 || mac2;
+  properties.supports_simdgroup_reduction = apple7 || mac2;
+  properties.supports_simdgroup_matrix = apple7;
+  properties.supports_metal4 = metal4;
+  return properties;
+}
+
+}  // namespace
+
+MTLLanguageVersion MetalLanguageVersionFromNumber(int version) {
+  switch (version) {
+    case 23:
+      return MTLLanguageVersion2_3;
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 120000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 150000)
+    case 24:
+      return MTLLanguageVersion2_4;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 160000)
+    case 30:
+      return MTLLanguageVersion3_0;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 170000)
+    case 31:
+      return MTLLanguageVersion3_1;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000)
+    case 32:
+      return MTLLanguageVersion3_2;
+#endif
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000) || \
+    (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000)
+    case 40:
+      return MTLLanguageVersion4_0;
+#endif
+    default:
+      TVM_FFI_THROW(RuntimeError) << "Metal language version " << version
+                                  << " is not available in this build";
+  }
+}
+
 void MetalWorkspace::GetAttr(Device dev, DeviceAttrKind kind, ffi::Any* rv) {
   AUTORELEASEPOOL {
     size_t index = static_cast<size_t>(dev.device_id);
@@ -66,8 +160,10 @@ void MetalWorkspace::GetAttr(Device dev, DeviceAttrKind kind, ffi::Any* rv) {
 #endif
         break;
       }
-      case kMaxSharedMemoryPerBlock:
-        return;
+      case kMaxSharedMemoryPerBlock: {
+        *rv = static_cast<int64_t>([devices[dev.device_id] maxThreadgroupMemoryLength]);
+        break;
+      }
       case kComputeVersion:
         return;
       case kDeviceName:
@@ -100,6 +196,31 @@ void MetalWorkspace::GetAttr(Device dev, DeviceAttrKind kind, ffi::Any* rv) {
         return;
     }
   };
+}
+
+void MetalWorkspace::GetTargetProperty(Device dev, const std::string& property, ffi::Any* rv) {
+  size_t index = static_cast<size_t>(dev.device_id);
+  TVM_FFI_ICHECK_LT(index, device_properties.size()) << "Invalid device id " << index;
+  const MetalDeviceProperties& properties = device_properties[index];
+
+  if (property == "metal_language_version") {
+    *rv = int64_t(properties.metal_language_version);
+  }
+  if (property == "supports_bfloat16") {
+    *rv = properties.supports_bfloat16;
+  }
+  if (property == "supports_simdgroup_permute") {
+    *rv = properties.supports_simdgroup_permute;
+  }
+  if (property == "supports_simdgroup_reduction") {
+    *rv = properties.supports_simdgroup_reduction;
+  }
+  if (property == "supports_simdgroup_matrix") {
+    *rv = properties.supports_simdgroup_matrix;
+  }
+  if (property == "supports_metal4") {
+    *rv = properties.supports_metal4;
+  }
 }
 
 static const char* kDummyKernel = R"A0B0(
@@ -163,6 +284,7 @@ MetalWorkspace::MetalWorkspace() {
   // on iPhone
   id<MTLDevice> d = MTLCreateSystemDefaultDevice();
   devices.push_back(d);
+  device_properties.push_back(QueryDeviceProperties(d));
 #else
   NSArray<id<MTLDevice> >* devs = MTLCopyAllDevices();
   for (size_t i = 0; i < devs.count; ++i) {
@@ -170,6 +292,7 @@ MetalWorkspace::MetalWorkspace() {
     devices.push_back(d);
     DLOG(INFO) << "Intializing Metal device " << i << ", name=" << [d.name UTF8String];
     warp_size.push_back(GetWarpSize(d));
+    device_properties.push_back(QueryDeviceProperties(d));
   }
 #endif
   this->ReinitializeDefaultStreams();
@@ -400,6 +523,12 @@ TVM_FFI_STATIC_INIT_BLOCK() {
                     DeviceAPI* ptr = MetalWorkspace::Global();
                     *rv = static_cast<void*>(ptr);
                   })
+      .def("device_api.metal.get_target_property",
+           [](Device dev, const std::string& property) {
+             ffi::Any rv;
+             MetalWorkspace::Global()->GetTargetProperty(dev, property, &rv);
+             return rv;
+           })
       .def("metal.ResetGlobalState",
            []() { MetalWorkspace::Global()->ReinitializeDefaultStreams(); })
       .def("metal.GetProfileCounters",

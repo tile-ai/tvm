@@ -486,8 +486,13 @@ ffi::Module BuildMetal(IRModule mod, Target target) {
   // map keyed by "metal" — only used by InspectSource and never serialized.
   ffi::Map<ffi::String, ffi::String> source;
   source.Set("metal", source_maker.str());
+  // The module records the MSL version this target generated so the runtime
+  // compiles the source with the same language version on every device.
+  const int metal_language_version =
+      target->GetAttr<Integer>("metal_language_version").value_or(Integer(23))->value;
   return target::MetalModuleCreateWithFallback(std::move(smap), ffi::String(fmt),
-                                               ExtractFuncInfo(mod), std::move(source));
+                                               ExtractFuncInfo(mod), std::move(source),
+                                               metal_language_version);
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
