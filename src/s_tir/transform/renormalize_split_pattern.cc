@@ -68,13 +68,15 @@ class SplitPatternReNormalizer : public IRMutatorWithAnalyzer {
     PVar<PrimExpr> lanes;
 
     // floordiv(floormod(x, c1 * c2), c2) = floormod(floordiv(x, c2), c1)
-    TRY_RECURSIVE_REWRITE_IF(floordiv(floormod(x, c3), c2),
-                             floormod(floordiv(x, c2), floordiv(c3, c2)),
-                             c3.Eval()->value % c2.Eval()->value == 0);
+    // The identity requires c1 > 0, e.g. floordiv(floormod(x, 2), -2) is not
+    // floormod(floordiv(x, -2), -1) == 0. Only rewrite positive constants.
+    TRY_RECURSIVE_REWRITE_IF(
+        floordiv(floormod(x, c3), c2), floormod(floordiv(x, c2), floordiv(c3, c2)),
+        c2.Eval()->value > 0 && c3.Eval()->value > 0 && c3.Eval()->value % c2.Eval()->value == 0);
     TRY_RECURSIVE_REWRITE_IF(
         floordiv(floormod(x, broadcast(c3, lanes)), broadcast(c2, lanes)),
         floormod(floordiv(x, broadcast(c2, lanes)), broadcast(floordiv(c3, c2), lanes)),
-        c3.Eval()->value % c2.Eval()->value == 0);
+        c2.Eval()->value > 0 && c3.Eval()->value > 0 && c3.Eval()->value % c2.Eval()->value == 0);
 
     // floordiv(x*c1*c3 + y, c2*c3) = floordiv(x*c1 + floordiv(y, c3), c2)
     if ((floordiv(x * c1 + y, c2)).Match(ret)) {

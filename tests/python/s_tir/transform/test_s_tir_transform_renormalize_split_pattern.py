@@ -16,6 +16,8 @@
 # under the License.
 # ruff: noqa: E501, F401
 
+import pytest
+
 import tvm
 import tvm.testing
 from tvm import s_tir
@@ -218,6 +220,28 @@ def test_vector_select_conditions():
 
     after = transform(PerLaneSelect)
     tvm.ir.assert_structural_equal(after, PerLaneSelect)
+
+
+@pytest.mark.parametrize("c3, c2", [(8, 2), (2, -2), (4, -2), (-4, 2), (-4, -2)])
+def test_floordiv_of_floormod_preserves_value(c3, c2):
+    """floordiv(floormod(x, c3), c2) == floormod(floordiv(x, c2), c3 // c2) needs c3 // c2 > 0.
+
+    With a negative divisor, (x % 2) // -2 was rewritten to (x // -2) % -1, which is always 0.
+    """
+    x = tvm.tirx.Var("x", "int32")
+    func = tvm.tirx.PrimFunc(
+        [x], tvm.tirx.Evaluate(tvm.tirx.floordiv(tvm.tirx.floormod(x, c3), c2))
+    )
+    after = tvm.s_tir.transform.RenormalizeSplitPattern()(tvm.IRModule.from_expr(func))
+    value = after["main"].body.value
+    if c3 > 0 and c2 > 0:
+        tvm.ir.assert_structural_equal(value, tvm.tirx.floormod(tvm.tirx.floordiv(x, c2), c3 // c2))
+    analyzer = tvm.arith.Analyzer()
+    for v in range(-9, 10):
+        got = analyzer.simplify(
+            tvm.tirx.stmt_functor.substitute(value, {x: tvm.tirx.const(v, "int32")})
+        )
+        assert got.value == (v % c3) // c2, f"x={v}: {value} evaluates to {got}"
 
 
 if __name__ == "__main__":
