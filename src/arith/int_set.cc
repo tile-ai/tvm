@@ -1087,7 +1087,13 @@ ffi::Array<IntSet> EvalSet(const ffi::Array<Range>& region, const ffi::Map<Var, 
 IntSet EvalSet(IntSet s, const std::unordered_map<const VarNode*, IntSet>& dom_map) {
   Analyzer ana;
   auto dmap = ConvertDomMap(dom_map);
-  IntervalSetEvaluator m(&ana, dmap);
+  // ThreadSync (and similar) relax IntSets produced by IntSet::Vector. Those
+  // bounds can still embed Broadcast/Ramp via the MatchPoint SinglePoint
+  // short-circuit on the original vector Add. Default eval_vec=false then
+  // ICHECK-fails on Broadcast (e.g. SimtVF remat_idx gather into shared.dyn).
+  // Vector-aware eval is correct here: Broadcast unwraps to its scalar, Ramp
+  // spans its lane range; over-approx is safe for sync conflict detection.
+  IntervalSetEvaluator m(&ana, dmap, /*dom_constraints=*/nullptr, /*eval_vec=*/true);
   const IntervalSetNode* s_int = s.as<IntervalSetNode>();
   PrimExpr vmax = s_int->HasUpperBound() ? m.Eval(s_int->max_value).max() : s_int->max_value;
   PrimExpr vmin = s_int->HasLowerBound() ? m.Eval(s_int->min_value).min() : s_int->min_value;
