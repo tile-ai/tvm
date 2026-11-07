@@ -822,6 +822,19 @@ private:
 
   // Bitwise operations
   z3::expr VisitExpr_(const CallNode *op) override {
+    // A bitwise operation of booleans is its logical operation. Z3 then keeps the
+    // operands boolean instead of encoding them as bit-vectors of one bit.
+    if (op->dtype.is_bool() && op->dtype.lanes() == 1) {
+      if (op->op.same_as(tirx::builtin::bitwise_and()) && op->args.size() == 2) {
+        return VisitBool(op->args[0]) && VisitBool(op->args[1]);
+      } else if (op->op.same_as(tirx::builtin::bitwise_or()) && op->args.size() == 2) {
+        return VisitBool(op->args[0]) || VisitBool(op->args[1]);
+      } else if (op->op.same_as(tirx::builtin::bitwise_xor()) && op->args.size() == 2) {
+        return VisitBool(op->args[0]) != VisitBool(op->args[1]);
+      } else if (op->op.same_as(tirx::builtin::bitwise_not()) && op->args.size() == 1) {
+        return !VisitBool(op->args[0]);
+      }
+    }
     // Check if this is a bitwise operation
     if (op->op.same_as(tirx::builtin::bitwise_and())) {
       return VisitBitwiseOp(z3::operator&, op);

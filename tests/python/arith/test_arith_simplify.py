@@ -198,5 +198,24 @@ def test_z3_context_scope_clone_lifetime():
     assert cloned.can_prove(x < 16)
 
 
+def test_z3_proves_under_bitwise_and_of_booleans():
+    # ThreadSync proves that two threads below 128 store to different words, with
+    # the binding inside = (slot >= 0) & (slot < pages) of each thread. A boolean
+    # bitwise_and is the logical and, so the binding must not exhaust the budget
+    # of the solver.
+    tx1 = tirx.Var("tx1", "int32")
+    tx2 = tirx.Var("tx2", "int32")
+    pages = tirx.Var("pages", "int32")
+    bindings = []
+    for name in ("1", "2"):
+        slot = tirx.Var("slot" + name, "int32")
+        inside = tirx.Var("inside" + name, "bool")
+        bindings.append(inside == tirx.bitwise_and(slot >= 0, slot < pages))
+    condition = tirx.all(tx1 != tx2, 0 <= tx1, tx1 < 128, 0 <= tx2, tx2 < 128, *bindings)
+    ana = tvm.arith.Analyzer()
+    with ana.constraint_scope(condition):
+        assert ana.can_prove(tx1 // 32 * 256 + tx1 % 32 != tx2 // 32 * 256 + tx2 % 32 + 32)
+
+
 if __name__ == "__main__":
     tvm.testing.main()
