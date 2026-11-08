@@ -66,11 +66,33 @@ else:
         _RUNTIME_ONLY = True
 
 
-try:
-    # The following import is needed for TVM to work with pdb
-    import readline  # pylint: disable=unused-import
-except ImportError:
-    pass
+def _is_background_process_group():
+    """Return whether this process group is background on its controlling TTY."""
+    if not hasattr(os, "tcgetpgrp"):
+        return False
+
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+    except OSError:
+        return False
+
+    try:
+        return os.tcgetpgrp(tty_fd) != os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(tty_fd)
+
+
+# Import readline for pdb compatibility. A libedit-backed readline touches the
+# terminal during import, so skip it while this process is in a background
+# process group.
+if not _is_background_process_group():
+    try:
+        import readline  # pylint: disable=unused-import
+    except ImportError:
+        pass
+
 
 # version number
 __version__ = libinfo.__version__
