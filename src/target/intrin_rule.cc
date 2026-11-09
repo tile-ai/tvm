@@ -283,7 +283,9 @@ TVM_REGISTER_OP("tirx.q_multiply_shift")
       if (get_int_value(y) == (1 << 30)) {
         PrimExpr exp = s - 1;
         int exp_val = get_int_value(s) - 1;
-        if (exp_val > 0) {
+        if (exp_val == 0) {
+          return x;
+        } else if (exp_val > 0) {
           // power of 2 is greater than 0, apply left shift.
           return x << exp;
         } else {
