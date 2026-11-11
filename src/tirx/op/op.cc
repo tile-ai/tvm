@@ -30,8 +30,11 @@
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/op.h>
 #include <tvm/tirx/op_attr_types.h>
+#include <tvm/tirx/stmt_functor.h>
 
 #include <cmath>
+#include <utility>
+#include <vector>
 // Centralized header for constant folders.
 #include "../../arith/const_fold.h"
 #include "../../arith/scalable_expression.h"
@@ -591,8 +594,52 @@ PrimExpr ceildiv(PrimExpr a, PrimExpr b, Span span) {
   TVM_FFI_ICHECK(a.dtype().is_int() || a.dtype().is_uint()) << a;
   TVM_FFI_ICHECK(b.dtype().is_int() || b.dtype().is_uint()) << b;
   BinaryOpMatchTypes(a, b, span);
-  if (auto ret = arith::TryConstFold<tirx::FloorDiv>(a + b - 1, b)) return ret.value();
-  return tirx::FloorDiv(a + b - 1, b, span);
+
+  // FloorMod does not constant-fold unsigned dtypes, so fold the fully
+  // constant case here and keep `ceildiv` on constants a literal.
+  if (const auto* a_const = a.as<IntImmNode>()) {
+    if (const auto* b_const = b.as<IntImmNode>(); b_const && b_const->value != 0) {
+      int64_t quotient = arith::floordiv(a_const->value, b_const->value);
+      int64_t remainder = arith::floormod(a_const->value, b_const->value);
+      return IntImm(
+          b.dtype(),
+          arith::GetFoldResultInt64Repr(quotient + static_cast<int64_t>(remainder != 0), b.dtype()),
+          span);
+    }
+  }
+
+  // ceil(a / b) = floor(a / b) + (a % b != 0).  Unlike the biased-numerator
+  // identity floor((a + b - 1) / b), this holds for negative divisors and
+  // does not overflow when `a` is close to the dtype maximum.
+  //
+  // Bind operands that contain calls so a stateful expression is evaluated
+  // once instead of once per division.
+  std::vector<std::pair<Var, PrimExpr>> bindings;
+  auto bind_calls = [&bindings](PrimExpr value, const char* name) -> PrimExpr {
+    bool has_call = false;
+    PostOrderVisit(value, [&has_call](const ffi::ObjectRef& node) {
+      has_call = has_call || node->IsInstance<tirx::CallNode>();
+    });
+    if (!has_call) return value;
+    Var var(name, value.dtype());
+    bindings.emplace_back(var, value);
+    return var;
+  };
+  PrimExpr lhs = bind_calls(std::move(a), "ceildiv_lhs");
+  PrimExpr rhs = bind_calls(std::move(b), "ceildiv_rhs");
+
+  PrimExpr quotient = floordiv(lhs, rhs, span);
+  PrimExpr remainder = floormod(lhs, rhs, span);
+  PrimExpr result;
+  if (const auto* r = remainder.as<IntImmNode>()) {
+    result = r->value == 0 ? quotient : quotient + make_const(quotient.dtype(), 1);
+  } else {
+    result = quotient + cast(quotient.dtype(), remainder != make_zero(remainder.dtype()), span);
+  }
+  for (auto it = bindings.rbegin(); it != bindings.rend(); ++it) {
+    result = tirx::Let(it->first, it->second, result, span);
+  }
+  return result;
 }
 
 PrimExpr floormod(PrimExpr a, PrimExpr b, Span span) {

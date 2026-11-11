@@ -116,6 +116,46 @@ def test_const_fold4():
     assert isinstance(y, tvm.tirx.IntImm) and y.value == 6
 
 
+def test_ceildiv():
+    def check_const(a, b, dtype):
+        result = tvm.tirx.ceildiv(tvm.tirx.const(a, dtype), tvm.tirx.const(b, dtype))
+        assert isinstance(result, tvm.tirx.IntImm)
+        assert result.dtype == dtype
+        assert int(result) == -(-a // b), f"ceildiv({a}, {b}) -> {result}"
+
+    for dtype in ["int32", "int64"]:
+        for a, b in [(7, 3), (7, -3), (-7, 3), (-7, -3), (0, -3), (6, -3)]:
+            check_const(a, b, dtype)
+    for a, b in [(9, 2), (2**32 - 1, 1), (2**32 - 1, 2), (0, 1)]:
+        check_const(a, b, "uint32")
+
+    x = tvm.tirx.Var("x", "int32")
+    n = tvm.tirx.Var("n", "int32")
+    analyzer = tvm.arith.Analyzer()
+    for divisor in [-4, -3, -1, 1, 2, 5, n]:
+        expr = tvm.tirx.ceildiv(x, divisor)
+        for value in range(-12, 13):
+            divisors = [-5, -2, 1, 3] if divisor is n else [divisor]
+            for d in divisors:
+                substitution = {x: tvm.tirx.const(value, "int32")}
+                if divisor is n:
+                    substitution[n] = tvm.tirx.const(d, "int32")
+                folded = analyzer.simplify(tvm.tirx.stmt_functor.substitute(expr, substitution))
+                assert folded.value == -(-value // d), f"x={value}, b={d}, expr={expr}"
+
+    # A stateful operand must be evaluated once, not once per division.
+    buf = tvm.tirx.decl_buffer((2,), "int32", name="buf")
+    lhs = tvm.tirx.call_extern("int32", "atomicAdd", buf.data, 1)
+    rhs = tvm.tirx.call_extern("int32", "atomicAdd", buf.data, 1)
+    text = str(tvm.tirx.ceildiv(lhs, rhs))
+    assert text.count("atomicAdd") == 2, text
+
+    # Vector dtypes are preserved.
+    lhs_vec = tvm.tirx.Var("lhs", "int32x4")
+    rhs_vec = tvm.tirx.Var("rhs", "int32x4")
+    assert str(tvm.tirx.ceildiv(lhs_vec, rhs_vec).dtype) == "int32x4"
+
+
 def test_binary_dtype_match():
     def verify_general_dtype_support(f, is_conditional=False):
         rules = [
