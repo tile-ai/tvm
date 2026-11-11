@@ -522,5 +522,48 @@ def test_simplify_le_negative_scale_extra():
     ck.verify(expr_true, tvm.tirx.const(True, "bool"))
 
 
+def test_split_div_mod_negative_scale():
+    """Regression: a negative scale must not move a floor division/modulus.
+
+    ``SplitDivConst`` and ``SplitModConst`` fold ``cval % scale == 0`` by
+    moving ``cval`` into ``lower_factor``.  That is only valid for truncating
+    division, or when the split carries no existing division.  With floor
+    division and ``scale < 0`` it turns ``((x // 3) * -1) // 4`` into the
+    incorrect ``x // -12``.
+    """
+    ck = CanonicalChecker()
+    x = tvm.tirx.Var("x", "int32")
+    fld = tvm.tirx.floordiv
+
+    cases = [
+        (((x // 3) * -1) // 4, lambda v: (v // 3 * -1) // 4),
+        (((x // 3) * -2) // 4, lambda v: (v // 3 * -2) // 4),
+        (((x // 3) * -1) % 4, lambda v: (v // 3 * -1) % 4),
+        (((x % 5) * -1) % 4, lambda v: (v % 5 * -1) % 4),
+    ]
+    for expr, reference in cases:
+        simplified = ck.analyzer.canonical_simplify(expr)
+        for value in range(-40, 41):
+            substituted = tvm.tirx.stmt_functor.substitute(
+                simplified, {x: tvm.tirx.IntImm(x.dtype, value)}
+            )
+            folded = ck.analyzer.simplify(substituted)
+            assert isinstance(folded, tvm.tirx.IntImm)
+            assert folded.value == reference(value), (
+                f"\nexpr={expr}\nsimplified={simplified}\nx={value}"
+                f"\nresult={folded.value}\nexpected={reference(value)}"
+            )
+
+    # The old bug folded the first two cases to a bare ``x // -12`` and
+    # ``x // -6``. Assert the wrong form is gone without pinning the exact
+    # correct normal form.
+    for (expr, _), wrong in zip(cases, [fld(x, -12), fld(x, -6)]):
+        simplified = ck.analyzer.canonical_simplify(expr)
+        assert not tvm.ir.structural_equal(simplified, wrong), simplified
+
+    # Positive scales must keep folding through the same branch.
+    ck.verify(((x // 3) * 2) // 4, fld(x, 6))
+
+
 if __name__ == "__main__":
     tvm.testing.main()

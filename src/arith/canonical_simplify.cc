@@ -823,7 +823,9 @@ SplitExpr CanonicalSimplifier::Impl::SplitDivConst(SplitExpr lhs, int64_t cval, 
     return lhs;
   }
 
-  if (cval % lhs->scale == 0) {
+  // A negative scale cannot move a floor division across an existing division.
+  if (cval % lhs->scale == 0 &&
+      (div_mode == kTruncDiv || lhs->lower_factor == 1 || lhs->scale > 0)) {
     int64_t scaled_cval = cval / lhs->scale;
     if (lhs->upper_factor == SplitExprNode::kPosInf ||
         lhs->upper_factor % (lhs->lower_factor * scaled_cval) == 0) {
@@ -1047,7 +1049,9 @@ SplitExpr CanonicalSimplifier::Impl::SplitModConst(SplitExpr lhs, int64_t cval, 
     lhs.CopyOnWrite()->scale = 0;
     return lhs;
   }
-  if (cval % lhs->scale == 0) {
+  // A negative scale cannot move a floor modulus across an existing division.
+  if (cval % lhs->scale == 0 &&
+      (div_mode == kTruncDiv || lhs->lower_factor == 1 || lhs->scale > 0)) {
     // The rationale:
     //   (index % upper) / lower * scale % cval, given cval = scaled_cval * scale
     //   by the rule (x * c1) % (c2 * c1) => (x % c2) * c1,
