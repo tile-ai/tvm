@@ -26,7 +26,7 @@
 #include <tvm/relax/transform.h>
 #include <tvm/relax/type.h>
 #include <tvm/relax/utils.h>
-#include <tvm/tir/op.h>
+#include <tvm/tirx/op.h>
 
 namespace tvm {
 namespace relax {
@@ -62,10 +62,10 @@ Pass ToNonDataflow() {
   return CreateFunctionPass(pass_func, 0, "ToNonDataflow", {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.transform.ToNonDataflow", ToNonDataflow);
-});
+}
 
 }  // namespace transform
 

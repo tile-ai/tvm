@@ -14,16 +14,18 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F401, F841
 
+import numpy as np
 import pytest
 
 import tvm
 import tvm.testing
-from tvm import relax
-from tvm.script import relax as R, tir as T
-from tvm.script import ir as I
-import numpy as np
 import tvm.topi.testing
+from tvm import relax
+from tvm.script import ir as I
+from tvm.script import relax as R
+from tvm.script import tirx as T
 
 
 @pytest.mark.parametrize("consume_params", [True, False])
@@ -35,7 +37,7 @@ def test_basic(consume_params):
             w1: T.Buffer((3, 16, 3, 3), "float32"), out: T.Buffer((16, 3, 3, 3), "float32")
         ) -> None:
             for ax0, ax1, ax2, ax3 in T.grid(16, 3, 3, 3):
-                with T.block("layout_transform"):
+                with T.sblock("layout_transform"):
                     o, i, h, w = T.axis.remap("SSSS", [ax0, ax1, ax2, ax3])
                     out[o, i, h, w] = w1[i, o, h, w]
 
@@ -102,7 +104,7 @@ def test_basic(consume_params):
             w1: T.Buffer((3, 16, 3, 3), "float32"), out: T.Buffer((16, 3, 3, 3), "float32")
         ):
             for ax0, ax1, ax2, ax3 in T.grid(16, 3, 3, 3):
-                with T.block("layout_transform"):
+                with T.sblock("layout_transform"):
                     o, i, h, w = T.axis.remap("SSSS", [ax0, ax1, ax2, ax3])
                     T.reads(w1[i, o, h, w])
                     T.writes(out[o, i, h, w])
@@ -175,7 +177,7 @@ def test_basic(consume_params):
             w1: T.Buffer((3, 16, 3, 3), "float32"), out: T.Buffer((16, 3, 3, 3), "float32")
         ):
             for ax0, ax1, ax2, ax3 in T.grid(16, 3, 3, 3):
-                with T.block("layout_transform"):
+                with T.sblock("layout_transform"):
                     o, i, h, w = T.axis.remap("SSSS", [ax0, ax1, ax2, ax3])
                     T.reads(w1[i, o, h, w])
                     T.writes(out[o, i, h, w])
@@ -1436,11 +1438,11 @@ def test_symbolic_var_2():
     class Before:
         @T.prim_func
         def zeros(var_T_full: T.handle):
-            T.func_attr({"tir.noalias": True})
+            T.func_attr({"tirx.noalias": True})
             n = T.int64()
             T_full = T.match_buffer(var_T_full, (n, n))
             for ax0, ax1 in T.grid(n, n):
-                with T.block("T_full"):
+                with T.sblock("T_full"):
                     v_ax0, v_ax1 = T.axis.remap("SS", [ax0, ax1])
                     T.reads()
                     T.writes(T_full[v_ax0, v_ax1])
@@ -1462,12 +1464,12 @@ def test_symbolic_var_2():
     class Expected:
         @T.prim_func
         def zeros(var_T_full: T.handle):
-            T.func_attr({"tir.noalias": True})
+            T.func_attr({"tirx.noalias": True})
             n = T.int64()
             T_full = T.match_buffer(var_T_full, (n, n))
-            # with T.block("root"):
+            # with T.sblock("root"):
             for ax0, ax1 in T.grid(n, n):
-                with T.block("T_full"):
+                with T.sblock("T_full"):
                     v_ax0, v_ax1 = T.axis.remap("SS", [ax0, ax1])
                     T.reads()
                     T.writes(T_full[v_ax0, v_ax1])
@@ -1530,9 +1532,9 @@ def test_symbolic_var_from_shape():
             Output_Slice: T.Buffer(shape=[16], dtype="int32"),
             slice_index: T.int64,
         ):
-            T.func_attr({"tir.noalias": True})
+            T.func_attr({"tirx.noalias": True})
             for j in range(16):
-                with T.block("T_full"):
+                with T.sblock("T_full"):
                     vj = T.axis.remap("S", [j])
                     Output_Slice[vj] = Input_2d[slice_index, vj]
 
@@ -1584,9 +1586,9 @@ def test_symbolic_var_from_shape():
             Output_Slice: T.Buffer(shape=[16], dtype="int32"),
             slice_index: T.int64,
         ):
-            T.func_attr({"tir.noalias": True})
+            T.func_attr({"tirx.noalias": True})
             for j in range(16):
-                with T.block("T_full"):
+                with T.sblock("T_full"):
                     vj = T.axis.remap("S", [j])
                     Output_Slice[vj] = Input_2d[slice_index, vj]
 
@@ -1717,9 +1719,9 @@ def test_symbolic_var_defined_in_params_but_used_in_weights():
     @tvm.script.ir_module
     class Expected:
         @R.function
-        def main_transform_params(
-            params: R.Tuple(R.Tensor(("k",), dtype="float32"))
-        ) -> R.Tuple(R.Tensor(dtype="float32", ndim=1)):
+        def main_transform_params(params: R.Tuple(R.Tensor(("k",), dtype="float32"))) -> R.Tuple(
+            R.Tensor(dtype="float32", ndim=1)
+        ):
             R.func_attr({"num_input": 0})
             k = T.int64()
             with R.dataflow():

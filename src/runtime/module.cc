@@ -25,7 +25,7 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/c_backend_api.h>
-#include <tvm/runtime/module.h>
+#include <tvm/runtime/device_api.h>
 
 #include <cstring>
 #include <unordered_set>
@@ -35,7 +35,7 @@
 namespace tvm {
 namespace runtime {
 
-bool RuntimeEnabled(const String& target_str) {
+bool RuntimeEnabled(const ffi::String& target_str) {
   std::string target = target_str;
   std::string f_name;
   if (target == "cpu") {
@@ -63,7 +63,7 @@ bool RuntimeEnabled(const String& target_str) {
     if (!pf.has_value()) return false;
     return (*pf)(target).cast<bool>();
   } else {
-    LOG(FATAL) << "Unknown optional runtime " << target;
+    TVM_FFI_THROW(InternalError) << "Unknown optional runtime " << target;
   }
   return tvm::ffi::Function::GetGlobal(f_name).has_value();
 }
@@ -72,7 +72,7 @@ bool RuntimeEnabled(const String& target_str) {
   TVM_FFI_CHECK_SAFE_CALL(              \
       TVMFFIEnvModRegisterContextSymbol("__" #FuncName, reinterpret_cast<void*>(FuncName)))
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
 
   // Initialize the functions
@@ -85,7 +85,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
   TVM_INIT_CONTEXT_FUNC(TVMBackendParallelBarrier);
 
   refl::GlobalDef().def("runtime.RuntimeEnabled", RuntimeEnabled);
-});
+}
 
 #undef TVM_INIT_CONTEXT_FUNC
 

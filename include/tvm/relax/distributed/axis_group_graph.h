@@ -23,8 +23,8 @@
 #include <tvm/arith/iter_affine_map.h>
 #include <tvm/relax/distributed/struct_info.h>
 #include <tvm/relax/expr.h>
-#include <tvm/tir/function.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/function.h>
+#include <tvm/tirx/stmt_functor.h>
 
 #include <algorithm>
 #include <limits>
@@ -36,7 +36,7 @@
 #include <vector>
 
 namespace tvm {
-namespace tir {
+namespace tirx {
 // (var, axis)
 using TIRVarAxis = std::pair<Var, int>;
 // (buffer, axis)
@@ -44,7 +44,7 @@ using BufferAxis = std::pair<Buffer, int>;
 class BufferAxisHash {
  public:
   size_t operator()(const BufferAxis& buffer_axis) const {
-    size_t const h1(ObjectPtrHash()(buffer_axis.first));
+    size_t const h1(ffi::ObjectPtrHash()(buffer_axis.first));
     size_t const h2(std::hash<int>()(buffer_axis.second));
     return h1 ^ (h2 << 1);
   }
@@ -58,7 +58,8 @@ class BufferAxisHash {
  * \param analyzer The analyzer
  * \return The iter var whose extent to be changed
  */
-Var GetShardingVarFromIndex(PrimExpr index, Map<Var, Range> var_range, arith::Analyzer* analyzer);
+Var GetShardingVarFromIndex(PrimExpr index, ffi::Map<Var, Range> var_range,
+                            arith::Analyzer* analyzer);
 
 /*!
  * \brief Construct an axis group graph from a PrimFunc. Two buffer axis are connected if they
@@ -69,7 +70,7 @@ class BufferAxisGraphExtractor : public StmtExprVisitor {
   static std::vector<std::vector<TIRVarAxis>> GetTIRVarAxisGraph(const PrimFunc& prim_func) {
     BufferAxisGraphExtractor extractor;
     extractor(prim_func->body);
-    Map<Buffer, Var> inverse_buffer_map;
+    ffi::Map<Buffer, Var> inverse_buffer_map;
     for (const auto& pr : prim_func->buffer_map) {
       inverse_buffer_map.Set(pr.second, pr.first);
     }
@@ -148,7 +149,7 @@ class BufferAxisGraphExtractor : public StmtExprVisitor {
     return true;
   }
 
-  void VisitStmt_(const BlockNode* op) final {
+  void VisitStmt_(const SBlockNode* op) final {
     if (op->name_hint == "root") {
       StmtExprVisitor::VisitStmt_(op);
       return;
@@ -162,14 +163,14 @@ class BufferAxisGraphExtractor : public StmtExprVisitor {
     arith::Analyzer analyzer;
     for (const auto& access_pr : buffer_access_indices_) {
       Buffer buffer = access_pr.first;
-      Array<PrimExpr> indices = access_pr.second;
+      ffi::Array<PrimExpr> indices = access_pr.second;
       for (int i = 0; i < static_cast<int>(indices.size()); i++) {
         for (const auto& another_access_pr : buffer_access_indices_) {
           if (another_access_pr.first.same_as(buffer)) {
             continue;
           }
           Buffer another_buffer = another_access_pr.first;
-          Array<PrimExpr> another_indices = another_access_pr.second;
+          ffi::Array<PrimExpr> another_indices = another_access_pr.second;
           for (int j = 0; j < static_cast<int>(another_indices.size()); j++) {
             if (Match(indices[i], buffer->shape[i], another_indices[j], another_buffer->shape[j],
                       &analyzer)) {
@@ -192,12 +193,12 @@ class BufferAxisGraphExtractor : public StmtExprVisitor {
     buffer_axis_graph_[axis2].push_back(axis1);
   }
 
-  std::vector<std::pair<Buffer, Array<PrimExpr>>> buffer_access_indices_;
+  std::vector<std::pair<Buffer, ffi::Array<PrimExpr>>> buffer_access_indices_;
   std::unordered_map<BufferAxis, std::vector<BufferAxis>, BufferAxisHash> buffer_axis_graph_;
-  Map<Var, Range> iter_var_range_;
+  ffi::Map<Var, Range> iter_var_range_;
   std::string func_name;
 };
-}  // namespace tir
+}  // namespace tirx
 }  // namespace tvm
 
 namespace tvm {
@@ -212,7 +213,7 @@ struct Axis {
 
   Axis(const ExprNode* tensor, int dim, int tuple_index = 0)
       : tensor(tensor), dim(dim), tuple_index(tuple_index) {
-    ICHECK(tensor->IsInstance<ConstantNode>() || tensor->IsInstance<VarNode>());
+    TVM_FFI_ICHECK(tensor->IsInstance<ConstantNode>() || tensor->IsInstance<VarNode>());
   }
 
   bool operator==(const Axis& other) const {
@@ -250,7 +251,7 @@ using AxisShardingSpec = std::pair<DeviceMesh, int>;
 class AxisShardingSpecEqual {
  public:
   bool operator()(const AxisShardingSpec& lhs, const AxisShardingSpec& rhs) const {
-    return StructuralEqual()(lhs.first, rhs.first) && lhs.second == rhs.second;
+    return ffi::StructuralEqual()(lhs.first, rhs.first) && lhs.second == rhs.second;
   }
 };
 
@@ -258,7 +259,7 @@ class AxisShardingSpecHash {
  public:
   size_t operator()(const AxisShardingSpec& sharding_spec) const {
     size_t seed = 0;
-    seed ^= StructuralHash()(sharding_spec.first);
+    seed ^= ffi::StructuralHash()(sharding_spec.first);
     seed ^= std::hash<int>()(sharding_spec.second) << 1;
     return seed;
   }
@@ -283,7 +284,7 @@ class AxisGroupGraph {
       case EdgeType::kSimbling:
         return EdgeType::kSimbling;
     }
-    LOG(FATAL) << "Unreachable code";
+    TVM_FFI_THROW(InternalError) << "Unreachable code";
     throw;
   }
 
@@ -296,7 +297,7 @@ class AxisGroupGraph {
       case EdgeType::kSimbling:
         return 1;
     }
-    LOG(FATAL) << "Unreachable code";
+    TVM_FFI_THROW(InternalError) << "Unreachable code";
     throw;
   }
 
@@ -438,8 +439,9 @@ class AxisGroupGraph {
           it++;
         }
       }
-      ICHECK(specs.size() == 1) << "multiple possible sharding for axis: ("
-                                << GetRef<Expr>(axis.tensor) << ", " << axis.dim << ")";
+      TVM_FFI_ICHECK(specs.size() == 1)
+          << "multiple possible sharding for axis: (" << ffi::GetRef<Expr>(axis.tensor) << ", "
+          << axis.dim << ")";
     }
   }
 
@@ -468,7 +470,7 @@ void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
                                distributed::AxisGroupGraph* axis_group_graph);
 void BuildAxisGraphReshape(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph);
-void BuildAxisGraphCallTIR(const Var& output_var, const Call& call, const tir::PrimFunc& func,
+void BuildAxisGraphCallTIR(const Var& output_var, const Call& call, const tirx::PrimFunc& func,
                            distributed::AxisGroupGraph* axis_group_graph);
 
 }  // namespace distributed

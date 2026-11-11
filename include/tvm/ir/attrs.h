@@ -28,14 +28,14 @@
 #ifndef TVM_IR_ATTRS_H_
 #define TVM_IR_ATTRS_H_
 
-#include <dmlc/common.h>
 #include <tvm/ffi/container/map.h>
+#include <tvm/ffi/extra/structural_equal.h>
+#include <tvm/ffi/extra/structural_hash.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/accessor.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/ir/cow.h>
 #include <tvm/ir/expr.h>
-#include <tvm/node/structural_equal.h>
-#include <tvm/node/structural_hash.h>
 
 #include <functional>
 #include <string>
@@ -54,7 +54,7 @@ namespace tvm {
 template <typename TObjectRef>
 inline TObjectRef NullValue() {
   static_assert(TObjectRef::_type_is_nullable, "Can only get NullValue for nullable types");
-  return TObjectRef(ObjectPtr<Object>(nullptr));
+  return TObjectRef(ffi::ObjectPtr<typename TObjectRef::ContainerType>(nullptr));
 }
 
 template <>
@@ -65,14 +65,14 @@ inline DataType NullValue<DataType>() {
 /*!
  * \brief Information about attribute fields in string representations.
  */
-class AttrFieldInfoNode : public Object {
+class AttrFieldInfoNode : public ffi::Object {
  public:
   /*! \brief name of the field */
-  String name;
+  ffi::String name;
   /*! \brief type docstring information in str. */
-  String type_info;
+  ffi::String type_info;
   /*! \brief detailed description of the type */
-  String description;
+  ffi::String description;
 
   static void RegisterReflection() {
     namespace rfl = ffi::reflection;
@@ -82,16 +82,15 @@ class AttrFieldInfoNode : public Object {
         .def_ro("description", &AttrFieldInfoNode::description);
   }
 
-  static constexpr const char* _type_key = "ir.AttrFieldInfo";
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
 
-  TVM_DECLARE_FINAL_OBJECT_INFO(AttrFieldInfoNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.AttrFieldInfo", AttrFieldInfoNode, ffi::Object);
 };
 
 /*! \brief AttrFieldInfo */
-class AttrFieldInfo : public ObjectRef {
+class AttrFieldInfo : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_OBJECT_REF_METHODS(AttrFieldInfo, ObjectRef, AttrFieldInfoNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(AttrFieldInfo, ffi::ObjectRef, AttrFieldInfoNode);
 };
 
 /*!
@@ -100,7 +99,7 @@ class AttrFieldInfo : public ObjectRef {
  *       subclass AttrsNode instead.
  * \sa AttrsNode
  */
-class BaseAttrsNode : public Object {
+class BaseAttrsNode : public ffi::Object {
  public:
   /*! \brief virtual destructor */
   virtual ~BaseAttrsNode() {}
@@ -122,18 +121,16 @@ class BaseAttrsNode : public Object {
                                         bool allow_unknown = false) = 0;
 
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
-
-  static constexpr const char* _type_key = "ir.Attrs";
-  TVM_DECLARE_BASE_OBJECT_INFO(BaseAttrsNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO("ir.Attrs", BaseAttrsNode, ffi::Object);
 };
 
 /*!
  * \brief Managed reference to BaseAttrsNode.
  * \sa AttrsNode, BaseAttrsNode
  */
-class Attrs : public ObjectRef {
+class Attrs : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_OBJECT_REF_METHODS(Attrs, ObjectRef, BaseAttrsNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Attrs, ffi::ObjectRef, BaseAttrsNode);
 };
 
 /*!
@@ -145,7 +142,7 @@ class Attrs : public ObjectRef {
 class DictAttrsNode : public BaseAttrsNode {
  public:
   /*! \brief internal attrs map */
-  Map<String, ffi::Any> dict;
+  ffi::Map<ffi::String, ffi::Any> dict;
 
   static void RegisterReflection() {
     namespace rfl = ffi::reflection;
@@ -155,8 +152,7 @@ class DictAttrsNode : public BaseAttrsNode {
   void InitByPackedArgs(const ffi::PackedArgs& args, bool allow_unknown) final;
 
   // type info
-  static constexpr const char* _type_key = "ir.DictAttrs";
-  TVM_DECLARE_FINAL_OBJECT_INFO(DictAttrsNode, BaseAttrsNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.DictAttrs", DictAttrsNode, BaseAttrsNode);
 };
 
 /*!
@@ -166,10 +162,14 @@ class DictAttrsNode : public BaseAttrsNode {
 class DictAttrs : public Attrs {
  public:
   /*!
+   * \brief constructor with UnsafeInit
+   */
+  explicit DictAttrs(ffi::UnsafeInit tag) : Attrs(tag) {}
+  /*!
    * \brief Consruct a Attrs backed by DictAttrsNode.
    * \param dict The attributes.
    */
-  TVM_DLL explicit DictAttrs(Map<String, Any> dict = {});
+  TVM_DLL explicit DictAttrs(ffi::Map<ffi::String, Any> dict = {});
 
   // Utils for accessing attributes
   // This needs to be on DictAttrs, not DictAttrsNode because we return the default
@@ -194,9 +194,9 @@ class DictAttrs : public Attrs {
    * \endcode
    */
   template <typename TObjectRef>
-  Optional<TObjectRef> GetAttr(
+  ffi::Optional<TObjectRef> GetAttr(
       const std::string& attr_key,
-      Optional<TObjectRef> default_value = Optional<TObjectRef>(std::nullopt)) const {
+      ffi::Optional<TObjectRef> default_value = ffi::Optional<TObjectRef>(std::nullopt)) const {
     if (!defined()) return default_value;
     const DictAttrsNode* node = this->as<DictAttrsNode>();
     auto it = node->dict.find(attr_key);
@@ -208,8 +208,8 @@ class DictAttrs : public Attrs {
   }
   // variant that uses TObjectRef to enable implicit conversion to default value.
   template <typename TObjectRef>
-  Optional<TObjectRef> GetAttr(const std::string& attr_key, TObjectRef default_value) const {
-    return GetAttr<TObjectRef>(attr_key, Optional<TObjectRef>(default_value));
+  ffi::Optional<TObjectRef> GetAttr(const std::string& attr_key, TObjectRef default_value) const {
+    return GetAttr<TObjectRef>(attr_key, ffi::Optional<TObjectRef>(default_value));
   }
   /*!
    * \brief Check whether the function has an non-zero integer attr.
@@ -234,7 +234,14 @@ class DictAttrs : public Attrs {
     return GetAttr<Integer>(attr_key, 0).value_or(0).IntValue() != 0;
   }
 
-  TVM_DEFINE_OBJECT_REF_METHODS_WITHOUT_DEFAULT_CONSTRUCTOR(DictAttrs, Attrs, DictAttrsNode);
+  explicit DictAttrs(::tvm::ffi::ObjectPtr<DictAttrsNode> n) : Attrs(n) {}
+  DictAttrs(const DictAttrs&) = default;
+  DictAttrs(DictAttrs&&) = default;
+  DictAttrs& operator=(const DictAttrs&) = default;
+  DictAttrs& operator=(DictAttrs&&) = default;
+  const DictAttrsNode* operator->() const { return static_cast<const DictAttrsNode*>(data_.get()); }
+  const DictAttrsNode* get() const { return operator->(); }
+  using ContainerType = DictAttrsNode;
   TVM_DEFINE_OBJECT_REF_COW_METHOD(DictAttrsNode);
 };
 
@@ -248,7 +255,7 @@ class DictAttrs : public Attrs {
  *
  * \returns The new DictAttrs with updated attributes.
  */
-DictAttrs WithAttrs(DictAttrs attrs, Map<String, Any> new_attrs);
+DictAttrs WithAttrs(DictAttrs attrs, ffi::Map<ffi::String, Any> new_attrs);
 
 /*!
  * \brief Copy the DictAttrs, but overrides a single attribute.
@@ -261,10 +268,10 @@ DictAttrs WithAttrs(DictAttrs attrs, Map<String, Any> new_attrs);
  *
  * \returns The new DictAttrs with updated attributes.
  */
-DictAttrs WithAttr(DictAttrs attrs, String key, Any value);
+DictAttrs WithAttr(DictAttrs attrs, ffi::String key, Any value);
 
 inline DictAttrs WithAttr(DictAttrs attrs, const std::string& key, Any value) {
-  return WithAttr(std::move(attrs), String(key), std::move(value));
+  return WithAttr(std::move(attrs), ffi::String(key), std::move(value));
 }
 
 /*!
@@ -325,7 +332,7 @@ inline TFunc WithAttr(TFunc input, const std::string& attr_key, Any attr_value) 
  * \returns The new function or module with updated attributes.
  */
 template <typename TFunc>
-inline TFunc WithAttrs(TFunc input, Map<String, Any> attrs) {
+inline TFunc WithAttrs(TFunc input, ffi::Map<ffi::String, Any> attrs) {
   using TNode = typename TFunc::ContainerType;
   static_assert(TNode::_type_final, "Can only operate on the leaf nodes");
   TNode* node = input.CopyOnWrite();
@@ -384,7 +391,8 @@ template <typename DerivedType>
 class AttrsNodeReflAdapter : public BaseAttrsNode {
  public:
   void InitByPackedArgs(const ffi::PackedArgs& args, bool allow_unknown) final {
-    LOG(FATAL) << "`" << DerivedType::_type_key << "` uses new reflection mechanism for init";
+    TVM_FFI_THROW(InternalError) << "`" << DerivedType::_type_key
+                                 << "` uses new reflection mechanism for init";
   }
 
  private:
@@ -410,7 +418,7 @@ inline TAttrs AttrsWithDefaultValues() {
     finit_object.CallPacked(ffi::PackedArgs(packed_args, 1), &rv);
     return rv.cast<TAttrs>();
   } else {
-    auto n = make_object<ContainerType>();
+    auto n = ffi::make_object<ContainerType>();
     n->InitByPackedArgs(ffi::PackedArgs(nullptr, 0), false);
     return TAttrs(n);
   }

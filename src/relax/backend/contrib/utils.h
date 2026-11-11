@@ -24,6 +24,7 @@
 #ifndef TVM_RELAX_BACKEND_CONTRIB_UTILS_H_
 #define TVM_RELAX_BACKEND_CONTRIB_UTILS_H_
 
+#include <tvm/ffi/cast.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 
@@ -43,10 +44,10 @@ namespace backend {
  * \return The converted shape in std::vector<int64_t>
  */
 
-inline std::vector<int64_t> GetIntShape(const Array<PrimExpr>& shape) {
+inline std::vector<int64_t> GetIntShape(const ffi::Array<PrimExpr>& shape) {
   std::vector<int64_t> ret;
   for (const auto& dim : shape) {
-    const int64_t* pval = tir::as_const_int(dim);
+    const int64_t* pval = tirx::as_const_int(dim);
     ret.push_back(pval ? *pval : -1);
   }
   return ret;
@@ -71,7 +72,7 @@ inline std::string DType2String(const tvm::DataType dtype) {
 inline bool IsOp(const CallNode* call, const std::string& op_name) {
   const auto* op_node = call->op.as<OpNode>();
   if (!op_node) return false;
-  Op op = GetRef<Op>(op_node);
+  Op op = ffi::GetRef<Op>(op_node);
   return op == Op::Get(op_name);
 }
 
@@ -101,7 +102,7 @@ inline const CallNode* TryGetOpInFunction(Function f, const std::string& op_name
  */
 inline const CallNode* GetOpInFunction(Function f, const std::string& op_name) {
   const CallNode* op = TryGetOpInFunction(f, op_name);
-  ICHECK(op) << op_name << " not found in the function:\n" << f;
+  TVM_FFI_ICHECK(op) << op_name << " not found in the function:\n" << f;
   return op;
 }
 
@@ -116,12 +117,12 @@ inline const CallNode* GetOpInFunction(Function f, const std::string& op_name) {
  * \return A mapping between variable pattern names and their positions in the partitioned
  * function parameter list.
  */
-Map<String, IntImm> ExtractArgIdx(String pattern_name, Function f);
+ffi::Map<ffi::String, IntImm> ExtractArgIdx(ffi::String pattern_name, Function f);
 
 /*!
  * \brief Converts a numeric value to std::string.
  * \param value A numeric value to convert.
- * \return String representation of a numeric value.
+ * \return ffi::String representation of a numeric value.
  */
 template <typename Type>
 std::string to_str(const Type& value) {

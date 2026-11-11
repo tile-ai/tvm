@@ -20,10 +20,14 @@ set -euxo pipefail
 
 source tests/scripts/setup-pytest-env.sh
 
-# setup cython
-cd python; python3 setup.py build_ext --inplace; cd ..
+# setup tvm-ffi into python folder
+uv pip install -v --target=python ./3rdparty/tvm-ffi/
 
 # cleanup pycache
 find . -type f -path "*.pyc" | xargs rm -f
 
 run_pytest python-topi-nightly tests/python/topi/nightly
+
+# Tensorflow device verification and network tests on nightly
+export CI_ENV_NIGHTLY
+python3 tests/python/relax/test_frontend_tflite.py

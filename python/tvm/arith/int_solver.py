@@ -15,12 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 """integer constraints data structures and solvers"""
-import tvm.ffi
+
+import tvm_ffi
+
 from tvm.runtime import Object
+
 from . import _ffi_api
 
 
-@tvm.ffi.register_object("arith.IntGroupBounds")
+@tvm_ffi.register_object("arith.IntGroupBounds")
 class IntGroupBounds(Object):
     """Represent integer grouped bounds which are classified into
        lower bounds (include), upper bounds (include) and equalities.
@@ -66,16 +69,16 @@ class IntGroupBounds(Object):
         return _ffi_api.IntGroupBounds_FindBestRange(self)
 
 
-@tvm.ffi.register_object("arith.IntConstraints")
+@tvm_ffi.register_object("arith.IntConstraints")
 class IntConstraints(Object):
     """Represent a set of integer constraints including variables, their ranges and
        the relations between them (either equations or inequalities)
 
     Parameters
     ----------
-    variables : List[tvm.tir.Var]
+    variables : List[tvm.tirx.Var]
         The variables in the constraints. Must be integers
-    ranges    : Map[tvm.tir.Var, tvm.ir.Range]
+    ranges    : Map[tvm.tirx.Var, tvm.ir.Range]
         The ranges of the variables.
     relations : List[tvm.ir.PrimExpr]
         The relations between the variables (either equations or inequalities)
@@ -85,7 +88,7 @@ class IntConstraints(Object):
         self.__init_handle_by_constructor__(_ffi_api.IntConstraints, variables, ranges, relations)
 
 
-@tvm.ffi.register_object("arith.IntConstraintsTransform")
+@tvm_ffi.register_object("arith.IntConstraintsTransform")
 class IntConstraintsTransform(Object):
     """We can have different set of variables to represent the same integer constraints.
        For example, the following two constrains are equivalent,
@@ -105,10 +108,10 @@ class IntConstraintsTransform(Object):
         source integer constraints, e.g., {a + b = 0 | a >= 0, b >= 0}
     dst : arith.IntConstraints
         integer constraints equivalent to the source, e.g., {m - n = 0 | m >= 0, n <= 0}
-    src_to_dst : Map[tvm.tir.Var, tvm.ir.PrimExpr]
+    src_to_dst : Map[tvm.tirx.Var, tvm.ir.PrimExpr]
         mapping from variables in the src to the variables in the dst,
                 e.g., {a -> m, b -> -n}
-    dst_to_src : Map[tvm.tir.Var, tvm.ir.PrimExpr]
+    dst_to_src : Map[tvm.tirx.Var, tvm.ir.PrimExpr]
         mapping from variables in the dst to the variables in the src,
         e.g., {m -> a, n -> -b}
     """
@@ -126,9 +129,9 @@ def solve_linear_equations(equations, variables=None, ranges=None):
     ----------
     equations: List[tvm.ir.PrimExpr] or IntConstraints
         The equations of the variables
-    variables : Optional[List[tvm.tir.Var]]
+    variables : Optional[List[tvm.tirx.Var]]
         The variables in the system.
-    ranges    : Optional[Map[tvm.tir.Var, tvm.ir.Range]]
+    ranges    : Optional[Map[tvm.tirx.Var, tvm.ir.Range]]
         The ranges of the variables.
 
     Returns
@@ -154,9 +157,9 @@ def solve_linear_inequalities(equations, variables=None, ranges=None, deskew_ran
     ----------
     equations   : List[tvm.ir.PrimExpr] or IntConstraints
         The inequalities of the variables
-    variables   : Optional[List[tvm.tir.Var]]
+    variables   : Optional[List[tvm.tirx.Var]]
         The variables in the system.
-    ranges      : Optional[Map[tvm.tir.Var, tvm.ir.Range]]
+    ranges      : Optional[Map[tvm.tirx.Var, tvm.ir.Range]]
         The ranges of the variables.
     deskew_range: Optional[bool]
         Whether deskew the result ranges to be started from zero.

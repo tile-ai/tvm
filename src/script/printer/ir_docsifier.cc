@@ -16,10 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ffi/error.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/accessor.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/logging.h>
 #include <tvm/script/printer/ir_docsifier.h>
 
 #include <sstream>
@@ -30,12 +30,13 @@ namespace tvm {
 namespace script {
 namespace printer {
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   FrameNode::RegisterReflection();
   IRDocsifierNode::RegisterReflection();
-});
+}
 
-IdDoc IRDocsifierNode::Define(const ObjectRef& obj, const Frame& frame, const String& name_hint) {
+IdDoc IRDocsifierNode::Define(const ffi::ObjectRef& obj, const Frame& frame,
+                              const ffi::String& name_hint) {
   if (auto it = obj2info.find(obj); it != obj2info.end()) {
     // TVM's IR dialects do not allow multiple definitions of the same
     // variable within an IRModule.  This branch can only be reached
@@ -51,7 +52,7 @@ IdDoc IRDocsifierNode::Define(const ObjectRef& obj, const Frame& frame, const St
     return IdDoc(it->second.name.value());
   }
 
-  String name = name_hint;
+  ffi::String name = name_hint;
   if (cfg->show_object_address) {
     std::stringstream stream;
     stream << name << "_" << obj.get();
@@ -66,13 +67,14 @@ IdDoc IRDocsifierNode::Define(const ObjectRef& obj, const Frame& frame, const St
   return def_doc;
 }
 
-void IRDocsifierNode::Define(const ObjectRef& obj, const Frame& frame, DocCreator doc_factory) {
-  ICHECK(obj2info.find(obj) == obj2info.end()) << "Duplicated object: " << obj;
+void IRDocsifierNode::Define(const ffi::ObjectRef& obj, const Frame& frame,
+                             DocCreator doc_factory) {
+  TVM_FFI_ICHECK(obj2info.find(obj) == obj2info.end()) << "Duplicated object: " << obj;
   obj2info.insert({obj, VariableInfo{std::move(doc_factory), std::nullopt}});
   frame->AddExitCallback([this, obj]() { this->RemoveVar(obj); });
 }
 
-Optional<ExprDoc> IRDocsifierNode::GetVarDoc(const ObjectRef& obj) const {
+ffi::Optional<ExprDoc> IRDocsifierNode::GetVarDoc(const ffi::ObjectRef& obj) const {
   auto it = obj2info.find(obj);
   if (it == obj2info.end()) {
     return std::nullopt;
@@ -81,9 +83,9 @@ Optional<ExprDoc> IRDocsifierNode::GetVarDoc(const ObjectRef& obj) const {
 }
 
 ExprDoc IRDocsifierNode::AddMetadata(const ffi::Any& obj) {
-  ICHECK(obj != nullptr) << "TypeError: Cannot add nullptr to metadata";
-  String key = obj.GetTypeKey();
-  Array<ffi::Any>& array = metadata[key];
+  TVM_FFI_CHECK(obj != nullptr, TypeError) << "Cannot add nullptr to metadata";
+  ffi::String key = obj.GetTypeKey();
+  ffi::Array<ffi::Any>& array = metadata[key];
   int index = std::find_if(array.begin(), array.end(),
                            [&](const ffi::Any& a) { return ffi::AnyEqual()(a, obj); }) -
               array.begin();
@@ -94,36 +96,36 @@ ExprDoc IRDocsifierNode::AddMetadata(const ffi::Any& obj) {
       "metadata")[{LiteralDoc::Str(key, std::nullopt)}][{LiteralDoc::Int(index, std::nullopt)}];
 }
 
-void IRDocsifierNode::AddGlobalInfo(const String& name, const GlobalInfo& ginfo) {
-  ICHECK(ginfo.defined()) << "TypeError: Cannot add nullptr to global_infos";
-  Array<GlobalInfo>& array = global_infos[name];
+void IRDocsifierNode::AddGlobalInfo(const ffi::String& name, const GlobalInfo& ginfo) {
+  TVM_FFI_CHECK(ginfo.defined(), TypeError) << "Cannot add nullptr to global_infos";
+  ffi::Array<GlobalInfo>& array = global_infos[name];
   array.push_back(ginfo);
 }
 
-bool IRDocsifierNode::IsVarDefined(const ObjectRef& obj) const { return obj2info.count(obj); }
+bool IRDocsifierNode::IsVarDefined(const ffi::ObjectRef& obj) const { return obj2info.count(obj); }
 
-void IRDocsifierNode::RemoveVar(const ObjectRef& obj) {
+void IRDocsifierNode::RemoveVar(const ffi::ObjectRef& obj) {
   auto it = obj2info.find(obj);
-  ICHECK(it != obj2info.end()) << "No such object: " << obj;
+  TVM_FFI_ICHECK(it != obj2info.end()) << "No such object: " << obj;
   if (it->second.name.has_value()) {
     defined_names.erase(it->second.name.value());
   }
   obj2info.erase(it);
 }
 
-void IRDocsifierNode::SetCommonPrefix(const ObjectRef& root,
-                                      ffi::TypedFunction<bool(ObjectRef)> is_var) {
+void IRDocsifierNode::SetCommonPrefix(const ffi::ObjectRef& root,
+                                      ffi::TypedFunction<bool(ffi::ObjectRef)> is_var) {
   class Visitor {
    public:
-    void operator()(ObjectRef obj) { this->VisitObjectRef(obj); }
+    void operator()(ffi::ObjectRef obj) { this->VisitObjectRef(obj); }
 
    private:
     void RecursiveVisitAny(ffi::Any* value) {
-      if (std::optional<ObjectRef> opt = value->as<ObjectRef>()) {
+      if (std::optional<ffi::ObjectRef> opt = value->as<ffi::ObjectRef>()) {
         this->VisitObjectRef(*opt);
       }
     }
-    void VisitObjectRef(ObjectRef obj) {
+    void VisitObjectRef(ffi::ObjectRef obj) {
       if (!obj.defined()) {
         return;
       }
@@ -161,13 +163,13 @@ void IRDocsifierNode::SetCommonPrefix(const ObjectRef& root,
       stack_.pop_back();
     }
 
-    void HandleVar(const Object* var) {
+    void HandleVar(const ffi::Object* var) {
       if (common_prefix.count(var) == 0) {
         common_prefix[var] = stack_;
         return;
       }
-      std::vector<const Object*>& a = common_prefix[var];
-      std::vector<const Object*>& b = stack_;
+      std::vector<const ffi::Object*>& a = common_prefix[var];
+      std::vector<const ffi::Object*>& b = stack_;
       int n = std::min(a.size(), b.size());
       for (int i = 0; i < n; ++i) {
         if (a[i] != b[i]) {
@@ -177,12 +179,12 @@ void IRDocsifierNode::SetCommonPrefix(const ObjectRef& root,
       }
     }
 
-    std::vector<const Object*> stack_;
-    std::unordered_set<const Object*> visited_;
+    std::vector<const ffi::Object*> stack_;
+    std::unordered_set<const ffi::Object*> visited_;
 
    public:
-    ffi::TypedFunction<bool(ObjectRef)> is_var;
-    std::unordered_map<const Object*, std::vector<const Object*>> common_prefix;
+    ffi::TypedFunction<bool(ffi::ObjectRef)> is_var;
+    std::unordered_map<const ffi::Object*, std::vector<const ffi::Object*>> common_prefix;
   };
   Visitor visitor;
   visitor.is_var = is_var;
@@ -191,11 +193,11 @@ void IRDocsifierNode::SetCommonPrefix(const ObjectRef& root,
 }
 
 IRDocsifier::IRDocsifier(const PrinterConfig& cfg) {
-  auto n = make_object<IRDocsifierNode>();
+  auto n = ffi::make_object<IRDocsifierNode>();
   n->cfg = cfg;
   n->dispatch_tokens.push_back("");
   // Define builtin keywords according to cfg.
-  for (const String& keyword : cfg->GetBuiltinKeywords()) {
+  for (const ffi::String& keyword : cfg->GetBuiltinKeywords()) {
     n->defined_names.insert(keyword);
   }
   data_ = std::move(n);
@@ -207,7 +209,7 @@ IRDocsifier::FType& IRDocsifier::vtable() {
 }
 
 TVM_STATIC_IR_FUNCTOR(IRDocsifier, vtable)
-    .set_fallback([](ObjectRef obj, AccessPath p, IRDocsifier d) -> Doc {
+    .set_fallback([](ffi::ObjectRef obj, AccessPath p, IRDocsifier d) -> Doc {
       return d->AddMetadata(obj);
     });
 

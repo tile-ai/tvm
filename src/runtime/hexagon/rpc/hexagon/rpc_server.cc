@@ -29,7 +29,7 @@ extern "C" {
 #include <stdlib.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/object.h>
+#include <tvm/runtime/logging.h>
 
 #include <algorithm>
 #include <fstream>
@@ -234,7 +234,7 @@ tvm::runtime::hexagon::HexagonRPCServer* get_hexagon_rpc_server(
   if (g_hexagon_rpc_server) {
     return g_hexagon_rpc_server;
   }
-  CHECK_GT(rpc_receive_buff_size_bytes, 0) << "RPC receive buffer size is not valid.";
+  TVM_FFI_ICHECK_GT(rpc_receive_buff_size_bytes, 0) << "RPC receive buffer size is not valid.";
   static tvm::runtime::hexagon::HexagonRPCServer hexagon_rpc_server(
       new uint8_t[rpc_receive_buff_size_bytes], rpc_receive_buff_size_bytes);
   g_hexagon_rpc_server = &hexagon_rpc_server;
@@ -328,7 +328,7 @@ __attribute__((weak)) void _Get_eh_data() {}
 __attribute__((weak)) void _Parse_fde_instr() {}
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed("tvm.hexagon.load_module",
@@ -349,15 +349,15 @@ TVM_FFI_STATIC_INIT_BLOCK({
               *rv = false;
             }
           });
-});
+}
 
 void SaveBinaryToFile(const std::string& file_name, const std::string& data) {
   std::ofstream fs(file_name, std::ios::out | std::ios::binary);
-  ICHECK(!fs.fail()) << "Cannot open " << file_name;
+  TVM_FFI_ICHECK(!fs.fail()) << "Cannot open " << file_name;
   fs.write(&data[0], data.length());
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def_packed("tvm.rpc.server.upload",
                                [](tvm::ffi::PackedArgs args, tvm::ffi::Any* rv) {
@@ -365,4 +365,4 @@ TVM_FFI_STATIC_INIT_BLOCK({
                                  auto data = args[1].cast<std::string>();
                                  SaveBinaryToFile(file_name, data);
                                });
-});
+}

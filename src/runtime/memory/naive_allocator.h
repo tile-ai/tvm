@@ -24,6 +24,7 @@
 #define TVM_RUNTIME_MEMORY_NAIVE_ALLOCATOR_H_
 
 #include <tvm/runtime/device_api.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/runtime/memory/memory_manager.h>
 
 #include <atomic>
@@ -67,7 +68,7 @@ class NaiveAllocator final : public Allocator {
 
     buf.size = nbytes;
     buf.data = DeviceAPI::Get(dev)->AllocDataSpace(dev, shape.size(), shape.data(), type_hint,
-                                                   String(mem_scope));
+                                                   ffi::String(mem_scope));
     used_memory_.fetch_add(nbytes, std::memory_order_relaxed);
     DLOG(INFO) << "allocate " << nbytes << " B, used memory " << used_memory_ << " B";
     buf.alloc_type = kNaive;

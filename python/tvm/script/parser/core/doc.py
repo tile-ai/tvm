@@ -14,10 +14,12 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: E722, F403
 """TVM Script Parser doc AST"""
 
 import ast
 import inspect
+import sys
 import typing
 from collections import defaultdict
 
@@ -40,8 +42,8 @@ class Entry:
         The callable methods for converting doc AST to python AST node.
     """
 
-    to_doc: typing.Optional[FnToDoc]
-    from_doc: typing.Optional[FnFromDoc]
+    to_doc: FnToDoc | None
+    from_doc: FnFromDoc | None
 
     def __init__(self):
         self.to_doc = None
@@ -63,7 +65,7 @@ class Registry:
     """
 
     _inst: typing.Optional["Registry"] = None
-    table: typing.Dict[str, Entry]
+    table: dict[str, Entry]
 
     def __init__(self):
         self.table = defaultdict(Entry)
@@ -117,14 +119,7 @@ def _is_atomic_type(node):
         or node in [..., True, False]
         or isinstance(
             node,
-            (
-                int,
-                float,
-                str,
-                bool,
-                bytes,
-                complex,
-            ),
+            int | float | str | bool | bytes | complex,
         )
     )
 
@@ -235,7 +230,7 @@ class NodeVisitor:
     """Node visitor for doc AST"""
 
     def visit(self, node: doc.AST) -> None:
-        if isinstance(node, (list, tuple)):
+        if isinstance(node, list | tuple):
             for item in node:
                 self.visit(item)
             return
@@ -252,7 +247,7 @@ class NodeVisitor:
             value = getattr(node, field, None)
             if value is None:
                 pass
-            elif isinstance(value, (doc.AST, list, tuple)):
+            elif isinstance(value, doc.AST | list | tuple):
                 self.visit(value)
 
 
@@ -273,12 +268,12 @@ class NodeTransformer:
         )(node)
 
     def generic_visit(self, node: doc.AST) -> doc.AST:
-        kv: typing.Dict[str, typing.Any] = {}
+        kv: dict[str, typing.Any] = {}
         for field in node.__class__._FIELDS:  # pylint: disable=protected-access
             value = getattr(node, field, None)
             if value is None:
                 pass
-            elif isinstance(value, (doc.AST, list, tuple)):
+            elif isinstance(value, doc.AST | list | tuple):
                 value = self.visit(value)
             kv[field] = value
         return node.__class__(**kv)
@@ -318,4 +313,150 @@ def _register_default():
             )
 
 
+
+def _py_version() -> typing.Tuple[int, int]:
+    return (sys.version_info.major, sys.version_info.minor)
+
+
+def _register_constant_handling():
+    if _py_version() not in [(3, 6), (3, 7)]:
+        return
+
+    def as_constant(f) -> doc.Constant:
+        def to_doc_func(x: ast.AST) -> doc.Constant:
+            return doc.Constant(
+                value=getattr(x, f) if isinstance(f, str) else f(x),
+                kind=None,
+                lineno=x.lineno,
+                col_offset=x.col_offset,
+                end_lineno=x.lineno,
+                end_col_offset=x.col_offset,
+            )
+
+        return to_doc_func
+
+    register_to_doc("Str")(as_constant("s"))
+    register_to_doc("NameConstant")(as_constant("value"))
+    register_to_doc("Num")(as_constant("n"))
+    register_to_doc("Bytes")(as_constant("s"))
+    register_to_doc("Ellipsis")(as_constant(lambda _: ...))
+
+
+def _register_subscription_handling():
+    if _py_version() >= (3, 9):
+        return
+
+    def subscript_to_doc(x: ast.Subscript) -> doc.Subscript:
+        if isinstance(x.slice, ast.Slice):
+            return doc.Subscript(
+                value=to_doc(x.value),
+                slice=doc.Slice(
+                    lower=to_doc(x.slice.lower),
+                    upper=to_doc(x.slice.upper),
+                    step=to_doc(x.slice.step),
+                    lineno=getattr(x.slice, "lineno", None),
+                    col_offset=getattr(x.slice, "col_offset", None),
+                    end_lineno=getattr(x.slice, "end_lineno", None),
+                    end_col_offset=getattr(x.slice, "end_col_offset", None),
+                ),
+                ctx=to_doc(x.ctx),
+                lineno=getattr(x, "lineno", None),
+                col_offset=getattr(x, "col_offset", None),
+                end_lineno=getattr(x, "end_lineno", None),
+                end_col_offset=getattr(x, "end_col_offset", None),
+            )
+        if isinstance(x.slice, ast.ExtSlice):
+            return doc.Subscript(
+                value=to_doc(x.value),
+                slice=doc.Tuple(
+                    elts=[to_doc(i) for i in x.slice.dims],
+                    ctx=doc.Load(
+                        lineno=None,
+                        col_offset=None,
+                        end_lineno=None,
+                        end_col_offset=None,
+                    ),
+                    lineno=getattr(x, "lineno", None),
+                    col_offset=getattr(x, "col_offset", None),
+                    end_lineno=getattr(x, "end_lineno", None),
+                    end_col_offset=getattr(x, "end_col_offset", None),
+                ),
+                ctx=to_doc(x.ctx),
+                lineno=getattr(x, "lineno", None),
+                col_offset=getattr(x, "col_offset", None),
+                end_lineno=getattr(x, "end_lineno", None),
+                end_col_offset=getattr(x, "end_col_offset", None),
+            )
+        if isinstance(x.slice, ast.Index):
+            return doc.Subscript(
+                value=to_doc(x.value),
+                slice=to_doc(x.slice.value),
+                ctx=to_doc(x.ctx),
+                lineno=getattr(x, "lineno", None),
+                col_offset=getattr(x, "col_offset", None),
+                end_lineno=getattr(x, "end_lineno", None),
+                end_col_offset=getattr(x, "end_col_offset", None),
+            )
+        raise TypeError(f"Unknown subscript type: {type(x.slice)}")
+
+    def subscript_from_doc(x: doc.Subscript) -> ast.Subscript:
+        if isinstance(x.slice, doc.Slice):
+            result = ast.Subscript(
+                value=from_doc(x.value),
+                slice=from_doc(x.slice),
+                ctx=from_doc(x.ctx),
+            )
+        elif isinstance(x.slice, doc.Tuple):
+
+            def remap_dim(doc_item: doc.Expr) -> ast.Expr:
+                ast_item = from_doc(doc_item)
+                if isinstance(ast_item, (ast.Index, ast.Slice)):
+                    return ast_item
+                return ast.Index(value=ast_item)
+
+            # ast.ExtSlice requires a non-empty list of dims, and each dim must be either
+            # a Slice or an Index.
+            if x.slice.elts:
+                ast_slice = ast.ExtSlice(dims=[*map(remap_dim, x.slice.elts)])
+            else:
+                ast_slice = ast.Index(value=ast.Tuple(elts=[], ctx=from_doc(x.ctx)))
+            result = ast.Subscript(value=from_doc(x.value), slice=ast_slice, ctx=from_doc(x.ctx))
+        else:
+            result = ast.Subscript(
+                value=from_doc(x.value),
+                slice=ast.Index(value=from_doc(x.slice)),
+                ctx=from_doc(x.ctx),
+            )
+        result.lineno = x.lineno
+        result.col_offset = x.col_offset
+        result.end_lineno = x.end_lineno
+        result.end_col_offset = x.end_col_offset
+        return result
+
+    register_to_doc("Subscript")(subscript_to_doc)
+    register_from_doc("Subscript")(subscript_from_doc)
+
+
+def _register_index_handling():
+    if _py_version() >= (3, 9):
+        return
+
+    def index_to_doc(x: ast.Index) -> doc.Expr:
+        return to_doc(x.value)
+
+    def index_from_doc(x: doc.Expr) -> ast.Index:
+        result = ast.Index(value=from_doc(x), ctx=from_doc(x.ctx))
+        result.lineno = x.lineno
+        result.col_offset = x.col_offset
+        result.end_lineno = x.end_lineno
+        result.end_col_offset = x.end_col_offset
+        return result
+
+    register_to_doc("Index")(index_to_doc)
+    register_from_doc("Index")(index_from_doc)
+
+
 _register_default()
+_register_constant_handling()
+_register_subscription_handling()
+_register_index_handling()

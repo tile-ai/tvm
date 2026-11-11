@@ -14,18 +14,20 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F811, RUF005
 
 import pytest
 
 import tvm
 import tvm.testing
-
 from tvm import relax as rx
-from tvm import tir
-from tvm.script import ir as I, relax as R, tir as T
+from tvm import tirx
+from tvm.script import ir as I
+from tvm.script import relax as R
+from tvm.script import tirx as T
 
-m = tir.Var("m", "int64")
-n = tir.Var("n", "int64")
+m = tirx.Var("m", "int64")
+n = tirx.Var("n", "int64")
 x = rx.Var("x", R.Tensor([m, n], "float32"))
 cond = rx.Var("cond", R.Tensor([], "bool"))
 
@@ -134,7 +136,7 @@ def test_global_var():
 
 def test_symbolic_var():
     # Error: Symbolic Var new_s is not defined
-    new_s = tir.Var("new_s", "int64")
+    new_s = tirx.Var("new_s", "int64")
     gv0 = rx.Var("gv0", R.Tensor([m, new_s], "int64"))
     call_node = rx.op.add(x, x)
     bindings = [rx.VarBinding(gv0, call_node)]
@@ -146,7 +148,7 @@ def test_symbolic_var():
 
 def test_symbolic_var_across_functions():
     # Error: Symbolic Var s presents across different functions
-    s = tir.Var("s", "int64")
+    s = tirx.Var("s", "int64")
     v0 = rx.Var("v0", R.Tensor([5, s], "float32"))
     v1 = rx.Var("v1", R.Tensor([s, 7], "float32"))
     bb = rx.BlockBuilder()
@@ -162,7 +164,7 @@ def test_symbolic_var_invalid_type():
     with pytest.raises(
         tvm.TVMError, match="the value in ShapeStructInfo can only have dtype of int64"
     ):
-        dim = tir.Var("dim", "float32")
+        dim = tirx.Var("dim", "float32")
         y = rx.Var("y", R.Tensor([dim], "float32"))
         gv0 = rx.Var("gv0", R.Tensor([dim], "float32"))
         call_node = rx.op.add(y, y)
@@ -413,7 +415,7 @@ def test_inline_prim_func():
                     [
                         rx.VarBinding(
                             var=x,
-                            value=tir.PrimFunc([], tir.Evaluate(0)),
+                            value=tirx.PrimFunc([], tirx.Evaluate(0)),
                         ),
                         rx.VarBinding(
                             var=y,
@@ -421,7 +423,7 @@ def test_inline_prim_func():
                                 op=tvm.ir.Op.get("relax.call_tir"),
                                 args=[
                                     rx.GlobalVar("GlobalVar0"),
-                                    rx.Tuple([x, tir.PrimFunc([], tir.Evaluate(0))]),
+                                    rx.Tuple([x, tirx.PrimFunc([], tirx.Evaluate(0))]),
                                     rx.ShapeExpr([]),
                                 ],
                             ),
@@ -496,8 +498,8 @@ def test_nested_dataflow():
 
 def test_sinfo_args_tir_var_used_before_define_call_packed():
     # Error: Symbolic Var m1, n1 are not defined
-    m1 = tir.Var("m1", "int64")
-    n1 = tir.Var("n1", "int64")
+    m1 = tirx.Var("m1", "int64")
+    n1 = tirx.Var("n1", "int64")
     call = R.call_packed("my_func", x, sinfo_args=R.Tensor((m1, n1), "float32"))
     func = build_function([rx.BindingBlock([rx.VarBinding(rx.Var("gv"), call)])])
     mod = rx.transform.Normalize()(tvm.IRModule.from_expr(func))
@@ -506,8 +508,8 @@ def test_sinfo_args_tir_var_used_before_define_call_packed():
 
 def test_sinfo_args_tir_var_used_before_define_call_tir():
     # Error: Symbolic Var m1, n1 are not defined
-    m1 = tir.Var("m1", "int64")
-    n1 = tir.Var("n1", "int64")
+    m1 = tirx.Var("m1", "int64")
+    n1 = tirx.Var("n1", "int64")
     call = R.call_dps_packed("my_func", x, out_sinfo=R.Tensor((m1, n1), "float32"))
     func = build_function([rx.BindingBlock([rx.VarBinding(rx.Var("gv"), call)])])
     mod = rx.transform.Normalize()(tvm.IRModule.from_expr(func))
@@ -524,8 +526,8 @@ def test_sinfo_erase_to_well_formed():
         gv = R.call_dps_packed("my_func", (x,), out_sinfo=R.Tensor((m, n), dtype="float32"))
         return gv
     """
-    m1 = tir.Var("m1", "int64")
-    n1 = tir.Var("n1", "int64")
+    m1 = tirx.Var("m1", "int64")
+    n1 = tirx.Var("n1", "int64")
     call = R.call_dps_packed("my_func", x, out_sinfo=R.Tensor((m, n), "float32"))
     blocks = [rx.BindingBlock([rx.VarBinding(rx.Var("gv"), call)])]
     seq_expr = rx.SeqExpr(blocks, blocks[-1].bindings[-1].var)
@@ -661,7 +663,7 @@ def test_pass_dltensor_arg_to_tir():
     """Relax may pass R.Tensor as DLTensor
 
     In TIR, a `DLTensor*` argument with unknown shape and dtype is
-    represented as a `tir.Var` with
+    represented as a `tirx.Var` with
     `tvm::PrimType(DataType::Handle())`, and with no entry in the
     `PrimFuncNode::buffer_map`.  In Relax, this is represented as
     `R.Tensor`.  Calls from Relax to TIR that pass a tensor of unknown
@@ -680,19 +682,19 @@ def test_pass_dltensor_arg_to_tir():
 
         @T.prim_func(private=True)
         def is_bfloat16_dtype(tensor: T.handle) -> T.bool:
-            T.func_attr({"tir.is_scheduled": True, "tir.is_host_func": True})
+            T.func_attr({"tirx.is_scheduled": True, "tirx.is_host_func": True})
 
-            # From #include <tvm/tir/builtin.h>
-            kArrTypeCode = T.meta_var(5)
-            kArrTypeBits = T.meta_var(6)
-            kArrTypeLanes = T.meta_var(7)
+            # From #include <tvm/tirx/builtin.h>
+            kDLTensorTypeCode = T.meta_var(5)
+            kDLTensorTypeBits = T.meta_var(6)
+            kDLTensorTypeLanes = T.meta_var(7)
 
             # From #include <dlpack/dlpack.h>
             kDLBfloat = T.meta_var(4)
 
-            type_code = T.tvm_struct_get(tensor, 0, kArrTypeCode, dtype="uint8")
-            type_bits = T.tvm_struct_get(tensor, 0, kArrTypeBits, dtype="uint8")
-            type_lanes = T.tvm_struct_get(tensor, 0, kArrTypeLanes, dtype="uint16")
+            type_code = T.tvm_struct_get(tensor, 0, kDLTensorTypeCode, dtype="uint8")
+            type_bits = T.tvm_struct_get(tensor, 0, kDLTensorTypeBits, dtype="uint8")
+            type_lanes = T.tvm_struct_get(tensor, 0, kDLTensorTypeLanes, dtype="uint16")
 
             is_bfloat16: T.bool = (
                 (type_code == kDLBfloat) and (type_bits == 16) and (type_lanes == 1)
@@ -715,7 +717,7 @@ def test_call_tir_with_matching_arguments():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -740,7 +742,7 @@ def test_call_tir_input_ndim():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -764,7 +766,7 @@ def test_call_tir_output_ndim():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -789,7 +791,7 @@ def test_call_tir_input_shape():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -813,7 +815,7 @@ def test_call_tir_output_shape():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -839,7 +841,7 @@ def test_call_tir_input_dtype():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -865,7 +867,7 @@ def test_call_tir_output_dtype():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16"), B: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi] + T.float16(1.0)
 
@@ -898,7 +900,7 @@ def test_call_tir_with_correct_dynamic_output_shape():
             B = T.match_buffer(B_handle, [M, N], dtype="float16")
 
             for i, j in T.grid(M, N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi, vj = T.axis.remap("SS", [i, j])
                     B[vi, vj] = A[vi * N + vj]
 
@@ -931,7 +933,7 @@ def test_call_tir_with_incorrect_dynamic_output_shape():
             B = T.match_buffer(B_handle, [M, N], dtype="float16")
 
             for i, j in T.grid(M, N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi, vj = T.axis.remap("SS", [i, j])
                     B[vi, vj] = A[vi * N + vj]
 
@@ -966,7 +968,7 @@ def test_call_tir_incorrect_dimensionality_of_output_shape():
             B = T.match_buffer(B_handle, [M, N], dtype="float16")
 
             for i, j in T.grid(M, N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi, vj = T.axis.remap("SS", [i, j])
                     B[vi, vj] = A[vi * N + vj]
 
@@ -1004,7 +1006,7 @@ def test_call_tir_output_shape_with_mixed_static_and_dynamic():
             B = T.match_buffer(B_handle, [16, M, N], dtype="float16")
 
             for i, j, k in T.grid(16, M, N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi, vj, vk = T.axis.remap("SSS", [i, j, k])
                     B[vi, vj, vk] = A[vi * N * M + vj * N + vk]
 
@@ -1037,7 +1039,7 @@ def test_call_tir_with_correct_inferred_dynamic_output_shape():
             B = T.match_buffer(B_handle, [M * N], dtype="float16")
 
             for i in T.grid(M * N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi // N, vi % N]
 
@@ -1075,7 +1077,7 @@ def test_call_tir_with_incorrect_inferred_dynamic_output_shape():
             B = T.match_buffer(B_handle, [M * N], dtype="float16")
 
             for i in T.grid(M * N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi // N, vi % N]
 
@@ -1114,7 +1116,7 @@ def test_call_tir_with_dtensor_arguments():
             B = T.match_buffer(B_handle, [M * N], dtype="float16")
 
             for i in T.grid(M * N):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = A[vi // N, vi % N]
 
@@ -1139,7 +1141,7 @@ def test_call_tir_inplace_with_correct_shapes():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     A[vi] = A[vi] + T.float16(1.0)
 
@@ -1164,7 +1166,7 @@ def test_call_tir_inplace_with_incorrect_shapes():
         @T.prim_func
         def add_one(A: T.Buffer(16, "float16")):
             for i in range(16):
-                with T.block("compute"):
+                with T.sblock("compute"):
                     vi = T.axis.remap("S", [i])
                     A[vi] = A[vi] + T.float16(1.0)
 
@@ -1196,12 +1198,12 @@ def test_call_tir_inplace_with_some_allocated_outputs():
             C: T.Buffer(16, "float16"),
         ):
             for i in range(32):
-                with T.block("inplace_B"):
+                with T.sblock("inplace_B"):
                     vi = T.axis.remap("S", [i])
                     B[vi] = B[vi] + T.float16(1.0)
 
             for i in range(16):
-                with T.block("output_C"):
+                with T.sblock("output_C"):
                     vi = T.axis.remap("S", [i])
                     C[vi] = A[vi] + T.float16(1.0)
 

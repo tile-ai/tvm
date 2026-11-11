@@ -28,14 +28,14 @@ namespace relax {
 
 /* relax.ccl.allreduce */
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   AllReduceAttrs::RegisterReflection();
   AllGatherAttrs::RegisterReflection();
   ScatterCollectiveAttrs::RegisterReflection();
-});
+}
 
-Expr allreduce(Expr x, String op_type, bool in_group) {
-  ObjectPtr<AllReduceAttrs> attrs = make_object<AllReduceAttrs>();
+Expr allreduce(Expr x, ffi::String op_type, bool in_group) {
+  ffi::ObjectPtr<AllReduceAttrs> attrs = ffi::make_object<AllReduceAttrs>();
   attrs->op_type = std::move(op_type);
   attrs->in_group = std::move(in_group);
 
@@ -43,10 +43,10 @@ Expr allreduce(Expr x, String op_type, bool in_group) {
   return Call(op, {std::move(x)}, Attrs{attrs}, {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.ccl.allreduce", allreduce);
-});
+}
 
 StructInfo InferStructInfoAllReduce(const Call& call, const BlockBuilder& ctx) {
   TensorStructInfo input_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
@@ -64,7 +64,7 @@ TVM_REGISTER_OP("relax.ccl.allreduce")
 /* relax.ccl.allgather */
 
 Expr allgather(Expr x, int num_workers, bool in_group) {
-  ObjectPtr<AllGatherAttrs> attrs = make_object<AllGatherAttrs>();
+  ffi::ObjectPtr<AllGatherAttrs> attrs = ffi::make_object<AllGatherAttrs>();
   attrs->num_workers = std::move(num_workers);
   attrs->in_group = std::move(in_group);
 
@@ -72,10 +72,10 @@ Expr allgather(Expr x, int num_workers, bool in_group) {
   return Call(op, {std::move(x)}, Attrs{attrs}, {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.ccl.allgather", allgather);
-});
+}
 
 StructInfo InferStructInfoAllGather(const Call& call, const BlockBuilder& ctx) {
   TensorStructInfo input_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
@@ -88,7 +88,7 @@ StructInfo InferStructInfoAllGather(const Call& call, const BlockBuilder& ctx) {
   if (!input_shape.defined()) {
     return input_sinfo;
   }
-  Array<PrimExpr> output_shape = input_shape.value();
+  ffi::Array<PrimExpr> output_shape = input_shape.value();
   output_shape.Set(0, floor(output_shape[0] * num_workers));
   return TensorStructInfo(ShapeExpr(output_shape), output_dtype, input_sinfo->vdevice);
 }
@@ -106,10 +106,10 @@ Expr broadcast_from_worker0(Expr x) {
   return Call(op, {std::move(x)}, {}, {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.ccl.broadcast_from_worker0", broadcast_from_worker0);
-});
+}
 
 StructInfo InferStructInfoBroadcastFromZero(const Call& call, const BlockBuilder& ctx) {
   TensorStructInfo input_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
@@ -126,7 +126,7 @@ TVM_REGISTER_OP("relax.ccl.broadcast_from_worker0")
 /* relax.ccl.scatter_from_worker0 */
 
 Expr scatter_from_worker0(Expr data, int num_workers, int axis) {
-  ObjectPtr<ScatterCollectiveAttrs> attrs = make_object<ScatterCollectiveAttrs>();
+  ffi::ObjectPtr<ScatterCollectiveAttrs> attrs = ffi::make_object<ScatterCollectiveAttrs>();
   attrs->num_workers = std::move(num_workers);
   attrs->axis = std::move(axis);
   static const Op& op = Op::Get("relax.ccl.scatter_from_worker0");
@@ -134,10 +134,10 @@ Expr scatter_from_worker0(Expr data, int num_workers, int axis) {
   return Call(op, {std::move(data)}, Attrs{attrs}, {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.ccl.scatter_from_worker0", scatter_from_worker0);
-});
+}
 
 StructInfo InferStructInfoScatter(const Call& call, const BlockBuilder& ctx) {
   TensorStructInfo input_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
@@ -148,7 +148,8 @@ StructInfo InferStructInfoScatter(const Call& call, const BlockBuilder& ctx) {
 
   arith::Analyzer* analyzer = ctx->GetAnalyzer();
   auto input_shape = input_sinfo->GetShape();
-  CHECK(input_shape.defined()) << "input tensor of scatter_from_worker0 should have defined shape.";
+  TVM_FFI_ICHECK(input_shape.defined())
+      << "input tensor of scatter_from_worker0 should have defined shape.";
 
   if (analyzer->CanProve(floormod(input_shape.value()[attrs->axis], PrimExpr(num_workers)) != 0)) {
     ctx->ReportFatal(Diagnostic::Error(call)
@@ -158,7 +159,7 @@ StructInfo InferStructInfoScatter(const Call& call, const BlockBuilder& ctx) {
                      << " while num_workers is " << num_workers);
   }
 
-  Array<PrimExpr> output_shape = input_shape.value();
+  ffi::Array<PrimExpr> output_shape = input_shape.value();
   output_shape.Set(attrs->axis, div(output_shape[attrs->axis], num_workers));
   return TensorStructInfo(ShapeExpr(output_shape), output_dtype, input_sinfo->vdevice);
 }

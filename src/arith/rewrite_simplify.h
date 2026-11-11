@@ -26,7 +26,8 @@
 
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/op.h>
+#include <tvm/ir/cow.h>
+#include <tvm/tirx/op.h>
 
 #include <algorithm>
 #include <unordered_map>
@@ -39,14 +40,14 @@
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 /* \brief Usage counters for RewriteSimplifier
  *
  * These are intended for debug and testing purposes, to ensure that
  * PrimExpr simplifications and TIR passes do not require an excessive
  */
-struct RewriteSimplifierStatsNode : Object {
+struct RewriteSimplifierStatsNode : ffi::Object {
   int64_t nodes_visited{0};
   int64_t constraints_entered{0};
   int64_t rewrites_attempted{0};
@@ -64,17 +65,17 @@ struct RewriteSimplifierStatsNode : Object {
         .def_ro("max_recursive_depth", &RewriteSimplifierStatsNode::max_recursive_depth)
         .def_ro("num_recursive_rewrites", &RewriteSimplifierStatsNode::num_recursive_rewrites);
   }
-
-  static constexpr const char* _type_key = "arith.RewriteSimplifierStats";
-  TVM_DECLARE_FINAL_OBJECT_INFO(RewriteSimplifierStatsNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("arith.RewriteSimplifierStats", RewriteSimplifierStatsNode,
+                                    ffi::Object);
 };
 
-struct RewriteSimplifierStats : ObjectRef {
+struct RewriteSimplifierStats : ffi::ObjectRef {
   explicit RewriteSimplifierStats(RewriteSimplifierStatsNode data) {
-    data_ = make_object<RewriteSimplifierStatsNode>(data);
+    data_ = ffi::make_object<RewriteSimplifierStatsNode>(data);
   }
 
-  TVM_DEFINE_OBJECT_REF_METHODS(RewriteSimplifierStats, ObjectRef, RewriteSimplifierStatsNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(RewriteSimplifierStats, ffi::ObjectRef,
+                                             RewriteSimplifierStatsNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(RewriteSimplifierStatsNode);
 };
 
@@ -116,7 +117,10 @@ class RewriteSimplifier::Impl : public IRMutatorWithAnalyzer {
   PrimExpr VisitExpr_(const CastNode* op) override;
   PrimExpr VisitExpr_(const LetNode* op) override;
 
-  std::function<void()> EnterConstraint(const PrimExpr& constraint);
+  std::function<void()> EnterConstraint(const PrimExpr& constraint, bool is_assume=false);
+
+  // Copy internal state from another Impl instance (used by Analyzer cloning)
+  void CopyFromImpl(const Impl& other);
 
   /*! \brief Enable an optional extension or extensions
    *
@@ -142,7 +146,8 @@ class RewriteSimplifier::Impl : public IRMutatorWithAnalyzer {
   void RecordRewrite() {
     stats_.rewrites_performed++;
 
-    ICHECK(maximum_rewrite_steps_ <= 0 || stats_.rewrites_performed <= maximum_rewrite_steps_)
+    TVM_FFI_ICHECK(maximum_rewrite_steps_ <= 0 ||
+                   stats_.rewrites_performed <= maximum_rewrite_steps_)
         << "RewriteSimplifier exceeded maximum number of rewrites allowed ("
         << maximum_rewrite_steps_ << ")";
   }
@@ -193,7 +198,7 @@ class RewriteSimplifier::Impl : public IRMutatorWithAnalyzer {
    * matches a constraint, return the boolean it should be replaced
    * with.  Otherwise, return false.
    */
-  Optional<PrimExpr> TryMatchLiteralConstraint(const PrimExpr& expr) const;
+  ffi::Optional<PrimExpr> TryMatchLiteralConstraint(const PrimExpr& expr) const;
 
   /*! \brief Rewrite rules for Less Than comparisons
    *

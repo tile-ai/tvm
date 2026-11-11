@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: RUF005
 import numpy as np
 import pytest
 
@@ -52,7 +53,7 @@ def build_and_run(mod, inputs_np, target, legalize=False, cuda_graph=False):
         ex = tvm.compile(mod, target)
     vm = relax.VirtualMachine(ex, dev)
     f = vm["main"]
-    inputs = [tvm.nd.array(inp, dev) for inp in inputs_np]
+    inputs = [tvm.runtime.tensor(inp, dev) for inp in inputs_np]
 
     # For cuda graph, run the compiled function twice to make sure that we can launch the cached
     # graph on the second run.
@@ -72,7 +73,7 @@ def get_result_with_relax_cublas_offload(mod, np_inputs, cuda_graph=False, bind_
 def _to_concrete_shape(symbolic_shape, var_table):
     result = []
     for dim in symbolic_shape:
-        if not isinstance(dim, tvm.tir.expr.Var):
+        if not isinstance(dim, tvm.tirx.expr.Var):
             result.append(dim)
             continue
 
@@ -84,8 +85,8 @@ def _to_concrete_shape(symbolic_shape, var_table):
 
 
 _vars = {
-    "a": tvm.tir.expr.Var("a", "int64"),
-    "b": tvm.tir.expr.Var("b", "int64"),
+    "a": tvm.tirx.expr.Var("a", "int64"),
+    "b": tvm.tirx.expr.Var("b", "int64"),
 }
 
 
@@ -548,7 +549,7 @@ def test_cublas_matmul_cuda_graph():
     out = get_result_with_relax_cublas_offload(Mod, inputs, cuda_graph=True)
 
     with tvm.target.Target("cuda"):
-        mod = tvm.tir.transform.DefaultGPUSchedule()(mod)
+        mod = tvm.s_tir.transform.DefaultGPUSchedule()(mod)
     ref = build_and_run(mod, inputs, "llvm", legalize=True)
     tvm.testing.assert_allclose(out, ref, rtol=1e-2, atol=1e-2)
 

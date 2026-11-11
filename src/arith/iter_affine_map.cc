@@ -22,12 +22,13 @@
  */
 #include <tvm/arith/analyzer.h>
 #include <tvm/arith/iter_affine_map.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/expr_functor.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/stmt_functor.h>
 
 #include <utility>
 
@@ -39,36 +40,32 @@
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   IterMarkNode::RegisterReflection();
   IterSplitExprNode::RegisterReflection();
   IterSumExprNode::RegisterReflection();
   IterMapResultNode::RegisterReflection();
-});
+}
 
 IterMark::IterMark(PrimExpr source, PrimExpr extent) {
-  auto n = make_object<IterMarkNode>();
+  auto n = ffi::make_object<IterMarkNode>();
   n->source = std::move(source);
   n->extent = std::move(extent);
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.IterMark",
                         [](PrimExpr source, PrimExpr extent) { return IterMark(source, extent); });
-});
+}
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<IterMarkNode>([](const ObjectRef& node, ReprPrinter* p) {
-      auto* op = static_cast<const IterMarkNode*>(node.get());
-      p->stream << "IterMark(" << op->source << ", extent=" << op->extent << ")";
-    });
+// Pattern A (RM): auto-default repr from reflection.
 
 IterSplitExpr::IterSplitExpr(IterMark source) {
-  auto n = make_object<IterSplitExprNode>();
+  auto n = ffi::make_object<IterSplitExprNode>();
   auto one = make_const(source->source->dtype, 1);
   n->dtype = source->source->dtype;
   n->source = std::move(source);
@@ -79,7 +76,7 @@ IterSplitExpr::IterSplitExpr(IterMark source) {
 }
 
 IterSplitExpr::IterSplitExpr(IterMark source, PrimExpr scale) {
-  auto n = make_object<IterSplitExprNode>();
+  auto n = ffi::make_object<IterSplitExprNode>();
   auto one = make_const(source->source->dtype, 1);
   n->dtype = source->source->dtype;
   n->source = std::move(source);
@@ -91,7 +88,7 @@ IterSplitExpr::IterSplitExpr(IterMark source, PrimExpr scale) {
 
 IterSplitExpr::IterSplitExpr(IterMark source, PrimExpr lower_factor, PrimExpr extent,
                              PrimExpr scale) {
-  auto n = make_object<IterSplitExprNode>();
+  auto n = ffi::make_object<IterSplitExprNode>();
   n->dtype = source->source->dtype;
   n->source = std::move(source);
   n->lower_factor = std::move(lower_factor);
@@ -100,41 +97,32 @@ IterSplitExpr::IterSplitExpr(IterMark source, PrimExpr lower_factor, PrimExpr ex
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.IterSplitExpr", [](IterMark source, PrimExpr lower_factor,
                                                   PrimExpr extent, PrimExpr scale) {
     return IterSplitExpr(source, lower_factor, extent, scale);
   });
-});
+}
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<IterSplitExprNode>([](const ObjectRef& node, ReprPrinter* p) {
-      auto* op = static_cast<const IterSplitExprNode*>(node.get());
-      p->stream << "IterSplit(" << op->source << ", lower_factor=" << op->lower_factor
-                << ", extent=" << op->extent << ", scale=" << op->scale << ")";
-    });
+// Pattern A (RM): auto-default repr from reflection.
 
-IterSumExpr::IterSumExpr(Array<IterSplitExpr> args, PrimExpr base) {
-  auto n = make_object<IterSumExprNode>();
+IterSumExpr::IterSumExpr(ffi::Array<IterSplitExpr> args, PrimExpr base) {
+  auto n = ffi::make_object<IterSumExprNode>();
   n->dtype = base->dtype;
   n->args = std::move(args);
   n->base = std::move(base);
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("arith.IterSumExpr", [](Array<IterSplitExpr> args, PrimExpr base) {
+  refl::GlobalDef().def("arith.IterSumExpr", [](ffi::Array<IterSplitExpr> args, PrimExpr base) {
     return IterSumExpr(args, base);
   });
-});
+}
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<IterSumExprNode>([](const ObjectRef& node, ReprPrinter* p) {
-      auto* op = static_cast<const IterSumExprNode*>(node.get());
-      p->stream << "IterSum(" << op->args << ", " << op->base << ")";
-    });
+// Pattern A (RM): auto-default repr from reflection.
 
 /*!
  * \brief Collector that collects the outgoing split reference of each IterMark.
@@ -144,15 +132,15 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
 class IterMarkSplitCollector {
  public:
   // mark all IterMarks that are visited.
-  std::unordered_set<IterMark, ObjectPtrHash, ObjectPtrEqual> visited_;
+  std::unordered_set<IterMark, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> visited_;
   // each iter mark to its outgoing splits that are referenced.
-  std::unordered_map<IterMark, std::vector<IterSplitExpr>, ObjectPtrHash, ObjectPtrEqual>
+  std::unordered_map<IterMark, std::vector<IterSplitExpr>, ffi::ObjectPtrHash, ffi::ObjectPtrEqual>
       mark2splits_;
   /*!
    * \brief Collect all mark2splits recursively from indices.
    * \param indices The iterator of interest.
    */
-  void Collect(const Array<IterSumExpr>& indices) {
+  void Collect(const ffi::Array<IterSumExpr>& indices) {
     for (IterSumExpr sum_expr : indices) {
       for (IterSplitExpr split : sum_expr->args) {
         this->CollectInternal(split->source);
@@ -186,9 +174,9 @@ class IterMapRewriter : public ExprMutator {
  public:
   using Parent = ExprMutator;
 
-  explicit IterMapRewriter(Analyzer* analyzer, const Map<Var, Range>& input_iters,
+  explicit IterMapRewriter(Analyzer* analyzer, const ffi::Map<Var, Range>& input_iters,
                            IterMapLevel check_level, bool simplify_trivial_iterators,
-                           Array<String>* errors)
+                           ffi::Array<ffi::String>* errors)
       : analyzer_(analyzer),
         check_level_(check_level),
         errors_(*errors),
@@ -227,8 +215,8 @@ class IterMapRewriter : public ExprMutator {
   }
 
   IterSumExpr RewriteIterConstraint(const PrimExpr& expr,
-                                    const Optional<PrimExpr>& predicate_induced_min,
-                                    const Optional<PrimExpr>& predicate_induced_max) {
+                                    const ffi::Optional<PrimExpr>& predicate_induced_min,
+                                    const ffi::Optional<PrimExpr>& predicate_induced_max) {
     return NormalizeToIterOnBoundExpr(ToIterSumExpr(DirectMutate(expr)), predicate_induced_min,
                                       predicate_induced_max);
   }
@@ -263,7 +251,7 @@ class IterMapRewriter : public ExprMutator {
    *   - bindings = [x / 3] will not pass because x / 3 can not be one split of x
    * \return whether the bindings are valid
    */
-  bool CheckMapping(const Array<IterSumExpr>& bindings, IterMapLevel check_level) {
+  bool CheckMapping(const ffi::Array<IterSumExpr>& bindings, IterMapLevel check_level) {
     IterMarkSplitCollector collector;
     // We can check that for each iter mark:
     // All the splits that refers to the iter_mark covers its extent.
@@ -376,7 +364,7 @@ class IterMapRewriter : public ExprMutator {
    * It is not an error for IterMapRewriter to receive an expression that
    * cannot be represented as an IterSumExpr.  In these cases,
    * IterMapRewriter returns the unrepresentable portions of the TIR graph
-   * without modification.  As a result, the usual ICHECK or LOG(FATAL)
+   * without modification.  As a result, the usual TVM_FFI_ICHECK or TVM_FFI_THROW(InternalError)
    * macros cannot be used.  Instead, ErrorLogger(this) can be used to
    * report an unrepresentable TIR graph, which may be used in error
    * messages at the calling scope.
@@ -414,7 +402,7 @@ class IterMapRewriter : public ExprMutator {
       // for now only hash on source index.
       size_t hash = value->args.size();
       for (const IterSplitExpr& arg : value->args) {
-        hash = support::HashCombine(hash, std::hash<const Object*>()(arg->source.get()));
+        hash = support::HashCombine(hash, std::hash<const ffi::Object*>()(arg->source.get()));
       }
       return hash;
     }
@@ -422,7 +410,7 @@ class IterMapRewriter : public ExprMutator {
 
   static bool IterSplitEqual(const IterSplitExpr& lhs, const IterSplitExpr& rhs,
                              bool check_scale = true) {
-    tir::ExprDeepEqual equal;
+    tirx::ExprDeepEqual equal;
     if (!lhs->source.same_as(rhs->source)) return false;
     if (!equal(lhs->lower_factor, rhs->lower_factor)) return false;
     if (check_scale && !equal(lhs->scale, rhs->scale)) return false;
@@ -432,7 +420,7 @@ class IterMapRewriter : public ExprMutator {
 
   struct IterSumEqual {
     bool operator()(const IterSumExpr& lhs, const IterSumExpr& rhs) const {
-      tir::ExprDeepEqual equal;
+      tirx::ExprDeepEqual equal;
       if (lhs->args.size() != rhs->args.size()) return false;
       if (!equal(lhs->base, rhs->base)) return false;
       for (size_t i = 0; i < lhs->args.size(); ++i) {
@@ -447,7 +435,7 @@ class IterMapRewriter : public ExprMutator {
   // Iter map check level
   IterMapLevel check_level_;
   // Error messages for each unresolved expression.
-  Array<String>& errors_;
+  ffi::Array<ffi::String>& errors_;
   // The var map
   std::unordered_map<Var, PrimExpr> var_map_;
   // input iter marks
@@ -458,10 +446,12 @@ class IterMapRewriter : public ExprMutator {
   // usage of an input iterator.  (e.g. (i-1) occurring in the
   // expressions [(i-1)%8, ((i-1)//8)%4, (i-1)//32] should be
   // left-padded by 31 for each occurrence.)
-  std::unordered_map<IterMark, IterPaddingInfo, StructuralHash, StructuralEqual> padded_iter_map_;
+  std::unordered_map<IterMark, IterPaddingInfo, ffi::StructuralHash, ffi::StructuralEqual>
+      padded_iter_map_;
 
   // Map from padded iter mark to it's origin mark
-  std::unordered_map<IterMark, IterMark, StructuralHash, StructuralEqual> padded_origin_map_;
+  std::unordered_map<IterMark, IterMark, ffi::StructuralHash, ffi::StructuralEqual>
+      padded_origin_map_;
 
   /* If update_iterator_padding_ is true, allow the extents of the IterMap to be
    * padded beyond the original iterators.
@@ -568,9 +558,9 @@ class IterMapRewriter : public ExprMutator {
    * \param check_level Iteration mapping's check level.
    * \return The normalized splits.
    */
-  Array<IterSplitExpr> TryNormalizeSplits(const IterMark& mark,
-                                          const std::vector<IterSplitExpr>& splits,
-                                          IterMapLevel check_level) {
+  ffi::Array<IterSplitExpr> TryNormalizeSplits(const IterMark& mark,
+                                               const std::vector<IterSplitExpr>& splits,
+                                               IterMapLevel check_level) {
     std::vector<bool> used(splits.size(), false);
     std::vector<IterSplitExpr> iters;
     PrimExpr expected_lower_factor = make_const(mark->source->dtype, 1);
@@ -586,7 +576,7 @@ class IterMapRewriter : public ExprMutator {
       if (j == splits.size()) {
         // we do not allow incomplete split if the bindings should be bijective
         if (check_level == IterMapLevel::Bijective) {
-          return Array<IterSplitExpr>();
+          return ffi::Array<IterSplitExpr>();
         }
         // look for the next split skipping this lower factor
         // For example, y \in [0, 24) has 3 splits [y / 6, (y / 2) % 6, y % 2]
@@ -595,7 +585,7 @@ class IterMapRewriter : public ExprMutator {
         j = SearchSkipLowerFactor(splits, used, expected_lower_factor);
         // split not found
         if (j == splits.size()) {
-          return Array<IterSplitExpr>();
+          return ffi::Array<IterSplitExpr>();
         }
       }
 
@@ -647,24 +637,24 @@ class IterMapRewriter : public ExprMutator {
       if (match_full_iter) {
         if (splits.size() != 1) {
           ErrorLogger(this) << "Dependent iterations on padding iter space";
-          return Array<IterSplitExpr>();
+          return ffi::Array<IterSplitExpr>();
         } else if (analyzer_->CanProveEqual(splits[0]->extent, expected_lower_factor) &&
                    !analyzer_->CanProve(extent_before_padding >= expected_lower_factor)) {
           ErrorLogger(this) << "Split on padding iteration is not surjective "
                             << "if the split extent equals to the full iter space extent";
-          return Array<IterSplitExpr>();
+          return ffi::Array<IterSplitExpr>();
         }
       } else if (match_iter_divisor) {
         if (!analyzer_->CanProve(extent_before_padding >= expected_lower_factor)) {
           ErrorLogger(this) << "The extent before padding is less than lower factor";
-          return Array<IterSplitExpr>();
+          return ffi::Array<IterSplitExpr>();
         }
       } else {
         ErrorLogger(this) << "The lower factor is not divisible by the full iter space extent";
         return {};
       }
     }
-    return Array<IterSplitExpr>(iters.rbegin(), iters.rend());
+    return ffi::Array<IterSplitExpr>(iters.rbegin(), iters.rend());
   }
 
   /*!
@@ -674,8 +664,9 @@ class IterMapRewriter : public ExprMutator {
    * \param predicate_induced_max Open upper bound from iter constraint, maybe undefined.
    * \return The Normalized expression.
    */
-  IterSumExpr NormalizeToIterOnBoundExpr(IterSumExpr expr, Optional<PrimExpr> predicate_induced_min,
-                                         Optional<PrimExpr> predicate_induced_max) {
+  IterSumExpr NormalizeToIterOnBoundExpr(IterSumExpr expr,
+                                         ffi::Optional<PrimExpr> predicate_induced_min,
+                                         ffi::Optional<PrimExpr> predicate_induced_max) {
     // normalize to zero base
     PrimExpr base = expr->base;
     if (!is_zero(base)) {
@@ -685,19 +676,19 @@ class IterMapRewriter : public ExprMutator {
       if (predicate_induced_max.defined())
         predicate_induced_max = predicate_induced_max.value() - base;
     }
-    Optional<IterSumExpr> opt = TryFuseIters(expr, check_level_, false);
-    ICHECK(!opt.defined() || opt.value()->args.size() == 1);
+    ffi::Optional<IterSumExpr> opt = TryFuseIters(expr, check_level_, false);
+    TVM_FFI_ICHECK(!opt.defined() || opt.value()->args.size() == 1);
     // scale should be 1
     if (opt.defined() && is_one(opt.value()->args[0]->scale)) {
       const IterSplitExpr split = opt.value()->args[0];
       IterSumExpr structured_form = Downcast<IterSumExpr>(split->source->source);
       // get the flattened form
       auto it = flattened_map_.find(structured_form);
-      ICHECK(it != flattened_map_.end());
+      TVM_FFI_ICHECK(it != flattened_map_.end());
       IterSumExpr flattened_form = it->second;
       // get the mark and offset of the structured_form
       auto it_mark = sum_fuse_map_.find(flattened_form);
-      ICHECK(it_mark != sum_fuse_map_.end());
+      TVM_FFI_ICHECK(it_mark != sum_fuse_map_.end());
       IterMark mark = it_mark->second.mark;
       PrimExpr mark_offset = it_mark->second.offset;
       PrimExpr iter_min = mark_offset;
@@ -739,7 +730,7 @@ class IterMapRewriter : public ExprMutator {
       // to check the validity of constraints, see also CheckConstraints()
       constrained_iters_flattened_.push_back(flattened_form);
       IterSumExprNode* normalized_expr = expr.CopyOnWrite();
-      normalized_expr->args = Array<IterSplitExpr>({split});
+      normalized_expr->args = ffi::Array<IterSplitExpr>({split});
       normalized_expr->base = base;
       return expr;
     }
@@ -755,7 +746,7 @@ class IterMapRewriter : public ExprMutator {
   IterSumExpr NormalizeToIterWithOffset(IterSumExpr expr) {
     // We are normalizing a regular iter
     if (expr->args.size() < 1) return expr;
-    Optional<IterSumExpr> opt = TryFuseIters(expr, check_level_, true);
+    ffi::Optional<IterSumExpr> opt = TryFuseIters(expr, check_level_, true);
     if (opt.defined()) {
       return opt.value();
     } else {
@@ -797,7 +788,7 @@ class IterMapRewriter : public ExprMutator {
     for (IterSplitExpr split : expr->args) {
       int64_t symbol_prod_count = 0;
       int64_t cscale = 1;
-      PrimExpr res = tir::make_const(split.dtype(), 1);
+      PrimExpr res = tirx::make_const(split.dtype(), 1);
       auto fcollect = [&](PrimExpr val) {
         if (const auto* intimm = val.as<IntImmNode>()) {
           cscale *= intimm->value;
@@ -806,9 +797,9 @@ class IterMapRewriter : public ExprMutator {
           ++symbol_prod_count;
         }
       };
-      UnpackReduction<tir::MulNode>(split->scale, fcollect);
+      UnpackReduction<tirx::MulNode>(split->scale, fcollect);
       if (cscale != 1) {
-        res = res * tir::make_const(res.dtype(), cscale);
+        res = res * tirx::make_const(res.dtype(), cscale);
       }
       split.CopyOnWrite()->scale = res;
       items.emplace_back(Item{cscale, symbol_prod_count, split});
@@ -820,7 +811,7 @@ class IterMapRewriter : public ExprMutator {
       return lhs.symbol_prod_count > rhs.symbol_prod_count;
     });
 
-    Array<IterSplitExpr> args;
+    ffi::Array<IterSplitExpr> args;
     for (const Item& item : items) {
       args.push_back(item.split);
     }
@@ -841,7 +832,7 @@ class IterMapRewriter : public ExprMutator {
     } else if (auto op = expr.as<IterSplitExpr>()) {
       return IterSumExpr({op.value()}, make_zero(expr->dtype));
     } else {
-      ICHECK(!expr->IsInstance<IterMapExprNode>());
+      TVM_FFI_ICHECK(!expr->IsInstance<IterMapExprNode>());
       return IterSumExpr({}, expr);
     }
   }
@@ -857,7 +848,7 @@ class IterMapRewriter : public ExprMutator {
    * \return Whether we can find one.
    */
   int FindBaseIter(const IterSumExpr& expr, const std::vector<bool>& skip_flag,
-                   Optional<IterMark> match_source, int rbegin = -1) {
+                   ffi::Optional<IterMark> match_source, int rbegin = -1) {
     if (rbegin == -1) {
       rbegin = static_cast<int>(expr->args.size()) - 1;
     }
@@ -891,7 +882,7 @@ class IterMapRewriter : public ExprMutator {
       if (match_source.defined() && !match_source.same_as(expr->args[i]->source)) continue;
       int reduce_size = 0;
       auto fcollect = [&](const PrimExpr&) { ++reduce_size; };
-      UnpackReduction<tir::MulNode>(expr->args[i]->scale, fcollect);
+      UnpackReduction<tirx::MulNode>(expr->args[i]->scale, fcollect);
       if (base_index == -1 || reduce_size < min_reduce_size) {
         min_reduce_size = reduce_size;
         base_index = static_cast<int>(i);
@@ -927,7 +918,7 @@ class IterMapRewriter : public ExprMutator {
    * \return -1 if not no match found, otherwise return the index.
    */
   int FindIterWithExactScale(const IterSumExpr& expr, const std::vector<bool>& skip_flag,
-                             const PrimExpr& expected_scale, Optional<IterMark> match_source,
+                             const PrimExpr& expected_scale, ffi::Optional<IterMark> match_source,
                              int rbegin = -1, int first_possible_unit_extent_pos = 0) {
     if (rbegin == -1) {
       rbegin = static_cast<int>(expr->args.size()) - 1;
@@ -993,9 +984,9 @@ class IterMapRewriter : public ExprMutator {
    * \param check_level The check level if iter mapping.
    * \return The sum with the fused IterMark and extra offset if succeed.
    */
-  Optional<IterSumExpr> TryCombineSplitFromSameSource(IterSumExpr expr) {
+  ffi::Optional<IterSumExpr> TryCombineSplitFromSameSource(IterSumExpr expr) {
     if (expr->args.size() <= 1) return std::nullopt;
-    std::unordered_map<IterMark, int, ObjectPtrHash, ObjectPtrEqual> hit_count;
+    std::unordered_map<IterMark, int, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> hit_count;
     // most iter map are small n < 5
     // so we can afford N^2 complexity
     bool has_overlap = false;
@@ -1052,7 +1043,7 @@ class IterMapRewriter : public ExprMutator {
       // - result->extent = lhs->extent * rhs->extent
       // Find base index, must have a candidate to make progress
       int matched_index = FindBaseIter(expr, visited, expr->args[rend]->source, rend);
-      ICHECK_NE(matched_index, -1);
+      TVM_FFI_ICHECK_NE(matched_index, -1);
       visited[matched_index] = true;
       IterSplitExpr rhs_iter = expr->args[matched_index];
 
@@ -1063,7 +1054,7 @@ class IterMapRewriter : public ExprMutator {
                                                first_possible_unit_extent_pos);
         if (matched_index == -1) break;
         IterSplitExpr lhs_iter = expr->args[matched_index];
-        ICHECK(rhs_iter->source.same_as(lhs_iter->source));
+        TVM_FFI_ICHECK(rhs_iter->source.same_as(lhs_iter->source));
         PrimExpr lhs_lower_factor = MulAndNormalize(rhs_iter->lower_factor, rhs_iter->extent);
         if (!analyzer_->CanProveEqual(lhs_iter->lower_factor, lhs_lower_factor)) break;
         // all patterns match
@@ -1078,7 +1069,7 @@ class IterMapRewriter : public ExprMutator {
     IterSumExpr simplified_sum = expr;
     // flip the order so we preserve the original order
     simplified_sum.CopyOnWrite()->args =
-        Array<IterSplitExpr>(reverse_flattened_iters.rbegin(), reverse_flattened_iters.rend());
+        ffi::Array<IterSplitExpr>(reverse_flattened_iters.rbegin(), reverse_flattened_iters.rend());
     return simplified_sum;
   }
 
@@ -1095,8 +1086,8 @@ class IterMapRewriter : public ExprMutator {
    *        (this may cause us to return parameters that are not canonically wrapped as
    * IterSum(IterMark)) \return The sum with the fused IterMark and extra offset if succeed.
    */
-  Optional<IterSumExpr> TryFuseIters(IterSumExpr expr, IterMapLevel check_level,
-                                     bool allow_early_skip) {
+  ffi::Optional<IterSumExpr> TryFuseIters(IterSumExpr expr, IterMapLevel check_level,
+                                          bool allow_early_skip) {
     if (auto opt = TryCombineSplitFromSameSource(expr)) {
       expr = opt.value();
       if (expr->args.size() <= 1 && allow_early_skip) {
@@ -1140,13 +1131,13 @@ class IterMapRewriter : public ExprMutator {
       if (matched_pos == -1) {
         return std::nullopt;
       }
-      ICHECK(matched_scale.defined());
+      TVM_FFI_ICHECK(matched_scale.defined());
       // look for the longest constrained iter started from expr->args[j]
       // Example: expr = i*9 + j*2 + k, i in [0, 4) j in [0, 5) k in [0, 2)
       //          predicate: j*2 + k < 9
       // We need to match the predicate in expr and adjust the expected scale,
       // otherwise we expect the scale of i to be 2*5=10
-      Optional<IterSumExpr> constraint_to_match;
+      ffi::Optional<IterSumExpr> constraint_to_match;
       for (const IterSumExpr& iter : constrained_iters_flattened_) {
         if (IterSplitEqual(expr->args[matched_pos], iter->args.back(), false)) {
           // find a predicate started from match position
@@ -1178,7 +1169,7 @@ class IterMapRewriter : public ExprMutator {
           flattened_iters.push_back(expr->args[k]);
         }
         auto iter = sum_fuse_map_.find(constraint_to_match.value());
-        ICHECK(iter != sum_fuse_map_.end());
+        TVM_FFI_ICHECK(iter != sum_fuse_map_.end());
         const IterMarkWithOffset& iter_matched = iter->second;
         grouped_iters.emplace_back(iter_matched.mark, floordiv(matched_scale, base_scale));
         expected_extra_base += iter_matched.offset * matched_scale;
@@ -1208,10 +1199,10 @@ class IterMapRewriter : public ExprMutator {
     // both forms have splits from outermost to innermost
     IterSumExpr structured_form = expr, flattened_form = expr;
     flattened_form.CopyOnWrite()->args =
-        Array<IterSplitExpr>(flattened_iters.rbegin(), flattened_iters.rend());
+        ffi::Array<IterSplitExpr>(flattened_iters.rbegin(), flattened_iters.rend());
     flattened_form.CopyOnWrite()->base = make_const(expr.dtype(), 0);
     structured_form.CopyOnWrite()->args =
-        Array<IterSplitExpr>(grouped_iters.rbegin(), grouped_iters.rend());
+        ffi::Array<IterSplitExpr>(grouped_iters.rbegin(), grouped_iters.rend());
     structured_form.CopyOnWrite()->base = make_const(expr.dtype(), 0);
     auto it = sum_fuse_map_.find(flattened_form);
     if (it != sum_fuse_map_.end()) {
@@ -1237,7 +1228,7 @@ class IterMapRewriter : public ExprMutator {
   PrimExpr SplitFloorModConst(IterSplitExpr lhs, PrimExpr base, PrimExpr rhs);
 
   static void AddToLhs(IterSumExprNode* lhs, IterSplitExpr rhs, int sign) {
-    tir::ExprDeepEqual equal;
+    tirx::ExprDeepEqual equal;
     for (size_t i = 0; i < lhs->args.size(); ++i) {
       IterSplitExpr lvalue = lhs->args[i];
       if (lvalue->source.same_as(rhs->source) && equal(lvalue->lower_factor, rhs->lower_factor) &&
@@ -1285,14 +1276,14 @@ struct IterConstraint {
   // The expr of the iter
   PrimExpr iter;
   // The expr of the lower_bound, maybe undefined
-  Optional<PrimExpr> lower_bound;
+  ffi::Optional<PrimExpr> lower_bound;
   // The expr of the upper_bound, maybe undefined
-  Optional<PrimExpr> upper_bound;
+  ffi::Optional<PrimExpr> upper_bound;
   // The size of the iter, which is the number of nodes
   size_t expr_size = 0;
 
-  IterConstraint(PrimExpr iter, Optional<PrimExpr> lower_bound, Optional<PrimExpr> upper_bound,
-                 size_t size)
+  IterConstraint(PrimExpr iter, ffi::Optional<PrimExpr> lower_bound,
+                 ffi::Optional<PrimExpr> upper_bound, size_t size)
       : iter(std::move(iter)),
         lower_bound(std::move(lower_bound)),
         upper_bound(std::move(upper_bound)),
@@ -1306,7 +1297,7 @@ struct IterConstraint {
  * \param result The result of predicate split.
  * \return A list of IterConstraint, empty if the split failed.
  */
-bool MatchBoundConstraints(PrimExpr pred, Map<Var, Range>* input_iters,
+bool MatchBoundConstraints(PrimExpr pred, ffi::Map<Var, Range>* input_iters,
                            std::vector<IterConstraint>* result) {
   arith::PVar<PrimExpr> lhs, rhs, rest;
   for (;;) {
@@ -1348,7 +1339,7 @@ bool MatchBoundConstraints(PrimExpr pred, Map<Var, Range>* input_iters,
     // determine iter and bound, if we can not distinguish them simply,
     // try divide (lhs - rhs) into itervar aware and itervar free parts
     auto f_use_itervar = [&input_iters](const VarNode* v) {
-      return input_iters->count(GetRef<Var>(v));
+      return input_iters->count(ffi::GetRef<Var>(v));
     };
     bool bound_at_left;
     if (UsesVar(lhs_expr, f_use_itervar) || UsesVar(rhs_expr, f_use_itervar)) {
@@ -1381,7 +1372,7 @@ bool MatchBoundConstraints(PrimExpr pred, Map<Var, Range>* input_iters,
         lhs_expr = analyzer.Simplify(lhs_expr);
         rhs_expr = analyzer.Simplify(rhs_expr);
       }
-      Optional<PrimExpr> lower_bound = std::nullopt, upper_bound = std::nullopt;
+      ffi::Optional<PrimExpr> lower_bound = std::nullopt, upper_bound = std::nullopt;
       PrimExpr iter;
       if (is_greater) {
         if (bound_at_left) {
@@ -1427,19 +1418,20 @@ bool MatchBoundConstraints(PrimExpr pred, Map<Var, Range>* input_iters,
   return true;
 }
 
-bool IterRangeSanityCheck(const Map<Var, Range>& iter_ranges) {
+bool IterRangeSanityCheck(const ffi::Map<Var, Range>& iter_ranges) {
   std::unordered_set<Var> iters;
   for (const auto& it : iter_ranges) iters.insert(it.first);
-  auto f = [&](const VarNode* var) { return iters.count(GetRef<Var>(var)); };
+  auto f = [&](const VarNode* var) { return iters.count(ffi::GetRef<Var>(var)); };
   for (const auto& it : iter_ranges) {
     if (UsesVar(it.second->min, f) || UsesVar(it.second->extent, f)) return false;
   }
   return true;
 }
 
-IterMapResult DetectIterMap(const Array<PrimExpr>& indices, const Map<Var, Range>& input_iters,
-                            const PrimExpr& predicate, IterMapLevel check_level,
-                            arith::Analyzer* analyzer, bool simplify_trivial_iterators) {
+IterMapResult DetectIterMap(const ffi::Array<PrimExpr>& indices,
+                            const ffi::Map<Var, Range>& input_iters, const PrimExpr& predicate,
+                            IterMapLevel check_level, arith::Analyzer* analyzer,
+                            bool simplify_trivial_iterators) {
   IterMapResult result;
 
   // Overall detection algorithm is divided into two steps:
@@ -1449,7 +1441,7 @@ IterMapResult DetectIterMap(const Array<PrimExpr>& indices, const Map<Var, Range
     result->errors.push_back("Invalid iterators.  Iterators may not be expressions of each other.");
     return result;
   }
-  Map<Var, Range> constrained_input_iters = input_iters;
+  ffi::Map<Var, Range> constrained_input_iters = input_iters;
   std::vector<IterConstraint> constraints;
   if (!is_one(predicate) &&
       !MatchBoundConstraints(predicate, &constrained_input_iters, &constraints)) {
@@ -1484,7 +1476,7 @@ IterMapResult DetectIterMap(const Array<PrimExpr>& indices, const Map<Var, Range
 
   // Step0.1: Rewrite indicies and determine required padding,
   // if there is no padding, it should be the final result.
-  Array<IterSumExpr> rewrite_indices;
+  ffi::Array<IterSumExpr> rewrite_indices;
   rewrite_indices.reserve(indices.size());
   bool allow_padding = check_level != IterMapLevel::Bijective;
   if (allow_padding) {
@@ -1522,22 +1514,22 @@ IterMapResult DetectIterMap(const Array<PrimExpr>& indices, const Map<Var, Range
   return result;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def(
       "arith.DetectIterMap",
-      [](const Array<PrimExpr>& indices, const Map<Var, Range>& input_iters,
+      [](const ffi::Array<PrimExpr>& indices, const ffi::Map<Var, Range>& input_iters,
          const PrimExpr& input_pred, int check_level, bool simplify_trivial_iterators) {
         arith::Analyzer ana;
         return DetectIterMap(indices, input_iters, input_pred, IterMapLevel(check_level), &ana,
                              simplify_trivial_iterators);
       });
-});
+}
 
-IterSumExpr NormalizeToIterSum(PrimExpr index, const Map<Var, Range>& input_iters,
+IterSumExpr NormalizeToIterSum(PrimExpr index, const ffi::Map<Var, Range>& input_iters,
                                arith::Analyzer* analyzer) {
   IterMapResult result;
-  ICHECK(IterRangeSanityCheck(input_iters))
+  TVM_FFI_ICHECK(IterRangeSanityCheck(input_iters))
       << "Invalid iterators.  Iterators may not be expressions of each other.";
 
   // we skip constraint check as the most important thing here is only the pattern
@@ -1550,17 +1542,17 @@ IterSumExpr NormalizeToIterSum(PrimExpr index, const Map<Var, Range>& input_iter
   return rewriter.RewriteToNormalizedIterSum(index);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.NormalizeToIterSum",
-                        [](PrimExpr index, const Map<Var, Range>& input_iters) {
+                        [](PrimExpr index, const ffi::Map<Var, Range>& input_iters) {
                           arith::Analyzer ana;
                           return NormalizeToIterSum(index, input_iters, &ana);
                         });
-});
+}
 
 PrimExpr IterMapRewriter::VisitExpr_(const VarNode* op) {
-  auto var = GetRef<Var>(op);
+  auto var = ffi::GetRef<Var>(op);
   auto it = var_map_.find(var);
   if (it != var_map_.end()) return it->second;
   return var;
@@ -1578,7 +1570,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const AddNode* op) {
   // does not contain iter map.
   if (!a->IsInstance<IterMapExprNode>() && !b->IsInstance<IterMapExprNode>()) {
     if (op->a.same_as(a) && op->b.same_as(b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return Add(a, b);
     }
@@ -1613,7 +1605,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const SubNode* op) {
   // does not contain iter map.
   if (!a->IsInstance<IterMapExprNode>() && !b->IsInstance<IterMapExprNode>()) {
     if (op->a.same_as(a) && op->b.same_as(b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return Sub(a, b);
     }
@@ -1648,7 +1640,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const MulNode* op) {
   // does not contain iter map.
   if (!a->IsInstance<IterMapExprNode>() && !b->IsInstance<IterMapExprNode>()) {
     if (op->a.same_as(a) && op->b.same_as(b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return Mul(a, b);
     }
@@ -1657,8 +1649,8 @@ PrimExpr IterMapRewriter::VisitExpr_(const MulNode* op) {
   if (a->IsInstance<IterMapExprNode>() && b->IsInstance<IterMapExprNode>()) {
     // cannot multiply two iterators, mark as unresolved.
     ErrorLogger(this) << "Product of two iterators cannot be represented as an IterMap, "
-                      << "occurs in " << GetRef<Mul>(op);
-    return GetRef<PrimExpr>(op);
+                      << "occurs in " << ffi::GetRef<Mul>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
 
   if (!a->IsInstance<IterMapExprNode>()) {
@@ -1671,7 +1663,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const MulNode* op) {
     return ret;
 
   } else {
-    ICHECK(a->IsInstance<IterSplitExprNode>());
+    TVM_FFI_ICHECK(a->IsInstance<IterSplitExprNode>());
     IterSplitExpr ret = Downcast<IterSplitExpr>(std::move(a));
     ret.CopyOnWrite()->scale *= b;
     return ret;
@@ -1696,10 +1688,10 @@ IterSumExpr IterMapRewriter::PreprocessDividend(IterMapExpr dividend, PrimExpr o
       return IterSumExpr();
     }
     IterSumExpr fused = opt_fused.value();
-    ICHECK_EQ(fused->args.size(), 1U);
+    TVM_FFI_ICHECK_EQ(fused->args.size(), 1U);
     return fused;
   } else {
-    LOG(FATAL) << "Unsupported subclass of IterMarkExpr";
+    TVM_FFI_THROW(InternalError) << "Unsupported subclass of IterMarkExpr";
   }
 }
 
@@ -1796,10 +1788,10 @@ std::pair<IterSplitExpr, PrimExpr> IterMapRewriter::PadDividendToDivisor(IterSpl
   }
 
   // check that padding factor is compatible with current split and divisor
-  ICHECK(CanProveDivisible(info.padding_factor, split->lower_factor))
+  TVM_FFI_ICHECK(CanProveDivisible(info.padding_factor, split->lower_factor))
       << "The padding factor " << info.padding_factor << " is not divisible by "
       << split->lower_factor << " for the split " << split;
-  ICHECK(CanProveDivisible(info.padding_factor, divisor))
+  TVM_FFI_ICHECK(CanProveDivisible(info.padding_factor, divisor))
       << "The padding factor " << info.padding_factor << " is not divisible by " << divisor
       << " for the split " << split;
 
@@ -1961,7 +1953,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const FloorDivNode* op) {
   // does not contain iter map.
   if (!a->IsInstance<IterMapExprNode>() && !b->IsInstance<IterMapExprNode>()) {
     if (op->a.same_as(a) && op->b.same_as(b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return FloorDiv(a, b);
     }
@@ -1969,19 +1961,19 @@ PrimExpr IterMapRewriter::VisitExpr_(const FloorDivNode* op) {
 
   if (b->IsInstance<IterMapExprNode>()) {
     // cannot divide an iterator, mark as unresolved.
-    ErrorLogger(this) << "Cannot represent as an IterMap: the divisor in " << GetRef<PrimExpr>(op)
-                      << " may not be an iterator";
-    return GetRef<PrimExpr>(op);
+    ErrorLogger(this) << "Cannot represent as an IterMap: the divisor in "
+                      << ffi::GetRef<PrimExpr>(op) << " may not be an iterator";
+    return ffi::GetRef<PrimExpr>(op);
   }
 
   IterSumExpr preprocessed = PreprocessDividend(Downcast<IterMapExpr>(a), op->a);
   if (!preprocessed.defined()) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
-  ICHECK_EQ(preprocessed->args.size(), 1U);
+  TVM_FFI_ICHECK_EQ(preprocessed->args.size(), 1U);
   PrimExpr remainder = SplitFloorDivConst(preprocessed->args[0], preprocessed->base, b);
   if (!remainder.defined()) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
   return remainder;
 }
@@ -2017,6 +2009,23 @@ PrimExpr IterMapRewriter::SplitFloorModConst(IterSplitExpr lhs, PrimExpr base, P
 
   // We handle scale!=1 in above code, hence we only consider floormod(x, rhs) below
   // where x=floormod(floordiv(iter, lower_factor), extent) + base
+  PrimExpr source_upper_bound = lhs->source->extent;
+  auto origin_it = padded_origin_map_.find(lhs->source);
+  if (origin_it != padded_origin_map_.end()) {
+    auto padding_it = padded_iter_map_.find(origin_it->second);
+    TVM_FFI_ICHECK(padding_it != padded_iter_map_.end());
+    // Right padding only contains values excluded by padding_predicate_, so it
+    // cannot make the inner floormod wrap over the original iterator domain.
+    // Keep left-padded marks conservative because padding shifts their values.
+    if (is_zero(padding_it->second.left_pad)) {
+      source_upper_bound = origin_it->second->extent;
+    }
+  }
+  bool inner_mod_can_wrap =
+      !analyzer_->CanProve(source_upper_bound <= lhs->lower_factor * lhs->extent);
+  if (inner_mod_can_wrap && !CanProveDivisible(lhs->extent, rhs)) {
+    return PrimExpr();
+  }
   auto pair = PadDividendToDivisor(lhs, base, rhs);
   IterSplitExpr padded = pair.first;
   if (!padded.defined()) {
@@ -2045,7 +2054,7 @@ PrimExpr IterMapRewriter::VisitExpr_(const FloorModNode* op) {
   // does not contain iter map.
   if (!a->IsInstance<IterMapExprNode>() && !b->IsInstance<IterMapExprNode>()) {
     if (op->a.same_as(a) && op->b.same_as(b)) {
-      return GetRef<PrimExpr>(op);
+      return ffi::GetRef<PrimExpr>(op);
     } else {
       return FloorMod(a, b);
     }
@@ -2054,19 +2063,19 @@ PrimExpr IterMapRewriter::VisitExpr_(const FloorModNode* op) {
   if (b->IsInstance<IterMapExprNode>()) {
     // cannot mod an iterator, mark as unresolved.
     ErrorLogger(this) << "Cannot represent as an IterMap: the right-hand side of FloorMod in "
-                      << GetRef<PrimExpr>(op) << " may not be an iterator";
-    return GetRef<PrimExpr>(op);
+                      << ffi::GetRef<PrimExpr>(op) << " may not be an iterator";
+    return ffi::GetRef<PrimExpr>(op);
   }
 
   IterSumExpr preprocessed = PreprocessDividend(Downcast<IterMapExpr>(a), op->a);
   if (!preprocessed.defined()) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
 
-  ICHECK_EQ(preprocessed->args.size(), 1U);
+  TVM_FFI_ICHECK_EQ(preprocessed->args.size(), 1U);
   PrimExpr remainder = SplitFloorModConst(preprocessed->args[0], preprocessed->base, b);
   if (!remainder.defined()) {
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
   return remainder;
 }
@@ -2111,7 +2120,8 @@ class IterMapToExprNormalizer : public ExprMutator {
     }
     if (analyzer_->CanProve(expr->extent == expr->source->extent) && is_one(expr->lower_factor)) {
       return source * expr->scale;
-    } else if (analyzer_->CanProve(expr->source->extent == expr->lower_factor * expr->extent)) {
+    } else if (analyzer_->CanProve(expr->source->extent == expr->lower_factor * expr->extent) ||
+               analyzer_->CanProve(expr->source->extent == expr->extent * expr->lower_factor)) {
       // Simplify if `expr` is always 0. The 2nd condition guarantess that we do not aggressively
       // simplify trivial iters like `vi \in [0, 1)`, which can be useful for subsequent analysis
       // like tensorization.
@@ -2120,8 +2130,8 @@ class IterMapToExprNormalizer : public ExprMutator {
       }
       return floordiv(source, expr->lower_factor) * expr->scale;
     } else {
-      return floordiv(floormod(source, expr->lower_factor * expr->extent), expr->lower_factor) *
-             expr->scale;
+      PrimExpr full_extent = analyzer_->canonical_simplify(expr->extent * expr->lower_factor);
+      return floordiv(floormod(source, full_extent), expr->lower_factor) * expr->scale;
     }
   }
 
@@ -2152,18 +2162,19 @@ PrimExpr NormalizeIterMapToExpr(const PrimExpr& expr) {
   return normalizer.Convert(expr);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.NormalizeIterMapToExpr", NormalizeIterMapToExpr);
-});
+}
 
-Array<PrimExpr> IterMapSimplify(const Array<PrimExpr>& indices, const Map<Var, Range>& input_iters,
-                                const PrimExpr& input_pred, IterMapLevel check_level,
-                                arith::Analyzer* ana, bool simplify_trivial_iterators) {
+ffi::Array<PrimExpr> IterMapSimplify(const ffi::Array<PrimExpr>& indices,
+                                     const ffi::Map<Var, Range>& input_iters,
+                                     const PrimExpr& input_pred, IterMapLevel check_level,
+                                     arith::Analyzer* ana, bool simplify_trivial_iterators) {
   if (!IterRangeSanityCheck(input_iters)) return indices;
   auto res = DetectIterMap(indices, input_iters, input_pred, check_level, ana,
                            /*simplify_trivial_iterators=*/simplify_trivial_iterators);
-  Array<IterSumExpr> rewrite = res->indices;
+  ffi::Array<IterSumExpr> rewrite = res->indices;
 
   if (rewrite.empty() && !is_one(input_pred) && check_level != IterMapLevel::Bijective) {
     // The input predicate may cause detect iter map to fail
@@ -2177,24 +2188,24 @@ Array<PrimExpr> IterMapSimplify(const Array<PrimExpr>& indices, const Map<Var, R
   if (rewrite.empty()) {
     return indices;
   }
-  Array<PrimExpr> simplified;
+  ffi::Array<PrimExpr> simplified;
   simplified.reserve(rewrite.size());
   IterMapToExprNormalizer converter(ana);
   for (const auto& expr : rewrite) simplified.push_back(converter.Convert(expr));
   return simplified;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def(
       "arith.IterMapSimplify",
-      [](const Array<PrimExpr>& indices, const Map<Var, Range>& input_iters,
+      [](const ffi::Array<PrimExpr>& indices, const ffi::Map<Var, Range>& input_iters,
          const PrimExpr& input_pred, int check_level, bool simplify_trivial_iterators) {
         arith::Analyzer ana;
         return IterMapSimplify(indices, input_iters, input_pred, IterMapLevel(check_level), &ana,
                                simplify_trivial_iterators);
       });
-});
+}
 
 /*!
  * \brief Divider to divide the bindings into two sets of bindings(outer and inner)
@@ -2278,7 +2289,7 @@ class SubspaceDivider {
       } else if (auto op = expr.as<IterSumExpr>()) {
         return IterSplitExpr(IterMark(op.value(), extent));
       } else {
-        LOG(FATAL) << "Unknown IterMapExpr type";
+        TVM_FFI_THROW(InternalError) << "Unknown IterMapExpr type";
       }
     }
   };
@@ -2384,7 +2395,7 @@ class SubspaceDivider {
       extent *= arg->extent;
       res.push_back(arg);
     }
-    return IterMark(IterSumExpr(Array<IterSplitExpr>(res.rbegin(), res.rend()), base), extent);
+    return IterMark(IterSumExpr(ffi::Array<IterSplitExpr>(res.rbegin(), res.rend()), base), extent);
   }
 
   DivisionResult DivideIterSplitExpr(const IterSplitExpr& expr) {
@@ -2394,7 +2405,7 @@ class SubspaceDivider {
       // encounter one of them. If we encounter another later, we directly return the record.
       return it->second;
     }
-    const Array<IterSplitExpr>& splits = collector_.mark2splits_.at(expr->source);
+    const ffi::Array<IterSplitExpr>& splits = collector_.mark2splits_.at(expr->source);
     if (auto iter_ptr = expr->source->source.as<Var>()) {
       // source is input_iter
       bool inner = sub_iters_.count(iter_ptr.value());
@@ -2482,20 +2493,22 @@ class SubspaceDivider {
   // the set of subspace iters
   const std::unordered_set<Var>& sub_iters_;
   // map from SplitExpr to its corresponding DivisionResult(Y*E(X)+X)
-  std::unordered_map<IterSplitExpr, DivisionResult, ObjectPtrHash, ObjectPtrEqual> split_map_;
+  std::unordered_map<IterSplitExpr, DivisionResult, ffi::ObjectPtrHash, ffi::ObjectPtrEqual>
+      split_map_;
   // predicate of outer space and inner space;
   PrimExpr outer_preds_{Bool(true)}, inner_preds_{Bool(true)};
 };
 
-Array<Array<IterMark>> SubspaceDivide(const Array<PrimExpr>& bindings,
-                                      const Map<Var, Range>& input_iters,
-                                      const Array<Var>& sub_iters, const PrimExpr& predicate,
-                                      IterMapLevel check_level, arith::Analyzer* analyzer,
-                                      bool simplify_trivial_iterators) {
-  if (!IterRangeSanityCheck(input_iters)) return Array<Array<IterMark>>();
+ffi::Array<ffi::Array<IterMark>> SubspaceDivide(const ffi::Array<PrimExpr>& bindings,
+                                                const ffi::Map<Var, Range>& input_iters,
+                                                const ffi::Array<Var>& sub_iters,
+                                                const PrimExpr& predicate, IterMapLevel check_level,
+                                                arith::Analyzer* analyzer,
+                                                bool simplify_trivial_iterators) {
+  if (!IterRangeSanityCheck(input_iters)) return ffi::Array<ffi::Array<IterMark>>();
   auto res = DetectIterMap(bindings, input_iters, predicate, check_level, analyzer,
                            simplify_trivial_iterators);
-  const Array<IterSumExpr>& maps = res->indices;
+  const ffi::Array<IterSumExpr>& maps = res->indices;
   if (maps.empty()) return {};
 
   std::unordered_set<Var> inner_iter_set;
@@ -2507,7 +2520,7 @@ Array<Array<IterMark>> SubspaceDivide(const Array<PrimExpr>& bindings,
   collector.Collect(maps);
   SubspaceDivider subspace_divider(analyzer, collector, inner_iter_set);
 
-  std::vector<Array<IterMark>> results;
+  std::vector<ffi::Array<IterMark>> results;
   for (const IterSumExpr& expr : maps) {
     SubspaceDivider::DivisionResult res = subspace_divider.DivideIterSumExpr(expr, 0);
     if (subspace_divider.unresolved_count()) return {};
@@ -2520,30 +2533,31 @@ Array<Array<IterMark>> SubspaceDivide(const Array<PrimExpr>& bindings,
   return results;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def(
-      "arith.SubspaceDivide", [](const Array<PrimExpr>& bindings, const Map<Var, Range>& root_iters,
-                                 const Array<Var>& sub_iters, const PrimExpr& predicate,
-                                 int check_level, bool simplify_trivial_iterators) {
+      "arith.SubspaceDivide",
+      [](const ffi::Array<PrimExpr>& bindings, const ffi::Map<Var, Range>& root_iters,
+         const ffi::Array<Var>& sub_iters, const PrimExpr& predicate, int check_level,
+         bool simplify_trivial_iterators) {
         arith::Analyzer ana;
         return SubspaceDivide(bindings, root_iters, sub_iters, predicate, IterMapLevel(check_level),
                               &ana, simplify_trivial_iterators);
       });
-});
+}
 
 class InverseAffineIterMapTransformer {
  public:
   explicit InverseAffineIterMapTransformer(Analyzer* analyzer) : analyzer_(analyzer) {}
 
-  Map<Var, PrimExpr> operator()(const Array<IterSumExpr>& iter_map,
-                                const Array<PrimExpr>& outputs) {
-    ICHECK(iter_map.size() == outputs.size());
+  ffi::Map<Var, PrimExpr> operator()(const ffi::Array<IterSumExpr>& iter_map,
+                                     const ffi::Array<PrimExpr>& outputs) {
+    TVM_FFI_ICHECK(iter_map.size() == outputs.size());
     std::vector<const IterMapExprNode*> post_dfs_order = ReverseTopologyOrder(iter_map);
 
     // initialize back propagation accumulator
     for (const IterMapExprNode* node : post_dfs_order) {
-      backprop_.Set(GetRef<IterMapExpr>(node), Integer(0));
+      backprop_.Set(ffi::GetRef<IterMapExpr>(node), Integer(0));
     }
     for (size_t i = 0; i < iter_map.size(); i++) {
       backprop_.Set(iter_map[i], outputs[i]);
@@ -2552,10 +2566,10 @@ class InverseAffineIterMapTransformer {
     // run back propagation
     for (const IterMapExprNode* node : post_dfs_order) {
       if (node->IsInstance<IterSumExprNode>()) {
-        Visit_(Downcast<IterSumExpr>(GetRef<IterMapExpr>(node)));
+        Visit_(Downcast<IterSumExpr>(ffi::GetRef<IterMapExpr>(node)));
       } else {
-        ICHECK(node->IsInstance<IterSplitExprNode>());
-        Visit_(Downcast<IterSplitExpr>(GetRef<IterMapExpr>(node)));
+        TVM_FFI_ICHECK(node->IsInstance<IterSplitExprNode>());
+        Visit_(Downcast<IterSplitExpr>(ffi::GetRef<IterMapExpr>(node)));
       }
     }
     return std::move(inverse_);
@@ -2568,7 +2582,7 @@ class InverseAffineIterMapTransformer {
     // Case 1: Propagate to the input node directly when the sum expression has only one components
     if (iter_map_expr->args.size() == 1) {
       const auto& source = iter_map_expr->args[0];
-      ICHECK(analyzer_->CanProveEqual(abs(source->scale), 1));
+      TVM_FFI_ICHECK(analyzer_->CanProveEqual(abs(source->scale), 1));
       backprop_.Set(source, (backprop_.at(source) + input) * source->scale);
       return;
     }
@@ -2591,9 +2605,10 @@ class InverseAffineIterMapTransformer {
     }
   }
 
-  std::vector<const IterMapExprNode*> ReverseTopologyOrder(const Array<IterSumExpr>& iter_map) {
+  std::vector<const IterMapExprNode*> ReverseTopologyOrder(
+      const ffi::Array<IterSumExpr>& iter_map) {
     std::vector<const IterMapExprNode*> post_dfs_order;
-    std::unordered_map<IterMapExpr, bool, ObjectPtrHash, ObjectPtrEqual> visited;
+    std::unordered_map<IterMapExpr, bool, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> visited;
 
     std::function<void(const IterMapExpr&)> fvisit = [&](const IterMapExpr& expr) {
       if (visited[expr]) {
@@ -2606,7 +2621,7 @@ class InverseAffineIterMapTransformer {
         }
       } else {
         const auto* split_expr = expr.as<IterSplitExprNode>();
-        ICHECK(split_expr);
+        TVM_FFI_ICHECK(split_expr);
         if (auto source = split_expr->source->source.as<IterMapExpr>()) {
           fvisit(source.value());
         }
@@ -2646,26 +2661,26 @@ class InverseAffineIterMapTransformer {
     }
     PrimExpr expected_scale = sum_expr->args.back()->scale;
     for (size_t i = sum_expr->args.size(); i > 0; i--) {
-      ICHECK(analyzer_->CanProveEqual(sum_expr->args[i - 1]->scale, expected_scale));
+      TVM_FFI_ICHECK(analyzer_->CanProveEqual(sum_expr->args[i - 1]->scale, expected_scale));
       expected_scale *= sum_expr->args[i - 1]->extent;
     }
   }
 
   Analyzer* analyzer_;
-  Map<IterMapExpr, PrimExpr> backprop_;  // the accumulator of backpropgation
-  Map<Var, PrimExpr> inverse_;           // the result of inverse transformation
+  ffi::Map<IterMapExpr, PrimExpr> backprop_;  // the accumulator of backpropgation
+  ffi::Map<Var, PrimExpr> inverse_;           // the result of inverse transformation
 };
 
-Map<Var, PrimExpr> InverseAffineIterMap(const Array<IterSumExpr>& iter_map,
-                                        const Array<PrimExpr> outputs) {
+ffi::Map<Var, PrimExpr> InverseAffineIterMap(const ffi::Array<IterSumExpr>& iter_map,
+                                             const ffi::Array<PrimExpr> outputs) {
   Analyzer analyzer;
   return InverseAffineIterMapTransformer(&analyzer)(iter_map, outputs);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.InverseAffineIterMap", InverseAffineIterMap);
-});
+}
 
 }  // namespace arith
 }  // namespace tvm

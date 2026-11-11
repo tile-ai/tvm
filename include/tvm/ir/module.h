@@ -28,11 +28,13 @@
 #include <tvm/ffi/container/map.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/string.h>
+#include <tvm/ir/cow.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/function.h>
 #include <tvm/ir/global_info.h>
 #include <tvm/ir/source_map.h>
 #include <tvm/ir/type.h>
+#include <tvm/script/printer/config.h>
 
 #include <string>
 #include <unordered_map>
@@ -54,21 +56,21 @@ class IRModule;
  *  but we mutate the Module while optimizing programs.
  * \sa IRModule
  */
-class IRModuleNode : public Object {
+class IRModuleNode : public ffi::Object {
  public:
   /*! \brief A map from ids to all global functions. */
-  Map<GlobalVar, BaseFunc> functions;
+  ffi::Map<GlobalVar, BaseFunc> functions;
   /*! \brief The source map for the module. */
   SourceMap source_map;
   /* \brief Additional attributes storing meta-data about the module. */
   DictAttrs attrs;
   /*! \brief Globally static object that are referred by the IR itself */
-  Map<String, Array<GlobalInfo>> global_infos;
+  ffi::Map<ffi::String, ffi::Array<GlobalInfo>> global_infos;
   /*!
    * \brief A map from string names to global variables that
    * ensures global uniqueness.
    */
-  Map<String, GlobalVar> global_var_map_;
+  ffi::Map<ffi::String, GlobalVar> global_var_map_;
 
   /*!
    * \brief Get a module attribute.
@@ -90,15 +92,15 @@ class IRModuleNode : public Object {
    * \endcode
    */
   template <typename TObjectRef>
-  Optional<TObjectRef> GetAttr(
+  ffi::Optional<TObjectRef> GetAttr(
       const std::string& attr_key,
-      Optional<TObjectRef> default_value = Optional<TObjectRef>(std::nullopt)) const {
+      ffi::Optional<TObjectRef> default_value = ffi::Optional<TObjectRef>(std::nullopt)) const {
     return attrs.GetAttr(attr_key, default_value);
   }
   // variant that uses TObjectRef to enable implicit conversion to default value.
   template <typename TObjectRef>
-  Optional<TObjectRef> GetAttr(const std::string& attr_key, TObjectRef default_value) const {
-    return GetAttr<TObjectRef>(attr_key, Optional<TObjectRef>(default_value));
+  ffi::Optional<TObjectRef> GetAttr(const std::string& attr_key, TObjectRef default_value) const {
+    return GetAttr<TObjectRef>(attr_key, ffi::Optional<TObjectRef>(default_value));
   }
 
   /*!
@@ -146,8 +148,8 @@ class IRModuleNode : public Object {
 
   TVM_DLL bool SEqual(const IRModuleNode* other,
                       ffi::TypedFunction<bool(AnyView, AnyView, bool, AnyView)> equal) const;
-  TVM_DLL uint64_t SHash(uint64_t init_hash,
-                         ffi::TypedFunction<uint64_t(AnyView, uint64_t, bool)> hash) const;
+  TVM_DLL int64_t SHash(int64_t init_hash,
+                        ffi::TypedFunction<int64_t(AnyView, int64_t, bool)> hash) const;
 
   /*!
    * \brief Add a function to the global environment.
@@ -179,7 +181,7 @@ class IRModuleNode : public Object {
    * \param name The name of the global info.
    * \param info The new array of global infos.
    */
-  TVM_DLL void UpdateGlobalInfo(const String& name, const Array<GlobalInfo>& info);
+  TVM_DLL void UpdateGlobalInfo(const ffi::String& name, const ffi::Array<GlobalInfo>& info);
 
   /*!
    * \brief Remove a function from the global environment.
@@ -192,21 +194,21 @@ class IRModuleNode : public Object {
    * \param name The variable name.
    * \returns true if contains, otherise false.
    */
-  TVM_DLL bool ContainGlobalVar(const String& name) const;
+  TVM_DLL bool ContainGlobalVar(const ffi::String& name) const;
 
   /*!
    * \brief Lookup a global function by its variable.
    * \param str The unique string specifying the global variable.
    * \returns The global variable.
    */
-  TVM_DLL GlobalVar GetGlobalVar(const String& str) const;
+  TVM_DLL GlobalVar GetGlobalVar(const ffi::String& str) const;
 
   /*!
    * \brief Collect all global vars defined in this module, ordered by
    *        the global variable name.
    * \returns An array of global vars
    */
-  TVM_DLL Array<GlobalVar> GetGlobalVars() const;
+  TVM_DLL ffi::Array<GlobalVar> GetGlobalVars() const;
 
   /*!
    * \brief Look up a global function by its variable.
@@ -220,7 +222,7 @@ class IRModuleNode : public Object {
    * \param name The name of the function.
    * \returns The function named by the argument.
    */
-  TVM_DLL BaseFunc Lookup(const String& name) const;
+  TVM_DLL BaseFunc Lookup(const ffi::String& name) const;
 
   /*!
    * \brief Update the functions inside this environment by
@@ -237,14 +239,13 @@ class IRModuleNode : public Object {
   /*!
    * \brief The set of imported files.
    */
-  TVM_DLL std::unordered_set<String> Imports() const;
+  TVM_DLL std::unordered_set<ffi::String> Imports() const;
 
   TVM_OBJECT_ENABLE_SCRIPT_PRINTER();
 
-  static constexpr const char* _type_key = "ir.IRModule";
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
 
-  TVM_DECLARE_FINAL_OBJECT_INFO(IRModuleNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.IRModule", IRModuleNode, ffi::Object);
 
  private:
   friend class IRModule;
@@ -254,7 +255,7 @@ class IRModuleNode : public Object {
  * \brief Managed reference class to IRModuleNode.
  * \sa IRModuleNode
  */
-class IRModule : public ObjectRef {
+class IRModule : public ffi::ObjectRef {
  public:
   /*!
    * \brief constructor
@@ -263,21 +264,25 @@ class IRModule : public ObjectRef {
    * \param attrs The module meta-data attributes.
    * \param global_infos Global infos in the module.
    */
-  TVM_DLL explicit IRModule(Map<GlobalVar, BaseFunc> functions, SourceMap map = {},
+  TVM_DLL explicit IRModule(ffi::Map<GlobalVar, BaseFunc> functions, SourceMap map = {},
                             DictAttrs attrs = DictAttrs(),
-                            Map<String, Array<GlobalInfo>> global_infos = {});
+                            ffi::Map<ffi::String, ffi::Array<GlobalInfo>> global_infos = {});
 
   /*! \brief default constructor */
-  IRModule() : IRModule(Map<GlobalVar, BaseFunc>({})) {}
+  IRModule() : IRModule(ffi::Map<GlobalVar, BaseFunc>({})) {}
   /*!
    * \brief constructor
    * \param n The object pointer.
    */
-  explicit IRModule(ObjectPtr<Object> n) : ObjectRef(n) {}
+  explicit IRModule(ffi::ObjectPtr<IRModuleNode> n) : ffi::ObjectRef(n) {}
+  /*!
+   * \brief constructor with UnsafeInit
+   */
+  explicit IRModule(ffi::UnsafeInit tag) : ffi::ObjectRef(tag) {}
   /*! \return mutable pointers to the node. */
   IRModuleNode* operator->() const {
     auto* ptr = get_mutable();
-    ICHECK(ptr != nullptr);
+    TVM_FFI_ICHECK(ptr != nullptr);
     return static_cast<IRModuleNode*>(ptr);
   }
 
@@ -286,7 +291,7 @@ class IRModule : public ObjectRef {
    * imports.
    */
   TVM_DLL static IRModule FromExpr(const RelaxExpr& expr,
-                                   const Map<GlobalVar, BaseFunc>& global_funcs = {});
+                                   const ffi::Map<GlobalVar, BaseFunc>& global_funcs = {});
 
   /*!
    * \brief Create a shallow copy of an IRModule.
@@ -313,20 +318,11 @@ namespace attr {
  */
 constexpr const char* kModuleName = "mod_name";
 
-/*
- * \brief All the runtime::NDArrays extracted from PrimFunc tir::AllocateConst nodes. The
- * node will record the index into this array. See also kConstNameToConstant below, which is
- * the analog for Realy Functions.
- *
- * Type: Array<runtime::NDArray>
- */
-constexpr const char* kConstants = "constants";
-
 /*!
  * \brief All the runtime::Modules accumulated during compilation by external codegen. These
  * modules must be either directly linked or captured in the final compilation artifact.
  *
- * Type: Array<runtime::Module>
+ * Type: ffi::Array<runtime::Module>
  */
 constexpr const char* kExternalMods = "external_mods";
 
@@ -360,12 +356,11 @@ constexpr const char* kExternalMods = "external_mods";
 constexpr const char* kSystemLibPrefix = "system_lib_prefix";
 
 /*!
- * \brief All the named runtime::NDArrays accumulated during compilation by external codegen.
+ * \brief All the named runtime::Tensors accumulated during compilation by external codegen.
  * Generally the associated runtime::Module will indicate it requires bindings for these names,
  * and during module initialization these bindings will be recovered from a ConstLoaderModule.
- * See also kConstantsArray above, which is the analog for PrimFuncs.
  *
- * Type: Map<String, runtime::NDArray>
+ * Type: ffi::Map<ffi::String, runtime::Tensor>
  */
 constexpr const char* kConstNameToConstant = "const_name_to_constant";
 

@@ -26,7 +26,7 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include <memory>
 #include <vector>
@@ -54,13 +54,13 @@ void LocalSession::EncodeReturn(ffi::Any rv, const FEncodeReturn& encode_return)
   if (rv == nullptr) {
     packed_args[1] = rv;
     encode_return(ffi::PackedArgs(packed_args, 2));
-  } else if (rv.as<NDArray>()) {
-    // We follow a special protocol to return NDArray to client side
-    // The first pack value is the NDArray handle as DLTensor
-    // The second pack value is a customized deleter that deletes the NDArray.
+  } else if (rv.as<Tensor>()) {
+    // We follow a special protocol to return Tensor to client side
+    // The first pack value is the Tensor handle as DLTensor
+    // The second pack value is a customized deleter that deletes the Tensor.
     TVMFFIAny ret_any = ffi::details::AnyUnsafe::MoveAnyToTVMFFIAny(std::move(rv));
     void* opaque_handle = ret_any.v_obj;
-    packed_args[1] = TVMFFINDArrayGetDLTensorPtr(opaque_handle);
+    packed_args[1] = TVMFFITensorGetDLTensorPtr(opaque_handle);
     packed_args[2] = opaque_handle;
     encode_return(ffi::PackedArgs(packed_args, 3));
   } else if (const auto opt_bytes = rv.as<ffi::Bytes>()) {
@@ -95,7 +95,7 @@ void LocalSession::CallFunc(RPCSession::PackedFuncHandle func, ffi::PackedArgs a
   // unwrap RPCObjectRef in case we are directly using it to call LocalSession
   for (int i = 0; i < args.size(); ++i) {
     if (auto opt_rpc_obj = args[i].as<RPCObjectRef>()) {
-      packed_args[i] = static_cast<const Object*>(opt_rpc_obj.value()->object_handle());
+      packed_args[i] = static_cast<const ffi::Object*>(opt_rpc_obj.value()->object_handle());
     } else {
       packed_args[i] = args[i];
     }
@@ -106,7 +106,7 @@ void LocalSession::CallFunc(RPCSession::PackedFuncHandle func, ffi::PackedArgs a
 }
 
 void LocalSession::CopyToRemote(void* from_bytes, DLTensor* to, uint64_t nbytes) {
-  ICHECK_EQ(nbytes, GetDataSize(*to));
+  TVM_FFI_ICHECK_EQ(nbytes, ffi::GetDataSize(*to));
   DLTensor from;
   from.data = from_bytes;
   from.device = {kDLCPU, 0};
@@ -123,7 +123,7 @@ void LocalSession::CopyToRemote(void* from_bytes, DLTensor* to, uint64_t nbytes)
 }
 
 void LocalSession::CopyFromRemote(DLTensor* from, void* to_bytes, uint64_t nbytes) {
-  ICHECK_EQ(nbytes, ffi::GetDataSize(*from));
+  TVM_FFI_ICHECK_EQ(nbytes, ffi::GetDataSize(*from));
   DLTensor to;
   to.data = to_bytes;
   to.device = {kDLCPU, 0};
@@ -149,11 +149,11 @@ DeviceAPI* LocalSession::GetDeviceAPI(Device dev, bool allow_missing) {
   return DeviceAPI::Get(dev, allow_missing);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("rpc.LocalSession",
                         []() { return CreateRPCSessionModule(std::make_shared<LocalSession>()); });
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

@@ -47,12 +47,13 @@ using namespace tvm::runtime;
     }                                                                             \
   })
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed("topi.broadcast_to",
                   [](ffi::PackedArgs args, ffi::Any* rv) {
-                    *rv = broadcast_to(args[0].cast<te::Tensor>(), args[1].cast<Array<PrimExpr>>());
+                    *rv = broadcast_to(args[0].cast<te::Tensor>(),
+                                       args[1].cast<ffi::Array<PrimExpr>>());
                   })
       .TOPI_DEF_BCAST_OP("topi.add", topi::add)
       .TOPI_DEF_BCAST_OP("topi.subtract", topi::subtract)
@@ -65,6 +66,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .TOPI_DEF_BCAST_OP("topi.maximum", topi::maximum)
       .TOPI_DEF_BCAST_OP("topi.minimum", topi::minimum)
       .TOPI_DEF_BCAST_OP("topi.power", topi::power)
+      .TOPI_DEF_BCAST_OP("topi.atan2", topi::atan2)
       .TOPI_DEF_BCAST_OP("topi.left_shift", topi::left_shift)
       .TOPI_DEF_BCAST_OP("topi.logical_and", topi::logical_and)
       .TOPI_DEF_BCAST_OP("topi.logical_or", topi::logical_or)
@@ -79,7 +81,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
       .TOPI_DEF_BCAST_OP("topi.not_equal", topi::not_equal)
       .TOPI_DEF_BCAST_OP("topi.greater_equal", topi::greater_equal)
       .TOPI_DEF_BCAST_OP("topi.less_equal", topi::less_equal);
-});
+}
 
 }  // namespace topi
 }  // namespace tvm

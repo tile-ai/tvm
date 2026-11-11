@@ -1,3 +1,4 @@
+# isort: skip_file
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -31,7 +32,6 @@ from .base import (
     structural_equal,
     structural_hash,
 )
-from .container import Array, Map
 from .expr import BaseExpr, GlobalVar, PrimExpr, Range, RelaxExpr
 from .function import BaseFunc, CallingConv
 from .global_info import GlobalInfo, DummyGlobalInfo, VDevice

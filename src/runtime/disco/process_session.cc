@@ -20,7 +20,6 @@
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/base.h>
 #include <tvm/runtime/disco/disco_worker.h>
-#include <tvm/runtime/object.h>
 
 #include <memory>
 #include <sstream>
@@ -71,8 +70,9 @@ class ProcessSessionObj final : public BcastSessionObj {
     write_fds.reserve(num_workers - 1);
     for (int i = 1; i < num_workers; ++i) {
       ffi::Shape fds = process_pool(i).cast<ffi::Shape>();
-      CHECK_EQ(fds.size(), 2) << "ValueError: process_pool(" << i << ") should return a tuple of "
-                              << "size 2, but got a tuple of size " << fds.size() << ".";
+      TVM_FFI_CHECK_EQ(fds.size(), 2, ValueError)
+          << "process_pool(" << i << ") should return a tuple of "
+          << "size 2, but got a tuple of size " << fds.size() << ".";
       read_fds.push_back(fds[0]);
       write_fds.push_back(fds[1]);
     }
@@ -106,8 +106,9 @@ class ProcessSessionObj final : public BcastSessionObj {
       workers_[worker_id - 1]->Send(ffi::PackedArgs(packed_args, 3));
     }
     ffi::PackedArgs args = this->RecvReplyPacked(worker_id);
-    ICHECK_EQ(args.size(), 2);
-    ICHECK(static_cast<DiscoAction>(args[0].cast<int>()) == DiscoAction::kDebugGetFromRemote);
+    TVM_FFI_ICHECK_EQ(args.size(), 2);
+    TVM_FFI_ICHECK(static_cast<DiscoAction>(args[0].cast<int>()) ==
+                   DiscoAction::kDebugGetFromRemote);
     ffi::Any result;
     result = args[1];
     return result;
@@ -119,8 +120,8 @@ class ProcessSessionObj final : public BcastSessionObj {
       worker_0_->worker->SetRegister(reg_id, value);
       return;
     }
-    ObjectRef wrapped{nullptr};
-    if (value.as<ObjectRef>()) {
+    ffi::ObjectRef wrapped{nullptr};
+    if (value.as<ffi::ObjectRef>()) {
       wrapped = DiscoDebugObject::Wrap(value);
       value = wrapped;
     }
@@ -132,8 +133,8 @@ class ProcessSessionObj final : public BcastSessionObj {
     }
     ffi::Any result;
     ffi::PackedArgs args = this->RecvReplyPacked(worker_id);
-    ICHECK_EQ(args.size(), 1);
-    ICHECK(static_cast<DiscoAction>(args[0].cast<int>()) == DiscoAction::kDebugSetRegister);
+    TVM_FFI_ICHECK_EQ(args.size(), 1);
+    TVM_FFI_ICHECK(static_cast<DiscoAction>(args[0].cast<int>()) == DiscoAction::kDebugSetRegister);
   }
 
   void BroadcastPacked(const ffi::PackedArgs& args) final {
@@ -168,38 +169,37 @@ class ProcessSessionObj final : public BcastSessionObj {
   ffi::Function process_pool_;
   std::unique_ptr<DiscoWorkerThread> worker_0_;
   std::vector<std::unique_ptr<DiscoProcessChannel>> workers_;
-
-  static constexpr const char* _type_key = "runtime.disco.ProcessSession";
-  TVM_DECLARE_FINAL_OBJECT_INFO(ProcessSessionObj, SessionObj);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("runtime.disco.ProcessSession", ProcessSessionObj, SessionObj);
 };
 
-Session Session::ProcessSession(int num_workers, int num_group, String process_pool_creator,
-                                String entrypoint) {
-  CHECK_EQ(num_workers % num_group, 0)
+Session Session::ProcessSession(int num_workers, int num_group, ffi::String process_pool_creator,
+                                ffi::String entrypoint) {
+  TVM_FFI_ICHECK_EQ(num_workers % num_group, 0)
       << "The number of workers should be divisible by the number of worker group.";
   const auto pf = tvm::ffi::Function::GetGlobal(process_pool_creator);
-  CHECK(pf) << "ValueError: Cannot find function " << process_pool_creator
-            << " in the registry. Please check if it is registered.";
+  TVM_FFI_CHECK(pf, ValueError) << "Cannot find function " << process_pool_creator
+                                << " in the registry. Please check if it is registered.";
   auto process_pool = (*pf)(num_workers, num_group, entrypoint).cast<ffi::Function>();
-  auto n = make_object<ProcessSessionObj>(num_workers, num_group, process_pool);
+  auto n = ffi::make_object<ProcessSessionObj>(num_workers, num_group, process_pool);
   return Session(n);
 }
 
 void WorkerProcess(int worker_id, int num_workers, int num_group, int64_t read_fd,
                    int64_t write_fd) {
-  CHECK_EQ(num_workers % num_group, 0)
+  TVM_FFI_ICHECK_EQ(num_workers % num_group, 0)
       << "The number of workers should be divisible by the number of worker group.";
   DiscoProcessChannel channel(read_fd, write_fd);
   DiscoWorker worker(worker_id, num_workers, num_group, nullptr, &channel);
   worker.MainLoop();
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
+  refl::ObjectDef<ProcessSessionObj>();
   refl::GlobalDef()
       .def("runtime.disco.SessionProcess", Session::ProcessSession)
       .def("runtime.disco.WorkerProcess", WorkerProcess);
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

@@ -49,12 +49,11 @@
 #ifndef TVM_IR_TYPE_H_
 #define TVM_IR_TYPE_H_
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/container/array.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/source_map.h>
-#include <tvm/node/node.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/runtime/object.h>
 
 #include <string>
 
@@ -72,7 +71,7 @@ namespace tvm {
  * There are also advanced types to support generic(polymorphic types).
  * \sa Type
  */
-class TypeNode : public Object {
+class TypeNode : public ffi::Object {
  public:
   /*!
    * \brief Span that points to the original source code.
@@ -88,19 +87,18 @@ class TypeNode : public Object {
   }
 
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
-  static constexpr const char* _type_key = "ir.Type";
 
   static constexpr const uint32_t _type_child_slots = 14;
-  TVM_DECLARE_BASE_OBJECT_INFO(TypeNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO("ir.Type", TypeNode, ffi::Object);
 };
 
 /*!
  * \brief Managed reference to TypeNode.
  * \sa TypeNode
  */
-class Type : public ObjectRef {
+class Type : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_OBJECT_REF_METHODS(Type, ObjectRef, TypeNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Type, ffi::ObjectRef, TypeNode);
 };
 
 /*!
@@ -122,9 +120,7 @@ class PrimTypeNode : public TypeNode {
     namespace refl = tvm::ffi::reflection;
     refl::ObjectDef<PrimTypeNode>().def_ro("dtype", &PrimTypeNode::dtype);
   }
-
-  static constexpr const char* _type_key = "ir.PrimType";
-  TVM_DECLARE_FINAL_OBJECT_INFO(PrimTypeNode, TypeNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.PrimType", PrimTypeNode, TypeNode);
 };
 
 /*
@@ -140,7 +136,7 @@ class PrimType : public Type {
    */
   TVM_DLL explicit PrimType(runtime::DataType dtype, Span span = Span());
 
-  TVM_DEFINE_OBJECT_REF_METHODS(PrimType, Type, PrimTypeNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(PrimType, Type, PrimTypeNode);
 };
 
 /*!
@@ -162,7 +158,7 @@ class PointerTypeNode : public TypeNode {
   /*!
    * \brief The storage scope of the pointer
    */
-  String storage_scope;
+  ffi::String storage_scope;
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
@@ -170,9 +166,7 @@ class PointerTypeNode : public TypeNode {
         .def_ro("element_type", &PointerTypeNode::element_type)
         .def_ro("storage_scope", &PointerTypeNode::storage_scope);
   }
-
-  static constexpr const char* _type_key = "ir.PointerType";
-  TVM_DECLARE_FINAL_OBJECT_INFO(PointerTypeNode, TypeNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.PointerType", PointerTypeNode, TypeNode);
 };
 
 /*
@@ -186,9 +180,9 @@ class PointerType : public Type {
    * \param element_type The type of the element which the pointer points to.
    * \param storage_scope The storage scope into which the pointer addresses
    */
-  TVM_DLL explicit PointerType(Type element_type, String storage_scope = "");
+  TVM_DLL explicit PointerType(Type element_type, ffi::String storage_scope = "");
 
-  TVM_DEFINE_OBJECT_REF_METHODS(PointerType, Type, PointerTypeNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(PointerType, Type, PointerTypeNode);
 };
 
 /*!
@@ -198,19 +192,15 @@ class PointerType : public Type {
 class TupleTypeNode : public TypeNode {
  public:
   /*! \brief The type of each field in the tuple. */
-  Array<Type> fields;
+  ffi::Array<Type> fields;
 
   TupleTypeNode() {}
 
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
-    refl::ObjectDef<TupleTypeNode>()
-        .def_ro("fields", &TupleTypeNode::fields)
-        .def_ro("span", &TupleTypeNode::span);
+    refl::ObjectDef<TupleTypeNode>().def_ro("fields", &TupleTypeNode::fields);
   }
-
-  static constexpr const char* _type_key = "ir.TupleType";
-  TVM_DECLARE_FINAL_OBJECT_INFO(TupleTypeNode, TypeNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.TupleType", TupleTypeNode, TypeNode);
 };
 
 /*!
@@ -224,7 +214,7 @@ class TupleType : public Type {
    * \param fields Fields in the tuple.
    * \param span The span of the type.
    */
-  TVM_DLL explicit TupleType(Array<Type> fields, Span span = Span());
+  TVM_DLL explicit TupleType(ffi::Array<Type> fields, Span span = Span());
 
   /*!
    * \brief Create an empty tuple type that constains nothing.
@@ -232,7 +222,7 @@ class TupleType : public Type {
    */
   TVM_DLL TupleType static Empty();
 
-  TVM_DEFINE_OBJECT_REF_METHODS(TupleType, Type, TupleTypeNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(TupleType, Type, TupleTypeNode);
 };
 
 /*!
@@ -260,7 +250,7 @@ inline bool IsVoidType(const Type& type) {
 class FuncTypeNode : public TypeNode {
  public:
   /*! \brief type type of arguments */
-  Array<Type> arg_types;
+  ffi::Array<Type> arg_types;
   /*! \brief The type of return value. */
   Type ret_type;
 
@@ -268,12 +258,9 @@ class FuncTypeNode : public TypeNode {
     namespace refl = tvm::ffi::reflection;
     refl::ObjectDef<FuncTypeNode>()
         .def_ro("arg_types", &FuncTypeNode::arg_types)
-        .def_ro("ret_type", &FuncTypeNode::ret_type)
-        .def_ro("span", &FuncTypeNode::span);
+        .def_ro("ret_type", &FuncTypeNode::ret_type);
   }
-
-  static constexpr const char* _type_key = "ir.FuncType";
-  TVM_DECLARE_FINAL_OBJECT_INFO(FuncTypeNode, TypeNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.FuncType", FuncTypeNode, TypeNode);
 };
 
 /*!
@@ -289,9 +276,9 @@ class FuncType : public Type {
    * \param span The span information.
    * \sa FuncTypeNode for more docs about these fields.
    */
-  TVM_DLL FuncType(Array<Type> arg_types, Type ret_type, Span span = Span());
+  TVM_DLL FuncType(ffi::Array<Type> arg_types, Type ret_type, Span span = Span());
 
-  TVM_DEFINE_OBJECT_REF_METHODS(FuncType, Type, FuncTypeNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(FuncType, Type, FuncTypeNode);
 };
 
 /*!
@@ -302,11 +289,9 @@ class TensorMapTypeNode : public TypeNode {
  public:
   static void RegisterReflection() {
     namespace refl = tvm::ffi::reflection;
-    refl::ObjectDef<TensorMapTypeNode>().def_ro("span", &TensorMapTypeNode::span);
+    refl::ObjectDef<TensorMapTypeNode>();
   }
-
-  static constexpr const char* _type_key = "ir.TensorMapType";
-  TVM_DECLARE_FINAL_OBJECT_INFO(TensorMapTypeNode, TypeNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.TensorMapType", TensorMapTypeNode, TypeNode);
 };
 
 /*!
@@ -317,8 +302,16 @@ class TensorMapType : public Type {
  public:
   TVM_DLL TensorMapType(Span span = Span());
 
-  TVM_DEFINE_OBJECT_REF_METHODS_WITHOUT_DEFAULT_CONSTRUCTOR(TensorMapType, Type, TensorMapTypeNode);
+  explicit TensorMapType(::tvm::ffi::ObjectPtr<TensorMapTypeNode> n) : Type(n) {}
+  TensorMapType(const TensorMapType&) = default;
+  TensorMapType(TensorMapType&&) = default;
+  TensorMapType& operator=(const TensorMapType&) = default;
+  TensorMapType& operator=(TensorMapType&&) = default;
+  const TensorMapTypeNode* operator->() const {
+    return static_cast<const TensorMapTypeNode*>(data_.get());
+  }
+  const TensorMapTypeNode* get() const { return operator->(); }
+  using ContainerType = TensorMapTypeNode;
 };
-
 }  // namespace tvm
 #endif  // TVM_IR_TYPE_H_

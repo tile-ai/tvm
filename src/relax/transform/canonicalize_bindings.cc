@@ -24,13 +24,14 @@
  *        Ideally should be used before constant folding and eliminating unused bindings.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/struct_info.h>
 #include <tvm/relax/transform.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/stmt_functor.h>
 
 namespace tvm {
 namespace relax {
@@ -51,15 +52,14 @@ class SymbolicVarCanonicalizer : public ExprMutator {
         InferSymbolicVarMap({{binding->var, binding->value}}, builder_->GetAnalyzer());
     for (const auto& [tir_var, prim_expr] : tir_var_map) {
       if (auto it = known_values_.find(tir_var); it != known_values_.end()) {
-        CHECK(!builder_->GetAnalyzer()->CanProve(it->second.expr != prim_expr))
-            << "ValueError: "
+        TVM_FFI_CHECK(!builder_->GetAnalyzer()->CanProve(it->second.expr != prim_expr), ValueError)
             << "MatchCast statements must be consistent.  "
             << "However, the definition of Relax variable " << it->second.source->var
             << " implies that TIR variable " << tir_var << " is " << it->second.expr
             << ", while the later definition of Relax variable " << binding->var
             << " instead implies that TIR variable " << tir_var << " is " << prim_expr;
       } else {
-        known_values_[tir_var] = KnownValue{prim_expr, GetRef<MatchCast>(binding)};
+        known_values_[tir_var] = KnownValue{prim_expr, ffi::GetRef<MatchCast>(binding)};
       }
     }
     ExprMutator::VisitBinding_(binding);
@@ -76,7 +76,7 @@ class SymbolicVarCanonicalizer : public ExprMutator {
 
     if (op->cond.same_as(guard) && op->true_branch.same_as(true_b) &&
         op->false_branch.same_as(false_b)) {
-      return GetRef<Expr>(op);
+      return ffi::GetRef<Expr>(op);
     }
 
     // The two branches may have had different TIR variables inlined.
@@ -93,7 +93,7 @@ class SymbolicVarCanonicalizer : public ExprMutator {
     // within each branch.
     auto new_sinfo = VisitExprDepStructInfoField(Downcast<StructInfo>(op->struct_info_));
 
-    StructuralEqual struct_equal;
+    ffi::StructuralEqual struct_equal;
     if (!struct_equal(new_sinfo, GetStructInfo(true_b))) {
       auto output_var = Var("then_branch_with_dyn", new_sinfo);
 
@@ -119,13 +119,14 @@ class SymbolicVarCanonicalizer : public ExprMutator {
     if (known_values_.empty()) {
       return expr;
     }
-    PrimExpr output = tir::Substitute(expr, [this](const tir::Var& var) -> Optional<PrimExpr> {
-      if (auto it = known_values_.find(var); it != known_values_.end()) {
-        return it->second.expr;
-      } else {
-        return std::nullopt;
-      }
-    });
+    PrimExpr output =
+        tirx::Substitute(expr, [this](const tirx::Var& var) -> ffi::Optional<PrimExpr> {
+          if (auto it = known_values_.find(var); it != known_values_.end()) {
+            return it->second.expr;
+          } else {
+            return std::nullopt;
+          }
+        });
     if (output.same_as(expr)) {
       return expr;
     }
@@ -140,14 +141,14 @@ class SymbolicVarCanonicalizer : public ExprMutator {
     MatchCast source;
   };
 
-  std::unordered_map<tir::Var, KnownValue> known_values_;
+  std::unordered_map<tirx::Var, KnownValue> known_values_;
 };
 
 struct CanonicalizationPlan {
-  Map<Id, Var> replace_usage;
-  Map<Id, Var> replace_binding;
-  std::unordered_set<Id, ObjectPtrHash, ObjectPtrEqual> bindings_to_remove;
-  Map<Id, Constant> inline_constant;
+  ffi::Map<Id, Var> replace_usage;
+  ffi::Map<Id, Var> replace_binding;
+  std::unordered_set<Id, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> bindings_to_remove;
+  ffi::Map<Id, Constant> inline_constant;
 };
 
 /*! \brief Utility class to identify usage location
@@ -232,8 +233,8 @@ class CanonicalizePlanner : public ExprVisitor {
   void VisitExpr_(const FunctionNode* func) override {
     // for functions, treat any free vars as used outside their home DF block
     auto cache = current_block_;
-    current_block_ = Optional<BindingBlock>();
-    auto free_vars = FreeVars(GetRef<Function>(func));
+    current_block_ = ffi::Optional<BindingBlock>();
+    auto free_vars = FreeVars(ffi::GetRef<Function>(func));
     for (auto var : free_vars) {
       used_outside_home_dataflow_.insert(var);
     }
@@ -244,26 +245,26 @@ class CanonicalizePlanner : public ExprVisitor {
   void VisitExpr_(const SeqExprNode* seq) override {
     // need to reset current_block_ for nested seq exprs (such as in If nodes)
     auto cache = current_block_;
-    current_block_ = Optional<BindingBlock>();
+    current_block_ = ffi::Optional<BindingBlock>();
     ExprVisitor::VisitExpr_(seq);
     current_block_ = cache;
   }
 
   void VisitBindingBlock_(const BindingBlockNode* block) override {
-    CHECK(!current_block_.defined()) << "Forgetting to unset current block";
-    current_block_ = GetRef<BindingBlock>(block);
+    TVM_FFI_ICHECK(!current_block_.defined()) << "Forgetting to unset current block";
+    current_block_ = ffi::GetRef<BindingBlock>(block);
     ExprVisitor::VisitBindingBlock_(block);
-    current_block_ = Optional<BindingBlock>();
+    current_block_ = ffi::Optional<BindingBlock>();
   }
 
   void VisitBindingBlock_(const DataflowBlockNode* block) override {
-    CHECK(!current_block_.defined()) << "Forgetting to unset current block";
-    current_block_ = GetRef<DataflowBlock>(block);
+    TVM_FFI_ICHECK(!current_block_.defined()) << "Forgetting to unset current block";
+    current_block_ = ffi::GetRef<DataflowBlock>(block);
     ExprVisitor::VisitBindingBlock_(block);
-    current_block_ = Optional<BindingBlock>();
+    current_block_ = ffi::Optional<BindingBlock>();
   }
 
-  Optional<Expr> UnwrapKnownValue(Expr expr) {
+  ffi::Optional<Expr> UnwrapKnownValue(Expr expr) {
     // If the expression is a variable, then it can be unwrapped into
     // its known value.
     auto unwrap_var = [this](Expr expr) -> Expr {
@@ -299,7 +300,7 @@ class CanonicalizePlanner : public ExprVisitor {
     // If the expression is a Tuple, and each element is
     // `TupleGetItem(earlier_tuple, i)`, then this is just a copy of
     // `earlier_tuple`.
-    auto earlier_tuple = [&]() -> Optional<Expr> {
+    auto earlier_tuple = [&]() -> ffi::Optional<Expr> {
       auto expr_tuple = expr.as<TupleNode>();
       if (!expr_tuple) {
         return std::nullopt;
@@ -352,9 +353,10 @@ class CanonicalizePlanner : public ExprVisitor {
       if (binding.as<VarBindingNode>()) {
         return true;
       } else if (auto match_cast = binding.as<MatchCastNode>()) {
-        return StructuralEqual()(GetStructInfo(binding->var), GetStructInfo(match_cast->value));
+        return ffi::StructuralEqual()(GetStructInfo(binding->var),
+                                      GetStructInfo(match_cast->value));
       } else {
-        LOG(FATAL) << "Invalid binding type: " << binding->GetTypeKey();
+        TVM_FFI_THROW(InternalError) << "Invalid binding type: " << binding->GetTypeKey();
       }
     }();
 
@@ -385,14 +387,14 @@ class CanonicalizePlanner : public ExprVisitor {
   }
 
   void VisitExpr_(const VarNode* var) override {
-    auto var_ref = GetRef<Var>(var);
+    auto var_ref = ffi::GetRef<Var>(var);
     // if a var is used in a dataflow block but *not* the one
     // where it was defined, it also needs to be exposed, so also we treat that as
     // used outside of a dataflow block
     if (!inside_dataflow() ||
         (def_blocks_.count(var_ref) &&
          (current_block_.defined() && !current_block_.value().same_as(def_blocks_.at(var_ref))))) {
-      used_outside_home_dataflow_.insert(GetRef<Var>(var));
+      used_outside_home_dataflow_.insert(ffi::GetRef<Var>(var));
     }
   }
 
@@ -400,12 +402,12 @@ class CanonicalizePlanner : public ExprVisitor {
     return current_block_.defined() && current_block_.value().as<DataflowBlockNode>();
   }
 
-  Optional<BindingBlock> current_block_;
-  Map<Var, BindingBlock> def_blocks_;
+  ffi::Optional<BindingBlock> current_block_;
+  ffi::Map<Var, BindingBlock> def_blocks_;
 
-  Map<Var, Var> trivial_bindings_;
-  Map<Var, Expr> known_bindings_;
-  Map<Var, Constant> known_bound_to_constant_;
+  ffi::Map<Var, Var> trivial_bindings_;
+  ffi::Map<Var, Expr> known_bindings_;
+  ffi::Map<Var, Constant> known_bound_to_constant_;
   std::unordered_set<Var> defined_inside_dataflow_;
   // Set of vars either used outside a dataflow block altogether or outside their
   // home dataflow block (the one where they were defined)
@@ -440,7 +442,7 @@ class BindingCanonicalizer : public ExprMutator {
   }
 
   Expr VisitExpr_(const VarNode* var) override {
-    Var new_var = GetRef<Var>(var);
+    Var new_var = ffi::GetRef<Var>(var);
     while (auto opt = plan_.replace_usage.Get(new_var->vid)) {
       new_var = opt.value();
     }
@@ -456,10 +458,10 @@ class BindingCanonicalizer : public ExprMutator {
   // use the dataflow var's definition directly
   BindingBlock VisitBindingBlock_(const DataflowBlockNode* block) override {
     auto new_block = Downcast<DataflowBlock>(ExprMutator::VisitBindingBlock_(block));
-    std::unordered_set<DataflowVar, ObjectPtrHash, ObjectPtrEqual> disqualified_set;
-    std::unordered_set<DataflowVar, ObjectPtrHash, ObjectPtrEqual> output_vars;
+    std::unordered_set<DataflowVar, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> disqualified_set;
+    std::unordered_set<DataflowVar, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> output_vars;
 
-    std::unordered_map<DataflowVar, Expr, ObjectPtrHash, ObjectPtrEqual> candidates;
+    std::unordered_map<DataflowVar, Expr, ffi::ObjectPtrHash, ffi::ObjectPtrEqual> candidates;
     for (int i = new_block->bindings.size() - 1; i >= 0; i--) {
       auto binding = new_block->bindings[i];
       auto var = binding->var;
@@ -470,7 +472,7 @@ class BindingCanonicalizer : public ExprMutator {
 
         // disqualify any vars that appear in the RHS
         // (for a function literal, consider only free vars)
-        Array<Var> rhs_vars;
+        ffi::Array<Var> rhs_vars;
         if (!value->IsInstance<FunctionNode>()) {
           rhs_vars = FreeVars(value);
         } else {
@@ -494,12 +496,12 @@ class BindingCanonicalizer : public ExprMutator {
         // disqualify if the RHS is not a single dataflow var
         // or if the var has been output before
         if (const auto* rhs_var = value.as<DataflowVarNode>()) {
-          if (output_vars.count(GetRef<DataflowVar>(rhs_var))) {
-            disqualified_set.insert(GetRef<DataflowVar>(rhs_var));
+          if (output_vars.count(ffi::GetRef<DataflowVar>(rhs_var))) {
+            disqualified_set.insert(ffi::GetRef<DataflowVar>(rhs_var));
           }
-          output_vars.insert(GetRef<DataflowVar>(rhs_var));
+          output_vars.insert(ffi::GetRef<DataflowVar>(rhs_var));
         } else {
-          Array<Var> disqualified;
+          ffi::Array<Var> disqualified;
           // for function literal, consider only free vars
           if (value->IsInstance<FunctionNode>()) {
             disqualified = FreeVars(value);
@@ -518,7 +520,7 @@ class BindingCanonicalizer : public ExprMutator {
 
     // second pass: for each binding where the LHS is a candidate, remove the binding.
     // If the RHS is a candidate, replace it with the definition
-    Array<Binding> new_bindings;
+    ffi::Array<Binding> new_bindings;
     bool changed = false;
     for (auto binding : new_block->bindings) {
       if (binding->var->IsInstance<DataflowVarNode>() &&
@@ -539,7 +541,7 @@ class BindingCanonicalizer : public ExprMutator {
               VarBinding(binding->var, candidates.at(Downcast<DataflowVar>(var_binding->value)));
           new_bindings.push_back(new_binding);
         } else {
-          CHECK(false) << "Invalid binding";  // never happens
+          TVM_FFI_ICHECK(false) << "Invalid binding";  // never happens
         }
       } else {
         new_bindings.push_back(binding);
@@ -592,10 +594,10 @@ Pass CanonicalizeBindings() {
       "CanonicalizeBindings");
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.transform.CanonicalizeBindings", CanonicalizeBindings);
-});
+}
 
 }  // namespace transform
 

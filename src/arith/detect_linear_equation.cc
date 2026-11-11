@@ -24,16 +24,16 @@
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/expr_functor.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/stmt_functor.h>
 
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 // Linear equation, the components can be undefined.
 struct LinearEqEntry {
@@ -108,7 +108,7 @@ class LinearEqDetector : public ExprFunctor<LinearEqEntry(const PrimExpr&, const
     }
     return ret;
   }
-  LinearEqEntry VisitExprDefault_(const Object* op, const PrimExpr& e) final {
+  LinearEqEntry VisitExprDefault_(const ffi::Object* op, const PrimExpr& e) final {
     if (fail_) return LinearEqEntry();
     if (UsesVar(e, [this](const VarNode* var) { return var == var_.get(); })) {
       fail_ = true;
@@ -142,14 +142,14 @@ class LinearEqDetector : public ExprFunctor<LinearEqEntry(const PrimExpr&, const
   }
 };
 
-Array<PrimExpr> DetectLinearEquation(const PrimExpr& e, const Array<Var>& vars) {
+ffi::Array<PrimExpr> DetectLinearEquation(const PrimExpr& e, const ffi::Array<Var>& vars) {
   PrimExpr base = e;
-  Array<PrimExpr> coeff;
+  ffi::Array<PrimExpr> coeff;
 
   for (Var v : vars) {
     LinearEqEntry ret;
     if (!LinearEqDetector(v).Detect(base, &ret)) {
-      return Array<PrimExpr>();
+      return ffi::Array<PrimExpr>();
     }
     coeff.push_back(ret.coeff);
     base = std::move(ret.base);
@@ -162,7 +162,7 @@ Array<PrimExpr> DetectLinearEquation(const PrimExpr& e, const Array<Var>& vars) 
     vset.insert(vars[i - 1].get());
     // The previous coeff contains the variable
     if (UsesVar(coeff[i - 2], vset_contains)) {
-      return Array<PrimExpr>();
+      return ffi::Array<PrimExpr>();
     }
   }
   coeff.push_back(base);
@@ -174,7 +174,7 @@ bool DetectClipBound(const PrimExpr& cond,
                      std::unordered_map<const VarNode*, IntervalEntry>* bmap) {
   int flag = 0;
   Var var;
-  auto fvisit = [&bmap, &flag, &var](const ObjectRef& n) {
+  auto fvisit = [&bmap, &flag, &var](const ffi::ObjectRef& n) {
     if (const VarNode* v = n.as<VarNode>()) {
       if (bmap->count(v)) {
         if (flag == 0) {
@@ -218,8 +218,8 @@ bool DetectClipBound(const PrimExpr& cond,
   ret.coeff = analyzer.Simplify(ret.coeff);
   IntervalEntry& p = (*bmap)[var.get()];
 
-  Optional<PrimExpr> min_value;
-  Optional<PrimExpr> max_value;
+  ffi::Optional<PrimExpr> min_value;
+  ffi::Optional<PrimExpr> max_value;
   if (is_const_int(ret.coeff, 1)) {
     // var + shift >=0 -> var >= -shift
     min_value = -ret.base;
@@ -265,18 +265,18 @@ void SplitCommExpr(const PrimExpr& e, std::vector<PrimExpr>* ret) {
 
 // Detect the lower and upper bound from the expression.
 // e must be connected by and.
-Array<PrimExpr> DetectClipBound(const PrimExpr& e, const Array<Var>& vars) {
+ffi::Array<PrimExpr> DetectClipBound(const PrimExpr& e, const ffi::Array<Var>& vars) {
   std::vector<PrimExpr> splits;
   Analyzer analyzer;
-  SplitCommExpr<tir::AndNode>(analyzer.Simplify(e), &splits);
+  SplitCommExpr<tirx::AndNode>(analyzer.Simplify(e), &splits);
   std::unordered_map<const VarNode*, IntervalEntry> rmap;
   for (Var v : vars) {
     rmap[v.get()] = IntervalEntry();
   }
   for (PrimExpr cond : splits) {
-    if (!DetectClipBound(cond, &rmap)) return Array<PrimExpr>();
+    if (!DetectClipBound(cond, &rmap)) return ffi::Array<PrimExpr>();
   }
-  Array<PrimExpr> ret;
+  ffi::Array<PrimExpr> ret;
   for (Var v : vars) {
     IntervalEntry e = rmap[v.get()];
     if (e.min_value.defined()) {
@@ -291,12 +291,12 @@ Array<PrimExpr> DetectClipBound(const PrimExpr& e, const Array<Var>& vars) {
   return ret;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("arith.DetectLinearEquation", DetectLinearEquation)
       .def("arith.DetectClipBound",
-           [](const PrimExpr& e, const Array<Var>& vars) { return DetectClipBound(e, vars); });
-});
+           [](const PrimExpr& e, const ffi::Array<Var>& vars) { return DetectClipBound(e, vars); });
+}
 }  // namespace arith
 }  // namespace tvm

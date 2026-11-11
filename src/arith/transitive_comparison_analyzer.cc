@@ -21,8 +21,8 @@
  */
 
 #include <tvm/arith/analyzer.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/expr.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr.h>
 
 #include <optional>
 #include <vector>
@@ -33,7 +33,7 @@
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 class TransitiveComparisonAnalyzer::Impl {
  public:
@@ -63,7 +63,7 @@ class TransitiveComparisonAnalyzer::Impl {
    * \param expr The bound expression
    * \param allow_override Whether to allow override of existing information.
    */
-  void Bind(const tir::Var& var, const PrimExpr& expr, bool allow_override = false);
+  void Bind(const tirx::Var& var, const PrimExpr& expr, bool allow_override = false);
 
   /*! \brief Bind a variable as being within a specified range
    *
@@ -71,7 +71,7 @@ class TransitiveComparisonAnalyzer::Impl {
    * \param range The known range
    * \param allow_override Whether to allow override of existing information.
    */
-  void Bind(const tir::Var& var, const Range& expr, bool allow_override = false);
+  void Bind(const tirx::Var& var, const Range& expr, bool allow_override = false);
 
   /*!
    * \brief Update the internal state to enter constraint.
@@ -81,6 +81,9 @@ class TransitiveComparisonAnalyzer::Impl {
    * `nullptr`, if no cleanup is required.
    */
   std::function<void()> EnterConstraint(const PrimExpr& expr);
+
+  // Copy internal state from another Impl (for Analyzer cloning)
+  void CopyFrom(const Impl& other);
 
  private:
   /* \brief Internal representation of a PrimExpr
@@ -139,7 +142,7 @@ class TransitiveComparisonAnalyzer::Impl {
    * \see ExprToKey
    * \see ExprToPreviousKey
    */
-  std::unordered_map<PrimExpr, Key, StructuralHash, StructuralEqual> expr_to_key;
+  std::unordered_map<PrimExpr, Key, ffi::StructuralHash, ffi::StructuralEqual> expr_to_key;
 
   /*! \brief Internal representation of a comparison operator */
   struct Comparison {
@@ -276,7 +279,7 @@ class TransitiveComparisonAnalyzer::Impl {
    * Tracked separatedly to handle the `allow_override` option used by
    * all sub-analyzers when binding variables.
    */
-  Map<Var, Range> prev_bindings_;
+  ffi::Map<Var, Range> prev_bindings_;
 
   /*! \brief Known comparisons based on definitionally-true statements
    *
@@ -320,7 +323,7 @@ CompareResult Reverse(CompareResult res) {
     case CompareResult::kUnknown:
       return CompareResult::kUnknown;
     default:
-      LOG(FATAL) << "Invalid CompareResult: " << static_cast<int>(res);
+      TVM_FFI_THROW(InternalError) << "Invalid CompareResult: " << static_cast<int>(res);
   }
 }
 
@@ -478,10 +481,10 @@ TransitiveComparisonAnalyzer::Impl::Comparison::Negated() const {
 
 bool TransitiveComparisonAnalyzer::Impl::Comparison::Implies(
     const TransitiveComparisonAnalyzer::Impl::Comparison& other) const {
-  ICHECK(lhs_ == other.lhs_);
-  ICHECK(rhs_ == other.rhs_);
-  ICHECK(IsNormalized());
-  ICHECK(other.IsNormalized());
+  TVM_FFI_ICHECK(lhs_ == other.lhs_);
+  TVM_FFI_ICHECK(rhs_ == other.rhs_);
+  TVM_FFI_ICHECK(IsNormalized());
+  TVM_FFI_ICHECK(other.IsNormalized());
 
   if (result_ == other.result_ && offset_ == other.offset_) {
     // if c1 == c2, x != y + c1 => x != y + c2
@@ -547,7 +550,7 @@ std::function<void()> TransitiveComparisonAnalyzer::EnterConstraint(const PrimEx
 void TransitiveComparisonAnalyzer::Impl::AddKnown(const PrimExpr& expr,
                                                   std::vector<Comparison>* vec) {
   for (const auto& subexpr : ExtractConstraints(expr, false)) {
-    if (tir::SideEffect(expr) <= tir::CallEffectKind::kPure) {
+    if (tirx::SideEffect(expr) <= tirx::CallEffectKind::kPure) {
       if (auto cmp = FromExpr(subexpr)) {
         vec->push_back(cmp.value());
       }
@@ -555,7 +558,7 @@ void TransitiveComparisonAnalyzer::Impl::AddKnown(const PrimExpr& expr,
   }
 }
 
-void TransitiveComparisonAnalyzer::Impl::Bind(const tir::Var& var, const Range& range,
+void TransitiveComparisonAnalyzer::Impl::Bind(const tirx::Var& var, const Range& range,
                                               bool allow_override) {
   auto it = prev_bindings_.find(var);
   if (it != prev_bindings_.end()) {
@@ -563,8 +566,8 @@ void TransitiveComparisonAnalyzer::Impl::Bind(const tir::Var& var, const Range& 
     bool differs_from_previous = !expr_equal(range->min, (*it).second->min) ||
                                  !expr_equal(range->extent, (*it).second->extent);
     if (differs_from_previous) {
-      ICHECK(allow_override) << "Binding of variable " << var << " as " << range
-                             << " conflicts with previous binding as " << (*it).second;
+      TVM_FFI_ICHECK(allow_override) << "Binding of variable " << var << " as " << range
+                                     << " conflicts with previous binding as " << (*it).second;
       if (auto key = ExprToPreviousKey(var)) {
         knowns_.erase(std::remove_if(knowns_.begin(), knowns_.end(),
                                      [&](const auto& known) { return known.lhs_ == key.value(); }),
@@ -583,7 +586,7 @@ void TransitiveComparisonAnalyzer::Impl::Bind(const tir::Var& var, const Range& 
   }
 }
 
-void TransitiveComparisonAnalyzer::Impl::Bind(const tir::Var& var, const PrimExpr& expr,
+void TransitiveComparisonAnalyzer::Impl::Bind(const tirx::Var& var, const PrimExpr& expr,
                                               bool allow_override) {
   Bind(var, Range::FromMinExtent(expr, 1), allow_override);
 }
@@ -594,10 +597,15 @@ std::function<void()> TransitiveComparisonAnalyzer::Impl::EnterConstraint(const 
   size_t new_literal_size = scoped_knowns_.size();
 
   auto frecover = [old_literal_size, new_literal_size, this]() {
-    ICHECK_EQ(scoped_knowns_.size(), new_literal_size);
+    TVM_FFI_ICHECK_EQ(scoped_knowns_.size(), new_literal_size);
     scoped_knowns_.erase(scoped_knowns_.begin() + old_literal_size, scoped_knowns_.end());
   };
   return frecover;
+}
+
+// Deep copy internal state from another analyzer
+void TransitiveComparisonAnalyzer::CopyFrom(const TransitiveComparisonAnalyzer& other) {
+  this->impl_->CopyFrom(*other.impl_);
 }
 
 CompareResult TransitiveComparisonAnalyzer::Impl::TryCompare(const PrimExpr& lhs_expr,
@@ -667,7 +675,7 @@ TransitiveComparisonAnalyzer::Impl::CollectIndirectComparisons(Key lhs_key, Key 
   auto output = DFSFromLHS(lhs_key, rhs_key);
   for (Comparison cmp : DFSFromLHS(rhs_key, lhs_key)) {
     auto opt_normalized = cmp.WithLHS(lhs_key);
-    ICHECK(opt_normalized.has_value());
+    TVM_FFI_ICHECK(opt_normalized.has_value());
     output.push_back(opt_normalized.value());
   }
   return output;
@@ -732,12 +740,12 @@ TransitiveComparisonAnalyzer::Impl::DFSFromLHS(Key lhs_key, Key rhs_key) const {
     to_visit.erase(to_visit.begin());
 
     std::vector<Comparison>& prev_knowns_using_middle = compared_to_lhs.at(middle_key);
-    ICHECK(compared_to_lhs.count(middle_key));
+    TVM_FFI_ICHECK(compared_to_lhs.count(middle_key));
 
     std::vector<Comparison> new_knowns_using_lhs;
 
     auto attempt_transitive = [&](Comparison cmp) {
-      ICHECK(cmp.IsNormalized());
+      TVM_FFI_ICHECK(cmp.IsNormalized());
 
       Key right_key = cmp.rhs_;
 
@@ -862,14 +870,23 @@ CompareResult TransitiveComparisonAnalyzer::Impl::MergeComparisons(
 
       case CompareResult::kGT:
       case CompareResult::kLT:
-        LOG(FATAL) << "Internal error, normalized comparisons should only include <= and >=";
+        TVM_FFI_THROW(InternalError)
+            << "Internal error, normalized comparisons should only include <= and >=";
 
       default:
-        LOG(FATAL) << "Invalid CompareResult: " << static_cast<int>(cmp.result_);
+        TVM_FFI_THROW(InternalError) << "Invalid CompareResult: " << static_cast<int>(cmp.result_);
     }
   }
 
   return result;
+}
+
+// Implementation of the CopyFrom helper
+void TransitiveComparisonAnalyzer::Impl::CopyFrom(const Impl& other) {
+  prev_bindings_ = other.prev_bindings_;
+  knowns_ = other.knowns_;
+  scoped_knowns_ = other.scoped_knowns_;
+  expr_to_key = other.expr_to_key;
 }
 
 }  // namespace arith

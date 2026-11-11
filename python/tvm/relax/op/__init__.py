@@ -1,3 +1,4 @@
+# isort: skip_file
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -27,6 +28,7 @@ from .base import (
     call_dps_packed,
     call_inplace_packed,
     call_pure_packed,
+    call_py_func,
     call_tir,
     call_tir_inplace,
     call_tir_with_grad,
@@ -39,11 +41,13 @@ from .base import (
     register_gradient,
     shape_of,
     shape_to_tensor,
+    size,
     tensor_to_shape,
     to_vdevice,
 )
 from .binary import (
     add,
+    atan2,
     bitwise_and,
     bitwise_or,
     bitwise_xor,
@@ -118,7 +122,7 @@ from .sampling import multinomial_from_uniform
 from .search import argmax, argmin, where, bucketize
 from .set import nonzero, unique
 from .sorting import argsort, sort, topk
-from .statistical import cumprod, cumsum, max, mean, min, prod, std, sum, variance
+from .statistical import cumprod, cumsum, max, mean, min, prod, std, sum, variance, median
 from .ternary import ewise_fma
 from .unary import (
     abs,
@@ -153,6 +157,14 @@ from .unary import (
     tan,
     tanh,
     trunc,
+)
+from .vision import (
+    all_class_non_max_suppression,
+    get_valid_counts,
+    multibox_transform_loc,
+    non_max_suppression,
+    roi_align,
+    roi_pool,
 )
 
 

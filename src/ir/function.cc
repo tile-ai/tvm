@@ -26,51 +26,60 @@
 #include <tvm/ffi/rvalue_ref.h>
 #include <tvm/ir/function.h>
 #include <tvm/relax/expr.h>
-#include <tvm/tir/function.h>
+#include <tvm/tirx/function.h>
 
 namespace tvm {
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("ir.BaseFunc_Attrs", [](BaseFunc func) { return func->attrs; })
       .def("ir.BaseFuncCopy", [](BaseFunc func) { return func; })
       .def("ir.BaseFuncWithAttr",
-           [](ffi::RValueRef<BaseFunc> func_ref, String key, Any value) -> BaseFunc {
+           [](ffi::RValueRef<BaseFunc> func_ref, ffi::String key, Any value) -> BaseFunc {
              BaseFunc func = *std::move(func_ref);
-             if (func->IsInstance<tir::PrimFuncNode>()) {
-               return WithAttr(Downcast<tir::PrimFunc>(std::move(func)), key, value);
+             if (func->IsInstance<tirx::PrimFuncNode>()) {
+               return WithAttr(Downcast<tirx::PrimFunc>(std::move(func)), key, value);
              } else if (func->IsInstance<relax::FunctionNode>()) {
                return WithAttr(Downcast<relax::Function>(std::move(func)), key, value);
+             } else if (func->IsInstance<relax::ExternFuncNode>()) {
+               return WithAttr(Downcast<relax::ExternFunc>(std::move(func)), key, value);
              } else {
-               LOG(FATAL) << "Do not support function type " << func->GetTypeKey();
+               TVM_FFI_THROW(InternalError)
+                   << "Do not support function type " << func->GetTypeKey();
              }
            })
       .def("ir.BaseFuncWithAttrs",
-           [](ffi::RValueRef<BaseFunc> func_ref, Map<String, ffi::Any> attr_map) -> BaseFunc {
+           [](ffi::RValueRef<BaseFunc> func_ref,
+              ffi::Map<ffi::String, ffi::Any> attr_map) -> BaseFunc {
              BaseFunc func = *std::move(func_ref);
-             if (func->IsInstance<tir::PrimFuncNode>()) {
-               return WithAttrs(Downcast<tir::PrimFunc>(std::move(func)), attr_map);
+             if (func->IsInstance<tirx::PrimFuncNode>()) {
+               return WithAttrs(Downcast<tirx::PrimFunc>(std::move(func)), attr_map);
              }
              if (const auto f = tvm::ffi::Function::GetGlobal("relax.FuncWithAttrs")) {
-               if (auto ret = (*f)(func, attr_map).cast<Optional<BaseFunc>>()) {
+               if (auto ret = (*f)(func, attr_map).cast<ffi::Optional<BaseFunc>>()) {
                  return ret.value();
                }
              }
-             LOG(FATAL) << "Do not support function type " << func->GetTypeKey();
+             if (func->IsInstance<relax::ExternFuncNode>()) {
+               return WithAttrs(Downcast<relax::ExternFunc>(std::move(func)), attr_map);
+             }
+             TVM_FFI_THROW(InternalError) << "Do not support function type " << func->GetTypeKey();
              TVM_FFI_UNREACHABLE();
            })
-      .def("ir.BaseFuncWithoutAttr", [](ffi::RValueRef<BaseFunc> func_ref, String key) -> BaseFunc {
-        BaseFunc func = *std::move(func_ref);
-        if (func->IsInstance<tir::PrimFuncNode>()) {
-          return WithoutAttr(Downcast<tir::PrimFunc>(std::move(func)), key);
-        } else if (func->IsInstance<relax::FunctionNode>()) {
-          return WithoutAttr(Downcast<relax::Function>(std::move(func)), key);
-        } else {
-          LOG(FATAL) << "Do not support function type " << func->GetTypeKey();
-          TVM_FFI_UNREACHABLE();
-        }
-      });
-});
+      .def("ir.BaseFuncWithoutAttr",
+           [](ffi::RValueRef<BaseFunc> func_ref, ffi::String key) -> BaseFunc {
+             BaseFunc func = *std::move(func_ref);
+             if (func->IsInstance<tirx::PrimFuncNode>()) {
+               return WithoutAttr(Downcast<tirx::PrimFunc>(std::move(func)), key);
+             } else if (func->IsInstance<relax::FunctionNode>()) {
+               return WithoutAttr(Downcast<relax::Function>(std::move(func)), key);
+             } else {
+               TVM_FFI_THROW(InternalError)
+                   << "Do not support function type " << func->GetTypeKey();
+               TVM_FFI_UNREACHABLE();
+             }
+           });
+}
 
 }  // namespace tvm

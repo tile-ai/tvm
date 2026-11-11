@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: RUF012
 
 import contextlib
 
@@ -21,8 +22,6 @@ import pytest
 
 import tvm
 import tvm.testing
-
-from tvm import te
 from tvm.arith import ConstIntBound
 
 NEG_INF = ConstIntBound.NEG_INF
@@ -69,16 +68,16 @@ class BaseCompare:
 
 class TestDataType(BaseCompare):
     test_case = tvm.testing.parameter(
-        TestCase(te.var("x", dtype="int64"), (NEG_INF, POS_INF)),
-        TestCase(te.var("x", dtype="int8"), (-128, 127)),
-        TestCase(te.var("x", dtype="uint8"), (0, 255)),
-        TestCase(te.size_var("x", dtype="int32"), (0, POS_INF)),
+        TestCase(tvm.tirx.Var("x", "int64"), (NEG_INF, POS_INF)),
+        TestCase(tvm.tirx.Var("x", "int8"), (-128, 127)),
+        TestCase(tvm.tirx.Var("x", "uint8"), (0, 255)),
+        TestCase(tvm.tirx.SizeVar("x", "int32"), (0, POS_INF)),
     )
 
 
 class TestCastBound(BaseCompare):
-    x = te.var("x", dtype="int8")
-    tmod = tvm.tir.truncmod
+    x = tvm.tirx.Var("x", "int8")
+    tmod = tvm.tirx.truncmod
 
     test_case = tvm.testing.parameter(
         TestCase(tmod(x, 3).astype("uint32"), (0, 2)),
@@ -87,8 +86,8 @@ class TestCastBound(BaseCompare):
 
 
 class TestAddSubBound(BaseCompare):
-    x = te.var("x", "int64")
-    y = te.var("y", "int64")
+    x = tvm.tirx.Var("x", "int64")
+    y = tvm.tirx.Var("y", "int64")
 
     test_case = tvm.testing.parameter(
         TestCase(x + y, (NEG_INF, POS_INF)),
@@ -119,7 +118,7 @@ class TestBoundsUsingReciprocals(BaseCompare):
     achieve its minimum while `A*B` simultaneously achieves its maximum.
     """
 
-    A, B, C = [te.var(letter, "int64") for letter in "ABC"]
+    A, B, C = [tvm.tirx.Var(letter, "int64") for letter in "ABC"]
 
     symmetric_bounds = {A: (1, 4095), B: (1, 4095), C: (2048, 2048)}
     asymmetric_bounds = {A: (1, 1024), B: (1, POS_INF), C: (2048, 2048)}
@@ -137,7 +136,7 @@ class TestBoundsUsingReciprocals(BaseCompare):
 
 
 class TestMulBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(x * y + 20, (0, 60), {x: (-2, 4), y: (4, 10)}),
@@ -147,9 +146,9 @@ class TestMulBound(BaseCompare):
 
 
 class TestTruncDivBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
-    expr = tvm.tir.truncdiv(x, y)
+    expr = tvm.tirx.truncdiv(x, y)
 
     test_case = tvm.testing.parameter(
         TestCase(expr, (-2, None), {x: (-9, 4), y: (4, 10)}),
@@ -160,9 +159,9 @@ class TestTruncDivBound(BaseCompare):
 
 
 class TestTruncModBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
-    expr = tvm.tir.truncmod(x, y)
+    expr = tvm.tirx.truncmod(x, y)
 
     test_case = tvm.testing.parameter(
         TestCase(expr, (-9, 4), {x: (-9, 4), y: (4, 10)}),
@@ -172,9 +171,9 @@ class TestTruncModBound(BaseCompare):
 
 
 class TestFloorDivBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
-    ux = te.var("x", dtype="uint32")
-    uy = te.var("y", dtype="uint32")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
+    ux = tvm.tirx.Var("x", "uint32")
+    uy = tvm.tirx.Var("y", "uint32")
 
     test_case = tvm.testing.parameter(
         TestCase(x // y, (-9 // 4, None), {x: (-9, 4), y: (4, 10)}),
@@ -186,32 +185,87 @@ class TestFloorDivBound(BaseCompare):
 
 
 class TestFloorModBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(x % y, (0, 9), {x: (-9, 4), y: (4, 10)}),
         TestCase(x % y, (0, 9), {x: (NEG_INF, POS_INF), y: (4, 10)}),
         TestCase(x % y, (0, 9), {x: (1, POS_INF), y: (4, 10)}),
+        TestCase((x * 192 + 127) % 128, (63, 127), {x: (0, POS_INF)}),
     )
 
 
+@pytest.mark.parametrize("remainder", [tvm.tirx.floormod, tvm.tirx.truncmod])
+@pytest.mark.parametrize(
+    "coefficient,offset,modulus",
+    [
+        (192, 127, 128),
+        (192, -65, 128),
+        (64, 63, 128),
+        (128, 127, 128),
+        (192, 64, 128),
+        (192, 0, 128),
+        (96, 63, 64),
+        (7, 5, 4),
+    ],
+)
+@pytest.mark.parametrize("lower,upper", [(0, 8), (-8, -1), (-8, 8)])
+def test_modular_remainder_bounds_contain_values(
+    remainder, coefficient, offset, modulus, lower, upper
+):
+    x = tvm.tirx.Var("x", "int64")
+    analyzer = tvm.arith.Analyzer()
+    analyzer.update(x, ConstIntBound(lower, upper))
+    bound = analyzer.const_int_bound(remainder(coefficient * x + offset, modulus))
+
+    for value in range(lower, upper + 1):
+        dividend = coefficient * value + offset
+        if remainder is tvm.tirx.truncmod and dividend < 0:
+            expected = -((-dividend) % modulus)
+        else:
+            expected = dividend % modulus
+        assert bound.min_value <= expected <= bound.max_value, (
+            f"{remainder.__name__}({dividend}, {modulus}) = {expected} "
+            f"is outside [{bound.min_value}, {bound.max_value}]"
+        )
+
+
+def test_symbolic_tail_guard_with_modular_remainder():
+    batch = tvm.tirx.Var("batch", "int32")
+    index = tvm.tirx.Var("index", "int32")
+    thread = tvm.tirx.Var("thread", "int32")
+    analyzer = tvm.arith.Analyzer()
+    analyzer.update(batch, ConstIntBound(0, POS_INF))
+    analyzer.bind(thread, tvm.ir.Range(0, 128))
+    extent = (batch * 192 - 1) // 128 + 1
+
+    with analyzer.constraint_scope(index >= 0), analyzer.constraint_scope(index < extent):
+        analyzer.bind(index, tvm.ir.Range(0, extent))
+        with analyzer.constraint_scope(extent > 0):
+            # batch=1, index=1, thread=64 satisfies the loop constraints but
+            # fails this guard, so the padded lanes must not be proved safe.
+            assert not analyzer.can_prove(
+                index * 128 + thread < batch * 192, tvm.arith.ProofStrength.SYMBOLIC_BOUND
+            )
+
+
 class TestMinMaxBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
     test_case = tvm.testing.parameter(
-        TestCase(tvm.te.min(x, y), (-9, 10), {x: (-9, 11), y: (4, 10)}),
-        TestCase(tvm.te.min(x, y), (NEG_INF, 10), {x: (NEG_INF, POS_INF), y: (4, 10)}),
-        TestCase(tvm.te.max(x, y), (4, POS_INF), {x: (NEG_INF, POS_INF), y: (4, 10)}),
-        TestCase(tvm.te.max(x, y), (4, POS_INF), {x: (1, POS_INF), y: (4, 10)}),
+        TestCase(tvm.tirx.min(x, y), (-9, 10), {x: (-9, 11), y: (4, 10)}),
+        TestCase(tvm.tirx.min(x, y), (NEG_INF, 10), {x: (NEG_INF, POS_INF), y: (4, 10)}),
+        TestCase(tvm.tirx.max(x, y), (4, POS_INF), {x: (NEG_INF, POS_INF), y: (4, 10)}),
+        TestCase(tvm.tirx.max(x, y), (4, POS_INF), {x: (1, POS_INF), y: (4, 10)}),
     )
 
 
 class TestSelectBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(
-            tvm.tir.Select(x > 1, (y < 0).astype("int32"), y + 1),
+            tvm.tirx.Select(x > 1, (y < 0).astype("int32"), y + 1),
             (0, 11),
             {x: (-9, 11), y: (4, 10)},
         ),
@@ -219,7 +273,7 @@ class TestSelectBound(BaseCompare):
 
 
 class TestShiftAndBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(x >> y, (-3, 2), {x: (-9, 11), y: (2, 10)}),
@@ -229,9 +283,9 @@ class TestShiftAndBound(BaseCompare):
 
 
 class TestMixIndexBound(BaseCompare):
-    x, y = te.var("x"), te.var("y")
-    tdiv = tvm.tir.truncdiv
-    tmod = tvm.tir.truncmod
+    x, y = tvm.tirx.Var("x", "int32"), tvm.tirx.Var("y", "int32")
+    tdiv = tvm.tirx.truncdiv
+    tmod = tvm.tirx.truncmod
 
     test_case = tvm.testing.parameter(
         TestCase(tmod(x, 8) + tdiv(x, 8) * 8, (0, 24 - 1), {x: (0, 24 - 1), y: (0, 3 - 1)}),
@@ -243,15 +297,15 @@ class TestMixIndexBound(BaseCompare):
 
 
 class TestLetBound(BaseCompare):
-    x = te.var("x")
+    x = tvm.tirx.Var("x", "int32")
     test_case = tvm.testing.parameter(
-        TestCase(tvm.tir.Let(x, 1, x + 1), (2, 2)),
+        TestCase(tvm.tirx.Let(x, 1, x + 1), (2, 2)),
     )
 
 
 class TestFloorModNegativeDivisor(BaseCompare):
-    flm, fld = tvm.te.floormod, tvm.te.floordiv
-    a, b = te.var("a"), te.var("b")
+    flm, fld = tvm.tirx.floormod, tvm.tirx.floordiv
+    a, b = tvm.tirx.Var("a", "int32"), tvm.tirx.Var("b", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(a % b, (-4, 6), {a: (0, 6), b: (-5, 7)}),
@@ -264,7 +318,7 @@ class TestDivModAssumeNoZeroDivisor(BaseCompare):
     from symbolic shape programs
     """
 
-    a, b = te.var("a"), te.var("b")
+    a, b = tvm.tirx.Var("a", "int32"), tvm.tirx.Var("b", "int32")
 
     test_case = tvm.testing.parameter(
         TestCase(a // b, (0, 6), {a: (0, 6), b: (0, POS_INF)}),
@@ -273,28 +327,40 @@ class TestDivModAssumeNoZeroDivisor(BaseCompare):
 
 
 class TestMultipleCondition(BaseCompare):
-    a = te.var("a")
+    a = tvm.tirx.Var("a", "int32")
     test_case = tvm.testing.parameter(
         TestCase(
             a % 58 - 1,
             (0, None),
             known_bounds={a: (0, 128)},
-            constraint=tvm.tir.all(1 <= a % 58, a % 58 < 57),
+            constraint=tvm.tirx.all(1 <= a % 58, a % 58 < 57),
         ),
     )
 
 
 class TestBroadcastBound(BaseCompare):
-    a = te.var("a")
+    a = tvm.tirx.Var("a", "int32")
     test_case = tvm.testing.parameter(
-        TestCase(tvm.tir.Broadcast(a, 4), (0, 128), {a: (0, 128)}),
+        TestCase(tvm.tirx.Broadcast(a, 4), (0, 128), {a: (0, 128)}),
     )
 
 
 class TestRampBound(BaseCompare):
-    a = te.var("a")
+    a = tvm.tirx.Var("a", "int32")
     test_case = tvm.testing.parameter(
-        TestCase(tvm.tir.Ramp(a, 2, 4) + 2, (2, 128 + 2 * 3 + 2), {a: (0, 128)}),
+        TestCase(tvm.tirx.Ramp(a, 2, 4) + 2, (2, 128 + 2 * 3 + 2), {a: (0, 128)}),
+    )
+
+
+class TestModularSetBound(BaseCompare):
+    analyzer = tvm.arith.Analyzer()
+    tx = tvm.tirx.Var("tx", "int32")
+    bx = tvm.tirx.Var("bx", "int32")
+
+    expr = (bx * 2048 + tx * 16) % 7168
+
+    test_case = tvm.testing.parameter(
+        TestCase(expr, (0, 7152), {bx: (0, 3584), tx: (0, 128)}),
     )
 
 

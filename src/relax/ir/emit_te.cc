@@ -24,22 +24,17 @@
 
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/struct_info.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/stmt_functor.h>
 
 namespace tvm {
 namespace relax {
 
-// RXPlaceholderOpNode
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<RXPlaceholderOpNode>([](const ObjectRef& node, ReprPrinter* p) {
-      auto* op = static_cast<const RXPlaceholderOpNode*>(node.get());
-      p->stream << "rxplaceholder(" << op->name << ", " << op << ")";
-    });
+// Pattern A (RM): auto-default repr from reflection for RXPlaceholderOpNode.
 
-TVM_FFI_STATIC_INIT_BLOCK({ RXPlaceholderOpNode::RegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { RXPlaceholderOpNode::RegisterReflection(); }
 
-te::Tensor TETensor(Expr value, Map<tir::Var, PrimExpr> tir_var_map, std::string name) {
-  auto n = make_object<RXPlaceholderOpNode>();
+te::Tensor TETensor(Expr value, ffi::Map<tirx::Var, PrimExpr> tir_var_map, std::string name) {
+  auto n = ffi::make_object<RXPlaceholderOpNode>();
   n->name = name;
   n->value = value;
 
@@ -51,7 +46,7 @@ te::Tensor TETensor(Expr value, Map<tir::Var, PrimExpr> tir_var_map, std::string
 
     int ndim = constant->data->ndim;
     ffi::Shape shape_tuple = constant->data.Shape();
-    Array<PrimExpr> shape;
+    ffi::Array<PrimExpr> shape;
     shape.reserve(ndim);
     for (int i = 0; i < ndim; ++i) {
       shape.push_back(IntImm(DataType::Int(64), shape_tuple[i]));
@@ -59,24 +54,25 @@ te::Tensor TETensor(Expr value, Map<tir::Var, PrimExpr> tir_var_map, std::string
     n->shape = std::move(shape);
     return te::PlaceholderOp(n).output(0);
   }
-  ICHECK(value->struct_info_.defined()) << "value must be normalized and contain StructInfo";
+  TVM_FFI_ICHECK(value->struct_info_.defined())
+      << "value must be normalized and contain StructInfo";
   auto* tensor_sinfo = GetStructInfoAs<TensorStructInfoNode>(value);
-  ICHECK(tensor_sinfo) << "Value must be a tensor";
+  TVM_FFI_ICHECK(tensor_sinfo) << "Value must be a tensor";
   auto* shape_expr = tensor_sinfo->shape.as<ShapeExprNode>();
-  CHECK(shape_expr)
-      << "ValueError: Expression does not have an known symbolic shape, please consider use "
+  TVM_FFI_CHECK(shape_expr, ValueError)
+      << "Expression does not have an known symbolic shape, please consider use "
          "match_cast "
       << "to constrain the shape before passing into te_tensor";
   n->shape = shape_expr->values.Map(
-      [&tir_var_map](const PrimExpr& e) { return tir::Substitute(e, tir_var_map); });
+      [&tir_var_map](const PrimExpr& e) { return tirx::Substitute(e, tir_var_map); });
   n->dtype = tensor_sinfo->dtype;
   return te::PlaceholderOp(n).output(0);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.TETensor", TETensor);
-});
+}
 
 }  // namespace relax
 }  // namespace tvm

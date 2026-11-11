@@ -27,16 +27,19 @@
 #include <tvm/runtime/device_api.h>
 #include <tvm/target/target.h>
 #include <tvm/target/target_kind.h>
+#include <tvm/runtime/logging.h>
 
 #include <algorithm>
 
-#include "../node/attr_registry.h"
+#include "../ir/attr_registry.h"
 #include "../support/utils.h"
-#include "./parsers/cpu.h"
+#include "./canonicalizer/llvm/canonicalize.h"
 
 namespace tvm {
 
-TVM_FFI_STATIC_INIT_BLOCK({
+namespace refl = ffi::reflection;
+
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   TargetKindNode::RegisterReflection();
   refl::TypeAttrDef<TargetKindNode>()
@@ -45,49 +48,51 @@ TVM_FFI_STATIC_INIT_BLOCK({
              // simply save as the string
              return node->name;
            })
-      .def("__data_from_json__", [](const String& name) {
+      .def("__data_from_json__", [](const ffi::String& name) {
         auto kind = TargetKind::Get(name);
-        ICHECK(kind.has_value()) << "Cannot find target kind \'" << name << '\'';
+        TVM_FFI_ICHECK(kind.has_value()) << "Cannot find target kind \'" << name << '\'';
         return kind.value();
       });
-});
+}
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<TargetKindNode>([](const ObjectRef& obj, ReprPrinter* p) {
-      const TargetKind& kind = Downcast<TargetKind>(obj);
-      p->stream << kind->name;
-    });
+TVM_FFI_STATIC_INIT_BLOCK() {
+  namespace refl = tvm::ffi::reflection;
+  refl::TypeAttrDef<TargetKindNode>().def(
+      refl::type_attr::kRepr,
+      [](TargetKind kind, ffi::Function) -> ffi::String { return kind->name; });
+}
 
 /**********  Registry-related code  **********/
 
 using TargetKindRegistry = AttrRegistry<TargetKindRegEntry, TargetKind>;
 
-Array<String> TargetKindRegEntry::ListTargetKinds() {
+ffi::Array<ffi::String> TargetKindRegEntry::ListTargetKinds() {
   return TargetKindRegistry::Global()->ListAllNames();
 }
 
-Map<String, String> TargetKindRegEntry::ListTargetKindOptions(const TargetKind& target_kind) {
-  Map<String, String> options;
-  for (const auto& kv : target_kind->key2vtype_) {
-    options.Set(kv.first, kv.second.type_key);
+ffi::Map<ffi::String, ffi::String> TargetKindRegEntry::ListTargetKindOptions(
+    const TargetKind& target_kind) {
+  ffi::Map<ffi::String, ffi::String> options;
+  for (const auto& e : target_kind->schema_.ListOptions()) {
+    options.Set(e.key, e.type_str);
   }
   return options;
 }
 
-TargetKindRegEntry& TargetKindRegEntry::RegisterOrGet(const String& target_kind_name) {
+TargetKindRegEntry& TargetKindRegEntry::RegisterOrGet(const ffi::String& target_kind_name) {
   return TargetKindRegistry::Global()->RegisterOrGet(target_kind_name);
 }
 
-void TargetKindRegEntry::UpdateAttr(const String& key, ffi::Any value, int plevel) {
+void TargetKindRegEntry::UpdateAttr(const ffi::String& key, ffi::Any value, int plevel) {
   TargetKindRegistry::Global()->UpdateAttr(key, kind_, value, plevel);
 }
 
 const AttrRegistryMapContainerMap<TargetKind>& TargetKind::GetAttrMapContainer(
-    const String& attr_name) {
+    const ffi::String& attr_name) {
   return TargetKindRegistry::Global()->GetAttrMap(attr_name);
 }
 
-Optional<TargetKind> TargetKind::Get(const String& target_kind_name) {
+ffi::Optional<TargetKind> TargetKind::Get(const ffi::String& target_kind_name) {
   const TargetKindRegEntry* reg = TargetKindRegistry::Global()->Get(target_kind_name);
   if (reg == nullptr) {
     return std::nullopt;
@@ -140,14 +145,15 @@ static bool DetectDeviceFlag(Device device, runtime::DeviceAttrKind flag, ffi::A
   return true;
 }
 
-void CheckOrSetAttr(Map<String, ffi::Any>* attrs, const String& name, const String& value) {
+void CheckOrSetAttr(ffi::Map<ffi::String, ffi::Any>* attrs, const ffi::String& name,
+                    const ffi::String& value) {
   auto iter = attrs->find(name);
   if (iter == attrs->end()) {
     attrs->Set(name, value);
   } else {
-    auto str = (*iter).second.try_cast<String>();
-    ICHECK(str && str.value() == value) << "ValueError: Expects \"" << name << "\" to be \""
-                                        << value << "\", but gets: " << (*iter).second;
+    auto str = (*iter).second.try_cast<ffi::String>();
+    TVM_FFI_CHECK(str && str.value() == value, ValueError)
+        << "Expects \"" << name << "\" to be \"" << value << "\", but gets: " << (*iter).second;
   }
 }
 
@@ -158,13 +164,13 @@ void CheckOrSetAttr(Map<String, ffi::Any>* attrs, const String& name, const Stri
  * \param target The Target to update
  * \return The updated attributes
  */
-TargetJSON UpdateCUDAAttrs(TargetJSON target) {
+ffi::Map<ffi::String, ffi::Any> UpdateCUDAAttrs(ffi::Map<ffi::String, ffi::Any> target) {
   // Update -arch=sm_xx
   if (target.count("arch")) {
     // If -arch has been specified, validate the correctness
-    String archStr = Downcast<String>(target.at("arch"));
-    ICHECK(support::StartsWith(archStr, "sm_"))
-        << "ValueError: CUDA target gets an invalid CUDA arch: -arch=" << archStr;
+    ffi::String archStr = Downcast<ffi::String>(target.at("arch"));
+    TVM_FFI_CHECK(support::StartsWith(archStr, "sm_"), ValueError)
+        << "CUDA target gets an invalid CUDA arch: -arch=" << archStr;
   } else {
     // Use the compute version of the first CUDA GPU instead
     int archInt;
@@ -175,7 +181,7 @@ TargetJSON UpdateCUDAAttrs(TargetJSON target) {
     } else {
       archInt = std::stod(version.cast<std::string>()) * 10 + 0.1;
     }
-    target.Set("arch", String("sm_") + std::to_string(archInt));
+    target.Set("arch", ffi::String("sm_") + std::to_string(archInt));
   }
   return target;
 }
@@ -185,14 +191,14 @@ TargetJSON UpdateCUDAAttrs(TargetJSON target) {
  * \param target The Target to update
  * \return The updated attributes
  */
-TargetJSON UpdateNVPTXAttrs(TargetJSON target) {
+ffi::Map<ffi::String, ffi::Any> UpdateNVPTXAttrs(ffi::Map<ffi::String, ffi::Any> target) {
   CheckOrSetAttr(&target, "mtriple", "nvptx64-nvidia-cuda");
   // Update -mcpu=sm_xx
   if (target.count("mcpu")) {
     // If -mcpu has been specified, validate the correctness
-    String mcpu = Downcast<String>(target.at("mcpu"));
-    ICHECK(support::StartsWith(mcpu, "sm_"))
-        << "ValueError: NVPTX target gets an invalid CUDA arch: -mcpu=" << mcpu;
+    ffi::String mcpu = Downcast<ffi::String>(target.at("mcpu"));
+    TVM_FFI_CHECK(support::StartsWith(mcpu, "sm_"), ValueError)
+        << "NVPTX target gets an invalid CUDA arch: -mcpu=" << mcpu;
   } else {
     // Use the compute version of the first CUDA GPU instead
     int arch;
@@ -203,7 +209,7 @@ TargetJSON UpdateNVPTXAttrs(TargetJSON target) {
     } else {
       arch = std::stod(version.cast<std::string>()) * 10 + 0.1;
     }
-    target.Set("mcpu", String("sm_") + std::to_string(arch));
+    target.Set("mcpu", ffi::String("sm_") + std::to_string(arch));
   }
   return target;
 }
@@ -213,20 +219,21 @@ TargetJSON UpdateNVPTXAttrs(TargetJSON target) {
  * \param target The Target to update
  * \return The updated attributes
  */
-TargetJSON UpdateROCmAttrs(TargetJSON target) {
+ffi::Map<ffi::String, ffi::Any> UpdateROCmAttrs(ffi::Map<ffi::String, ffi::Any> target) {
   CheckOrSetAttr(&target, "mtriple", "amdgcn-amd-amdhsa-hcc");
   // Update -mcpu=gfx
   std::string arch = "gfx900";
   if (target.count("mcpu")) {
-    String mcpu = Downcast<String>(target.at("mcpu"));
+    ffi::String mcpu = Downcast<ffi::String>(target.at("mcpu"));
     arch = ExtractStringWithPrefix(mcpu, "gfx");
-    ICHECK(!arch.empty()) << "ValueError: ROCm target gets an invalid GFX version: -mcpu=" << mcpu;
+    TVM_FFI_CHECK(!arch.empty(), ValueError)
+        << "ROCm target gets an invalid GFX version: -mcpu=" << mcpu;
   } else {
     ffi::Any val;
     if (const auto f_get_rocm_arch = tvm::ffi::Function::GetGlobal("tvm_callback_rocm_get_arch")) {
       arch = (*f_get_rocm_arch)().cast<std::string>();
     }
-    target.Set("mcpu", String(arch));
+    target.Set("mcpu", ffi::String(arch));
   }
   // Update -mattr before ROCm 3.5:
   //   Before ROCm 3.5 we needed code object v2, starting
@@ -241,12 +248,42 @@ TargetJSON UpdateROCmAttrs(TargetJSON target) {
     version = val.cast<int>();
   }
   if (version < 305) {
-    Array<String> mattr;
+    ffi::Array<ffi::String> mattr;
     if (target.count("mattr")) {
-      mattr = Downcast<Array<String>>(target.at("mattr"));
+      mattr = Downcast<ffi::Array<ffi::String>>(target.at("mattr"));
     }
     mattr.push_back("-code-object-v3");
     target.Set("mattr", mattr);
+  }
+  return target;
+}
+
+/*!
+ * \brief Update WebGPU target attributes for subgroup-enabled lowering.
+ * Runtime routing on the WebLLM side guarantees subgroup size == 32.
+ * Runtime routing on the WebLLM side guarantees
+ * maxComputeInvocationsPerWorkgroup >= 1024.
+ * This is intentionally constrained for the subgroup-enabled WASM variant.
+ * When supports_subgroups is true, canonicalize thread_warp_size to 32 so
+ * TIR lowering can emit subgroup shuffle reductions.
+ * \param target The Target to update
+ * \return The updated attributes
+ */
+ffi::Map<ffi::String, ffi::Any> UpdateWebGPUAttrs(ffi::Map<ffi::String, ffi::Any> target) {
+  bool subgroups = false;
+  if (target.count("supports_subgroups")) {
+    subgroups = Downcast<Bool>(target.at("supports_subgroups"));
+  }
+
+  if (target.count("thread_warp_size")) {
+    int64_t thread_warp_size = Downcast<Integer>(target.at("thread_warp_size"))->value;
+    TVM_FFI_ICHECK(subgroups || thread_warp_size <= 1)
+        << "WebGPU target with thread_warp_size=" << thread_warp_size
+        << " requires supports_subgroups=true";
+  }
+
+  if (subgroups) {
+    target.Set("thread_warp_size", int64_t(32));
   }
   return target;
 }
@@ -256,20 +293,19 @@ TargetJSON UpdateROCmAttrs(TargetJSON target) {
  * \param target The Target to update
  * \return The updated attributes
  */
-TargetJSON TestTargetParser(TargetJSON target) {
-  Map<String, ffi::Any> features = {{"is_test", true}};
-  target.Set("features", features);
+ffi::Map<ffi::String, ffi::Any> TestTargetParser(ffi::Map<ffi::String, ffi::Any> target) {
+  target.Set("feature.is_test", true);
   return target;
 }
 
 /**********  Register Target kinds and attributes  **********/
 
 TVM_REGISTER_TARGET_KIND("llvm", kDLCPU)
-    .add_attr_option<Array<String>>("mattr")
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("mtriple")
-    .add_attr_option<String>("mfloat-abi")
-    .add_attr_option<String>("mabi")
+    .add_attr_option<ffi::Array<ffi::String>>("mattr")
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("mtriple")
+    .add_attr_option<ffi::String>("mfloat-abi")
+    .add_attr_option<ffi::String>("mabi")
     .add_attr_option<int64_t>("num-cores")
     // Fast math flags, see https://llvm.org/docs/LangRef.html#fast-math-flags
     .add_attr_option<bool>("fast-math")  // implies all the below
@@ -281,15 +317,15 @@ TVM_REGISTER_TARGET_KIND("llvm", kDLCPU)
     .add_attr_option<bool>("fast-math-reassoc")
     .add_attr_option<int64_t>("opt-level")
     // LLVM command line flags, see below
-    .add_attr_option<Array<String>>("cl-opt")
+    .add_attr_option<ffi::Array<ffi::String>>("cl-opt")
     // LLVM JIT engine mcjit/orcjit
-    .add_attr_option<String>("jit")
+    .add_attr_option<ffi::String>("jit")
     // TVM & LLVM custom vector bit width
     .add_attr_option<int64_t>("vector-width")
     .set_default_keys({"cpu"})
     // Force the external codegen kind attribute to be registered, even if no external
     // codegen targets are enabled by the TVM build.
-    .set_target_parser(tvm::target::parsers::cpu::ParseTarget);
+    .set_target_canonicalizer(tvm::target::canonicalizer::llvm::Canonicalize);
 
 // Note regarding the "cl-opt" attribute:
 // Each string in the array has the format
@@ -314,58 +350,74 @@ TVM_REGISTER_TARGET_KIND("llvm", kDLCPU)
 // Hence the type is "uint".
 
 TVM_REGISTER_TARGET_KIND("c", kDLCPU)
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("march")
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("march")
     .add_attr_option<int64_t>("workspace-byte-alignment")
     .add_attr_option<int64_t>("constants-byte-alignment")
     .set_default_keys({"cpu"})
-    .set_target_parser(tvm::target::parsers::cpu::ParseTarget);
+    .set_target_canonicalizer(tvm::target::canonicalizer::llvm::Canonicalize);
 
 TVM_REGISTER_TARGET_KIND("cuda", kDLCUDA)
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("arch")
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("arch")
+    .add_attr_option<ffi::Array<ffi::String>>("code")
     .add_attr_option<int64_t>("max_shared_memory_per_block")
     .add_attr_option<int64_t>("max_threads_per_block")
-    .add_attr_option<int64_t>("thread_warp_size", 32)
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(32))
     .add_attr_option<int64_t>("registers_per_block")
     .add_attr_option<int64_t>("l2_cache_size_bytes")
-    .add_attr_option<int64_t>("max_num_threads", 1024)  // TODO(@zxybazh): deprecate it
+    .add_attr_option<int64_t>("max_num_threads",
+                              refl::DefaultValue(1024))  // TODO(@zxybazh): deprecate it
     .set_default_keys({"cuda", "gpu"})
-    .set_target_parser(UpdateCUDAAttrs);
+    .set_target_canonicalizer(UpdateCUDAAttrs);
 
 TVM_REGISTER_TARGET_KIND("nvptx", kDLCUDA)
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("mtriple")
-    .add_attr_option<int64_t>("max_num_threads", 1024)
-    .add_attr_option<int64_t>("thread_warp_size", 32)
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("mtriple")
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(1024))
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(32))
     .set_default_keys({"cuda", "gpu"})
-    .set_target_parser(UpdateNVPTXAttrs);
+    .set_target_canonicalizer(UpdateNVPTXAttrs);
 
 TVM_REGISTER_TARGET_KIND("rocm", kDLROCM)
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("mtriple")
-    .add_attr_option<Array<String>>("mattr")
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("mtriple")
+    .add_attr_option<ffi::Array<ffi::String>>("mattr")
+    // TODO(masahi): Support querying from a target device
+    // On RDNA cards, thread_warp_size should be 32
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_threads_per_block", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_shared_memory_per_block", refl::DefaultValue(65536))
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(64))
+    .set_default_keys({"rocm", "gpu"})
+    .set_target_canonicalizer(UpdateROCmAttrs);
+
+TVM_REGISTER_TARGET_KIND("hip", kDLROCM)
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("mtriple")
+    .add_attr_option<ffi::Array<ffi::String>>("mattr")
     // TODO(masahi): Support querying from a target device
     // On RDNA cards, thread_warp_size should be 32
     .add_attr_option<int64_t>("max_num_threads", 256)
     .add_attr_option<int64_t>("max_threads_per_block", 256)
     .add_attr_option<int64_t>("max_shared_memory_per_block", 65536)
     .add_attr_option<int64_t>("thread_warp_size", 64)
-    .set_default_keys({"rocm", "gpu"})
-    .set_target_parser(UpdateROCmAttrs);
+    .set_default_keys({"hip", "gpu"})
+    .set_target_canonicalizer(UpdateROCmAttrs);
 
 TVM_REGISTER_TARGET_KIND("opencl", kDLOpenCL)
-    .add_attr_option<int64_t>("max_threads_per_block", 256)
-    .add_attr_option<int64_t>("max_shared_memory_per_block", 16384)
-    .add_attr_option<int64_t>("max_num_threads", 256)
-    .add_attr_option<int64_t>("thread_warp_size", 1)
-    .add_attr_option<int64_t>("texture_spatial_limit", 16384)
+    .add_attr_option<int64_t>("max_threads_per_block", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_shared_memory_per_block", refl::DefaultValue(16384))
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(1))
+    .add_attr_option<int64_t>("texture_spatial_limit", refl::DefaultValue(16384))
+    .add_attr_option<int64_t>("texture_depth_limit", refl::DefaultValue(2048))
     // Faced that Qualcomm OpenCL runtime crashed without any error message in
     // the case when the number of kernel arguments was pretty big. OpenCL doesn't
     // specify any limitations on the number of kernel arguments. max_function_args
     // equals to 128 looks like a reasonable number of kernel arguments.
-    .add_attr_option<int64_t>("max_function_args", 128)
-    .add_attr_option<int64_t>("image_base_address_alignment", 64)
+    .add_attr_option<int64_t>("max_function_args", refl::DefaultValue(128))
+    .add_attr_option<int64_t>("image_base_address_alignment", refl::DefaultValue(64))
     .set_default_keys({"opencl", "gpu"});
 
 // The metal has some limitations on the number of input parameters. This is why attribute
@@ -374,22 +426,22 @@ TVM_REGISTER_TARGET_KIND("opencl", kDLOpenCL)
 // https://developer.apple.com/documentation/metal/buffers/about_argument_buffers?language=objc
 // See also https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
 TVM_REGISTER_TARGET_KIND("metal", kDLMetal)
-    .add_attr_option<int64_t>("max_num_threads", 256)
-    .add_attr_option<int64_t>("max_threads_per_block", 256)
-    .add_attr_option<int64_t>("max_shared_memory_per_block", 32768)
-    .add_attr_option<int64_t>("thread_warp_size", 16)
-    .add_attr_option<int64_t>("max_function_args", 31)
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_threads_per_block", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_shared_memory_per_block", refl::DefaultValue(32768))
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(16))
+    .add_attr_option<int64_t>("max_function_args", refl::DefaultValue(31))
     .set_default_keys({"metal", "gpu"});
 
 TVM_REGISTER_TARGET_KIND("vulkan", kDLVulkan)
-    .add_attr_option<Array<String>>("mattr")
+    .add_attr_option<ffi::Array<ffi::String>>("mattr")
     // Feature support
     .add_attr_option<bool>("supports_float16")
-    .add_attr_option<bool>("supports_float32", true)
+    .add_attr_option<bool>("supports_float32", refl::DefaultValue(true))
     .add_attr_option<bool>("supports_float64")
     .add_attr_option<bool>("supports_int8")
     .add_attr_option<bool>("supports_int16")
-    .add_attr_option<bool>("supports_int32", true)
+    .add_attr_option<bool>("supports_int32", refl::DefaultValue(true))
     .add_attr_option<bool>("supports_int64")
     .add_attr_option<bool>("supports_8bit_buffer")
     .add_attr_option<bool>("supports_16bit_buffer")
@@ -400,9 +452,9 @@ TVM_REGISTER_TARGET_KIND("vulkan", kDLVulkan)
     .add_attr_option<bool>("supports_cooperative_matrix")
     .add_attr_option<int64_t>("supported_subgroup_operations")
     // Physical device limits
-    .add_attr_option<int64_t>("max_num_threads", 256)
-    .add_attr_option<int64_t>("max_threads_per_block", 256)
-    .add_attr_option<int64_t>("thread_warp_size", 1)
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("max_threads_per_block", refl::DefaultValue(256))
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(1))
     .add_attr_option<int64_t>("max_block_size_x")
     .add_attr_option<int64_t>("max_block_size_y")
     .add_attr_option<int64_t>("max_block_size_z")
@@ -412,9 +464,9 @@ TVM_REGISTER_TARGET_KIND("vulkan", kDLVulkan)
     .add_attr_option<int64_t>("max_per_stage_descriptor_storage_buffer")
     .add_attr_option<int64_t>("max_shared_memory_per_block")
     // Other device properties
-    .add_attr_option<String>("device_type")
-    .add_attr_option<String>("device_name")
-    .add_attr_option<String>("driver_name")
+    .add_attr_option<ffi::String>("device_type")
+    .add_attr_option<ffi::String>("device_name")
+    .add_attr_option<ffi::String>("driver_name")
     .add_attr_option<int64_t>("driver_version")
     .add_attr_option<int64_t>("vulkan_api_version")
     .add_attr_option<int64_t>("max_spirv_version")
@@ -422,35 +474,60 @@ TVM_REGISTER_TARGET_KIND("vulkan", kDLVulkan)
     .set_default_keys({"vulkan", "gpu"});
 
 TVM_REGISTER_TARGET_KIND("webgpu", kDLWebGPU)
-    .add_attr_option<int64_t>("max_num_threads", 256)
+    .add_attr_option<int64_t>("max_num_threads", refl::DefaultValue(256))
+    .add_attr_option<bool>("supports_subgroups", refl::DefaultValue(false))
+    // thread_warp_size=1: is_subwarp_reduction and is_multiwarp_reduction returns false, so no
+    // subgroup ops are emitted.
+    .add_attr_option<int64_t>("thread_warp_size", refl::DefaultValue(1))
+    .set_target_canonicalizer(UpdateWebGPUAttrs)
     .set_default_keys({"webgpu", "gpu"});
 
 TVM_REGISTER_TARGET_KIND("hexagon", kDLHexagon)
-    .add_attr_option<Array<String>>("mattr")
-    .add_attr_option<String>("mcpu")
-    .add_attr_option<String>("mtriple")
-    .add_attr_option<Array<String>>("llvm-options")
+    .add_attr_option<ffi::Array<ffi::String>>("mattr")
+    .add_attr_option<ffi::String>("mcpu")
+    .add_attr_option<ffi::String>("mtriple")
+    .add_attr_option<ffi::Array<ffi::String>>("llvm-options")
     .add_attr_option<int64_t>("num-cores")
     .add_attr_option<int64_t>("vtcm-capacity")
     .set_default_keys({"hexagon", "cpu"});
 
 TVM_REGISTER_TARGET_KIND("ext_dev", kDLExtDev);
 
-TVM_REGISTER_TARGET_KIND("hybrid", kDLCPU);
-
 TVM_REGISTER_TARGET_KIND("composite", kDLCPU)  // line break
-    .add_attr_option<Array<Target>>("devices");
+    .add_attr_option<ffi::Array<Target>>(
+        "devices",
+        ir::ConfigSchema::AttrValidator(ffi::TypedFunction<ffi::Any(ffi::Any)>(  //
+            [](ffi::Any val) -> ffi::Any {
+              // Allow elements to be strings or dicts, converting them to Target objects.
+              if (val.try_cast<ffi::Array<Target>>().has_value()) return val;
+              auto arr = val.cast<ffi::Array<ffi::Any>>();
+              ffi::Array<Target> result;
+              for (const auto& elem : arr) {
+                if (auto t = elem.try_cast<Target>()) {
+                  result.push_back(t.value());
+                } else if (auto s = elem.try_cast<ffi::String>()) {
+                  result.push_back(Target(s.value()));
+                } else if (auto m = elem.try_cast<ffi::Map<ffi::String, ffi::Any>>()) {
+                  result.push_back(Target(m.value()));
+                } else {
+                  TVM_FFI_THROW(TypeError)
+                      << "Expected Target, string, or dict in 'devices' array, got '"
+                      << elem.GetTypeKey() << "'";
+                }
+              }
+              return ffi::Any(result);
+            })));
 
 TVM_REGISTER_TARGET_KIND("test", kDLCPU)  // line break
-    .set_target_parser(TestTargetParser);
+    .set_target_canonicalizer(TestTargetParser);
 
 /**********  Registry  **********/
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("target.TargetKindGetAttr",
-           [](TargetKind kind, String attr_name) -> ffi::Any {
+           [](TargetKind kind, ffi::String attr_name) -> ffi::Any {
              auto target_attr_map = TargetKind::GetAttrMap<ffi::Any>(attr_name);
              ffi::Any rv;
              if (target_attr_map.count(kind)) {
@@ -460,10 +537,10 @@ TVM_FFI_STATIC_INIT_BLOCK({
            })
       .def("target.ListTargetKinds", TargetKindRegEntry::ListTargetKinds)
       .def("target.ListTargetKindOptions", TargetKindRegEntry::ListTargetKindOptions)
-      .def("target.ListTargetKindOptionsFromName", [](String target_kind_name) {
+      .def("target.ListTargetKindOptionsFromName", [](ffi::String target_kind_name) {
         TargetKind kind = TargetKind::Get(target_kind_name).value();
         return TargetKindRegEntry::ListTargetKindOptions(kind);
       });
-});
+}
 
 }  // namespace tvm

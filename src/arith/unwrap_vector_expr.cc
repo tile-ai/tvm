@@ -25,18 +25,19 @@
 #include "unwrap_vector_expr.h"
 
 #include <tvm/arith/analyzer.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/builtin.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/expr_functor.h>
-#include <tvm/tir/op.h>
+#include <tvm/ffi/cast.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/builtin.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/expr_functor.h>
+#include <tvm/tirx/op.h>
 
 #include <unordered_map>
 
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 class Scalarizer : public ExprMutator {
  public:
@@ -47,7 +48,7 @@ class Scalarizer : public ExprMutator {
   PrimExpr VisitExpr_(const BroadcastNode* op) final { return op->value; }
 
   PrimExpr VisitExpr_(const VarNode* op) final {
-    Var var = GetRef<Var>(op);
+    Var var = ffi::GetRef<Var>(op);
 
     auto it = let_var_remap_.find(op);
     if (it != let_var_remap_.end()) {
@@ -62,7 +63,7 @@ class Scalarizer : public ExprMutator {
     }
 
     auto it = let_var_remap_.find(op->var.get());
-    ICHECK(it == let_var_remap_.end()) << "Duplicate binding of variable " << op->var;
+    TVM_FFI_ICHECK(it == let_var_remap_.end()) << "Duplicate binding of variable " << op->var;
 
     Var new_var(op->var->name_hint + "_scalar", op->var.dtype().element_of());
     let_var_remap_[op->var.get()] = new_var;

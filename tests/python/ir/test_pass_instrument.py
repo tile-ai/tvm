@@ -14,15 +14,15 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-""" Instrument test cases.
-"""
+# ruff: noqa: E741
+"""Instrument test cases."""
 
 import tvm
 from tvm import relax
 from tvm.ir.instrument import PrintAfterAll, PrintBeforeAll
 from tvm.script import ir as I
 from tvm.script import relax as R
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 # pylint: disable=invalid-name,missing-function-docstring,no-value-for-parameter
 
@@ -33,7 +33,7 @@ def test_tir_print_all_passes(capsys):
         A = T.match_buffer(a, (128, 128, 128, 128))
         B = T.match_buffer(b, (128, 128, 128, 128))
         for i, j, k, l in T.grid(128, 128, 128, 128):
-            with T.block("B"):
+            with T.sblock("B"):
                 vi, vj, vk, vl = T.axis.remap("SSSS", [i, j, k, l])
                 B[vi, vj, vk, vl] = A[vi, vj, vk, vl] * 2.0
 
@@ -42,7 +42,7 @@ def test_tir_print_all_passes(capsys):
     all_passes_output = capsys.readouterr().out
     assert "Before Running Pass:" in all_passes_output
     assert "After Running Pass:" in all_passes_output
-    assert "pass name: tir." in all_passes_output
+    assert 'name="tirx.' in all_passes_output
 
 
 def test_relax_print_all_passes(capsys):
@@ -60,4 +60,4 @@ def test_relax_print_all_passes(capsys):
     all_passes_output = capsys.readouterr().out
     assert "Before Running Pass:" in all_passes_output
     assert "After Running Pass:" in all_passes_output
-    assert "pass name: _pipeline" in all_passes_output
+    assert 'name="_pipeline"' in all_passes_output

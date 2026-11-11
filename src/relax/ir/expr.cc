@@ -27,9 +27,7 @@
 namespace tvm {
 namespace relax {
 
-using tvm::ReprPrinter;
-
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   IdNode::RegisterReflection();
   CallNode::RegisterReflection();
   TupleNode::RegisterReflection();
@@ -50,22 +48,23 @@ TVM_FFI_STATIC_INIT_BLOCK({
   IfNode::RegisterReflection();
   FunctionNode::RegisterReflection();
   ExternFuncNode::RegisterReflection();
-});
+}
 
-Id::Id(String name_hint) {
-  ObjectPtr<IdNode> n = make_object<IdNode>();
+Id::Id(ffi::String name_hint) {
+  ffi::ObjectPtr<IdNode> n = ffi::make_object<IdNode>();
   n->name_hint = std::move(name_hint);
   data_ = std::move(n);
 }
 
-Call::Call(Expr op, Array<Expr> args, Attrs attrs, Array<StructInfo> sinfo_args, Span span) {
-  CHECK(!op->struct_info_.defined() || op->struct_info_->IsInstance<FuncStructInfoNode>())
-      << "ValueError: "
+Call::Call(Expr op, ffi::Array<Expr> args, Attrs attrs, ffi::Array<StructInfo> sinfo_args,
+           Span span) {
+  TVM_FFI_CHECK(!op->struct_info_.defined() || op->struct_info_->IsInstance<FuncStructInfoNode>(),
+                ValueError)
       << "Call expects its operator to have FuncStructInfo, "
       << "but operator " << op << ", which was called with arguments " << args
       << ", has struct info " << op->struct_info_;
 
-  ObjectPtr<CallNode> n = make_object<CallNode>();
+  ffi::ObjectPtr<CallNode> n = ffi::make_object<CallNode>();
   n->op = std::move(op);
   n->args = std::move(args);
   n->attrs = std::move(attrs);
@@ -74,14 +73,15 @@ Call::Call(Expr op, Array<Expr> args, Attrs attrs, Array<StructInfo> sinfo_args,
   data_ = std::move(n);
 }
 
-Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args,
-                Optional<Attrs> opt_attrs, Optional<Array<StructInfo>> opt_sinfo_args,
-                Optional<Span> opt_span) {
+Call WithFields(Call call, ffi::Optional<Expr> opt_op, ffi::Optional<ffi::Array<Expr>> opt_args,
+                ffi::Optional<Attrs> opt_attrs,
+                ffi::Optional<ffi::Array<StructInfo>> opt_sinfo_args,
+                ffi::Optional<Span> opt_span) {
   // Collect new values for fields.
   Expr op = opt_op.value_or(call->op);
-  Array<Expr> args = opt_args.value_or(call->args);
+  ffi::Array<Expr> args = opt_args.value_or(call->args);
   Attrs attrs = opt_attrs.value_or(call->attrs);
-  Array<StructInfo> sinfo_args = opt_sinfo_args.value_or(call->sinfo_args);
+  ffi::Array<StructInfo> sinfo_args = opt_sinfo_args.value_or(call->sinfo_args);
   Span span = opt_span.value_or(call->span);
 
   // Check if anything changed.
@@ -117,15 +117,16 @@ Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args
   return call;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.Call",
-                        [](Expr op, Array<Expr> args, Attrs attrs, Array<StructInfo> sinfo_args,
-                           Span span) { return Call(op, args, attrs, sinfo_args, span); });
-});
+  refl::GlobalDef().def("relax.Call", [](Expr op, ffi::Array<Expr> args, Attrs attrs,
+                                         ffi::Array<StructInfo> sinfo_args, Span span) {
+    return Call(op, args, attrs, sinfo_args, span);
+  });
+}
 
 If::If(Expr cond, Expr true_branch, Expr false_branch, Span span) {
-  ObjectPtr<IfNode> n = make_object<IfNode>();
+  ffi::ObjectPtr<IfNode> n = ffi::make_object<IfNode>();
   n->cond = std::move(cond);
   n->true_branch = std::move(true_branch);
   n->false_branch = std::move(false_branch);
@@ -133,8 +134,8 @@ If::If(Expr cond, Expr true_branch, Expr false_branch, Span span) {
   data_ = std::move(n);
 }
 
-If WithFields(If if_expr, Optional<Expr> opt_cond, Optional<Expr> opt_true_branch,
-              Optional<Expr> opt_false_branch, Optional<Span> opt_span) {
+If WithFields(If if_expr, ffi::Optional<Expr> opt_cond, ffi::Optional<Expr> opt_true_branch,
+              ffi::Optional<Expr> opt_false_branch, ffi::Optional<Span> opt_span) {
   Expr cond = opt_cond.value_or(if_expr->cond);
   Expr true_branch = opt_true_branch.value_or(if_expr->true_branch);
   Expr false_branch = opt_false_branch.value_or(if_expr->false_branch);
@@ -153,16 +154,16 @@ If WithFields(If if_expr, Optional<Expr> opt_cond, Optional<Expr> opt_true_branc
   return if_expr;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.If", [](Expr cond, Expr true_branch, Expr false_branch, Span span) {
     return If(cond, true_branch, false_branch, span);
   });
-});
+}
 
-Tuple::Tuple(tvm::Array<Expr> fields, Span span) {
-  Optional<StructInfo> tuple_sinfo = [&]() -> Optional<StructInfo> {
-    Array<StructInfo> field_sinfo;
+Tuple::Tuple(tvm::ffi::Array<Expr> fields, Span span) {
+  ffi::Optional<StructInfo> tuple_sinfo = [&]() -> ffi::Optional<StructInfo> {
+    ffi::Array<StructInfo> field_sinfo;
     for (const auto& field : fields) {
       if (field->struct_info_.defined()) {
         field_sinfo.push_back(GetStructInfo(field));
@@ -173,21 +174,22 @@ Tuple::Tuple(tvm::Array<Expr> fields, Span span) {
     return TupleStructInfo(field_sinfo);
   }();
 
-  ObjectPtr<TupleNode> n = make_object<TupleNode>();
+  ffi::ObjectPtr<TupleNode> n = ffi::make_object<TupleNode>();
   n->fields = std::move(fields);
   n->span = std::move(span);
   n->struct_info_ = tuple_sinfo;
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.Tuple",
-                        [](tvm::Array<Expr> fields, Span span) { return Tuple(fields, span); });
-});
+  refl::GlobalDef().def(
+      "relax.Tuple", [](tvm::ffi::Array<Expr> fields, Span span) { return Tuple(fields, span); });
+}
 
-Tuple WithFields(Tuple tuple, Optional<Array<Expr>> opt_fields, Optional<Span> opt_span) {
-  Array<Expr> fields = opt_fields.value_or(tuple->fields);
+Tuple WithFields(Tuple tuple, ffi::Optional<ffi::Array<Expr>> opt_fields,
+                 ffi::Optional<Span> opt_span) {
+  ffi::Array<Expr> fields = opt_fields.value_or(tuple->fields);
   Span span = opt_span.value_or(tuple->span);
 
   bool all_fields_unchanged = true;
@@ -209,12 +211,12 @@ Tuple WithFields(Tuple tuple, Optional<Array<Expr>> opt_fields, Optional<Span> o
 }
 
 TupleGetItem::TupleGetItem(Expr tuple, int index, Span span) {
-  CHECK_GE(index, 0) << "Index out of bounds: Tuple " << tuple
-                     << " cannot be accessed with negative index " << index;
-  ObjectPtr<TupleGetItemNode> n = make_object<TupleGetItemNode>();
+  TVM_FFI_ICHECK_GE(index, 0) << "Index out of bounds: Tuple " << tuple
+                              << " cannot be accessed with negative index " << index;
+  ffi::ObjectPtr<TupleGetItemNode> n = ffi::make_object<TupleGetItemNode>();
 
   if (auto* tuple_info = tuple->struct_info_.as<TupleStructInfoNode>()) {
-    CHECK_LT(index, tuple_info->fields.size())
+    TVM_FFI_ICHECK_LT(index, tuple_info->fields.size())
         << "Index out of bounds: Tuple " << tuple << " is of size " << tuple_info->fields.size()
         << ", and cannot be accessed with index " << index;
     auto sinfo = tuple_info->fields[index];
@@ -226,8 +228,8 @@ TupleGetItem::TupleGetItem(Expr tuple, int index, Span span) {
   data_ = std::move(n);
 }
 
-TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
-                        Optional<Integer> opt_index, Optional<Span> opt_span) {
+TupleGetItem WithFields(TupleGetItem tuple_get_item, ffi::Optional<Expr> opt_tuple,
+                        ffi::Optional<Integer> opt_index, ffi::Optional<Span> opt_span) {
   Expr tuple = opt_tuple.value_or(tuple_get_item->tuple);
   Integer index = opt_index.value_or(tuple_get_item->index);
   Span span = opt_span.value_or(tuple_get_item->span);
@@ -243,21 +245,21 @@ TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
   return tuple_get_item;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.TupleGetItem", [](Expr tuple, int index, Span span) {
     return TupleGetItem(tuple, index, span);
   });
-});
+}
 
-ShapeExpr::ShapeExpr(Array<PrimExpr> values, Span span) {
-  ObjectPtr<ShapeExprNode> n = make_object<ShapeExprNode>();
+ShapeExpr::ShapeExpr(ffi::Array<PrimExpr> values, Span span) {
+  ffi::ObjectPtr<ShapeExprNode> n = ffi::make_object<ShapeExprNode>();
 
   n->values = values.Map([](PrimExpr value) {
     if (value->IsInstance<IntImmNode>()) {
       return tvm::cast(DataType::Int(64), value);
     }
-    ICHECK(value.dtype() == DataType::Int(64))
+    TVM_FFI_ICHECK(value.dtype() == DataType::Int(64))
         << "the value in ShapeStructInfo can only have dtype of int64";
     return value;
   });
@@ -266,14 +268,15 @@ ShapeExpr::ShapeExpr(Array<PrimExpr> values, Span span) {
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.ShapeExpr",
-                        [](Array<PrimExpr> values, Span span) { return ShapeExpr(values, span); });
-});
+  refl::GlobalDef().def("relax.ShapeExpr", [](ffi::Array<PrimExpr> values, Span span) {
+    return ShapeExpr(values, span);
+  });
+}
 
-Var::Var(Id vid, Optional<StructInfo> struct_info_annotation, Span span) {
-  ObjectPtr<VarNode> n = make_object<VarNode>();
+Var::Var(Id vid, ffi::Optional<StructInfo> struct_info_annotation, Span span) {
+  ffi::ObjectPtr<VarNode> n = ffi::make_object<VarNode>();
   n->vid = std::move(vid);
   n->struct_info_ = std::move(struct_info_annotation);
   n->span = std::move(span);
@@ -286,31 +289,30 @@ VarNode* Var::CopyOnWrite() {
   // If the `TVM_DEFINE_OBJECT_REF_COW_METHOD` were used, the
   // automatic implementation would erroneously convert from a
   // `DataflowBlock` to a `Var`.
-  ICHECK(data_ != nullptr);
+  TVM_FFI_ICHECK(data_ != nullptr);
   if (!data_.unique()) {
-    ObjectPtr<VarNode> node;
+    ffi::ObjectPtr<VarNode> node;
     if (auto dataflow_var = as<DataflowVarNode>()) {
-      node = make_object<DataflowVarNode>(*dataflow_var);
+      node = ffi::make_object<DataflowVarNode>(*dataflow_var);
     } else {
-      node = make_object<VarNode>(*(operator->()));
+      node = ffi::make_object<VarNode>(*(operator->()));
     }
-    ObjectPtr<Object>(std::move(node)).swap(data_);
+    ffi::ObjectPtr<ffi::Object>(std::move(node)).swap(data_);
   }
   return static_cast<VarNode*>(data_.get());
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
-      .def("relax.Var", [](String name_hint, Optional<StructInfo> struct_info_annotation,
+      .def("relax.Var", [](ffi::String name_hint, ffi::Optional<StructInfo> struct_info_annotation,
                            Span span) { return Var(name_hint, struct_info_annotation, span); })
-      .def("relax.VarFromId", [](Id vid, Optional<StructInfo> struct_info_annotation, Span span) {
-        return Var(vid, struct_info_annotation, span);
-      });
-});
+      .def("relax.VarFromId", [](Id vid, ffi::Optional<StructInfo> struct_info_annotation,
+                                 Span span) { return Var(vid, struct_info_annotation, span); });
+}
 
-DataflowVar::DataflowVar(Id vid, Optional<StructInfo> struct_info_annotation, Span span) {
-  ObjectPtr<DataflowVarNode> n = make_object<DataflowVarNode>();
+DataflowVar::DataflowVar(Id vid, ffi::Optional<StructInfo> struct_info_annotation, Span span) {
+  ffi::ObjectPtr<DataflowVarNode> n = ffi::make_object<DataflowVarNode>();
   n->vid = std::move(vid);
   n->struct_info_ = std::move(struct_info_annotation);
   n->span = std::move(span);
@@ -318,26 +320,27 @@ DataflowVar::DataflowVar(Id vid, Optional<StructInfo> struct_info_annotation, Sp
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("relax.DataflowVar",
-           [](String name_hint, Optional<StructInfo> struct_info_annotation, Span span) {
+           [](ffi::String name_hint, ffi::Optional<StructInfo> struct_info_annotation, Span span) {
              return DataflowVar(name_hint, struct_info_annotation, span);
            })
       .def("relax.DataflowVarFromId",
-           [](Id vid, Optional<StructInfo> struct_info_annotation, Span span) {
+           [](Id vid, ffi::Optional<StructInfo> struct_info_annotation, Span span) {
              return DataflowVar(vid, struct_info_annotation, span);
            });
-});
+}
 
-Constant::Constant(runtime::NDArray data, Optional<StructInfo> struct_info_annotation, Span span) {
-  ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
+Constant::Constant(runtime::Tensor data, ffi::Optional<StructInfo> struct_info_annotation,
+                   Span span) {
+  ffi::ObjectPtr<ConstantNode> n = ffi::make_object<ConstantNode>();
   n->data = std::move(data);
   n->span = std::move(span);
 
   // set struct info.
-  Array<PrimExpr> values;
+  ffi::Array<PrimExpr> values;
   auto shape_tuple = n->data.Shape();
   for (size_t dim = 0; dim < shape_tuple.size(); ++dim) {
     values.push_back(IntImm(DataType::Int(64), shape_tuple[dim]));
@@ -352,16 +355,16 @@ Constant::Constant(runtime::NDArray data, Optional<StructInfo> struct_info_annot
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def(
       "relax.Constant",
-      [](runtime::NDArray data, Optional<StructInfo> struct_info_annotation = std::nullopt,
+      [](runtime::Tensor data, ffi::Optional<StructInfo> struct_info_annotation = std::nullopt,
          Span span = Span()) { return Constant(data, struct_info_annotation, span); });
-});
+}
 
 PrimValue::PrimValue(PrimExpr value, Span span) {
-  ObjectPtr<PrimValueNode> n = make_object<PrimValueNode>();
+  ffi::ObjectPtr<PrimValueNode> n = ffi::make_object<PrimValueNode>();
   n->struct_info_ = PrimStructInfo(value);
   n->value = std::move(value);
   n->span = std::move(span);
@@ -372,43 +375,43 @@ PrimValue PrimValue::Int64(int64_t value, Span span) {
   return PrimValue(IntImm(DataType::Int(64), value), span);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.PrimValue",
                         [](PrimExpr value, Span span) { return PrimValue(value, span); });
-});
+}
 
-StringImm::StringImm(String value, Span span) {
-  ObjectPtr<StringImmNode> n = make_object<StringImmNode>();
+StringImm::StringImm(ffi::String value, Span span) {
+  ffi::ObjectPtr<StringImmNode> n = ffi::make_object<StringImmNode>();
   n->value = std::move(value);
   n->span = std::move(span);
   n->struct_info_ = ObjectStructInfo();
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.StringImm",
-                        [](String value, Span span) { return StringImm(value, span); });
-});
+                        [](ffi::String value, Span span) { return StringImm(value, span); });
+}
 
 DataTypeImm::DataTypeImm(DataType value, Span span) {
-  ObjectPtr<DataTypeImmNode> n = make_object<DataTypeImmNode>();
+  ffi::ObjectPtr<DataTypeImmNode> n = ffi::make_object<DataTypeImmNode>();
   n->value = std::move(value);
   n->span = std::move(span);
   n->struct_info_ = ObjectStructInfo();
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.DataTypeImm",
                         [](DataType value, Span span) { return DataTypeImm(value, span); });
-});
+}
 
 MatchCast::MatchCast(Var var, Expr value, StructInfo struct_info, Span span) {
-  ObjectPtr<MatchCastNode> n = make_object<MatchCastNode>();
-  ICHECK(var.defined()) << "MatchCast requires var to be defined";
+  ffi::ObjectPtr<MatchCastNode> n = ffi::make_object<MatchCastNode>();
+  TVM_FFI_ICHECK(var.defined()) << "MatchCast requires var to be defined";
   n->var = std::move(var);
   n->value = std::move(value);
   n->struct_info = std::move(struct_info);
@@ -416,28 +419,28 @@ MatchCast::MatchCast(Var var, Expr value, StructInfo struct_info, Span span) {
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.MatchCast",
                         [](Var var, Expr value, StructInfo struct_info, Span span) {
                           return MatchCast(var, value, struct_info, span);
                         });
-});
+}
 
 VarBinding::VarBinding(Var var, Expr value, Span span) {
-  ObjectPtr<VarBindingNode> n = make_object<VarBindingNode>();
+  ffi::ObjectPtr<VarBindingNode> n = ffi::make_object<VarBindingNode>();
   n->var = std::move(var);
   n->value = std::move(value);
   n->span = span;
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.VarBinding", [](Var var, Expr value, Span span) {
     return VarBinding(var, value, span);
   });
-});
+}
 
 bool VarBindingNode::SEqual(const VarBindingNode* other,
                             ffi::TypedFunction<bool(AnyView, AnyView, bool, AnyView)> equal) const {
@@ -454,9 +457,9 @@ bool VarBindingNode::SEqual(const VarBindingNode* other,
   }
 }
 
-uint64_t VarBindingNode::SHash(uint64_t init_hash,
-                               ffi::TypedFunction<uint64_t(AnyView, uint64_t, bool)> hash) const {
-  uint64_t hash_value = init_hash;
+int64_t VarBindingNode::SHash(int64_t init_hash,
+                              ffi::TypedFunction<int64_t(AnyView, int64_t, bool)> hash) const {
+  int64_t hash_value = init_hash;
   if (value->IsInstance<FunctionNode>()) {
     hash_value = hash(var, hash_value, true);
     hash_value = hash(value, hash_value, false);
@@ -467,8 +470,8 @@ uint64_t VarBindingNode::SHash(uint64_t init_hash,
   return hash_value;
 }
 
-BindingBlock::BindingBlock(Array<Binding> bindings, Span span) {
-  ObjectPtr<BindingBlockNode> n = make_object<BindingBlockNode>();
+BindingBlock::BindingBlock(ffi::Array<Binding> bindings, Span span) {
+  ffi::ObjectPtr<BindingBlockNode> n = ffi::make_object<BindingBlockNode>();
   n->bindings = std::move(bindings);
   n->span = span;
   data_ = std::move(n);
@@ -480,65 +483,65 @@ BindingBlockNode* BindingBlock::CopyOnWrite() {
   // If the `TVM_DEFINE_OBJECT_REF_COW_METHOD` were used, the
   // automatic implementation would erroneously convert from a
   // `DataflowBlock` to a `BindingBlock`.
-  ICHECK(data_ != nullptr);
+  TVM_FFI_ICHECK(data_ != nullptr);
   if (!data_.unique()) {
-    ObjectPtr<BindingBlockNode> node;
+    ffi::ObjectPtr<BindingBlockNode> node;
     if (auto dataflow_block = as<DataflowBlockNode>()) {
-      node = make_object<DataflowBlockNode>(*dataflow_block);
+      node = ffi::make_object<DataflowBlockNode>(*dataflow_block);
     } else {
-      node = make_object<BindingBlockNode>(*(operator->()));
+      node = ffi::make_object<BindingBlockNode>(*(operator->()));
     }
-    ObjectPtr<Object>(std::move(node)).swap(data_);
+    ffi::ObjectPtr<ffi::Object>(std::move(node)).swap(data_);
   }
   return static_cast<BindingBlockNode*>(data_.get());
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.BindingBlock", [](Array<Binding> bindings, Span span) {
+  refl::GlobalDef().def("relax.BindingBlock", [](ffi::Array<Binding> bindings, Span span) {
     return BindingBlock(bindings, span);
   });
-});
+}
 
-DataflowBlock::DataflowBlock(Array<Binding> bindings, Span span) {
-  ObjectPtr<DataflowBlockNode> n = make_object<DataflowBlockNode>();
+DataflowBlock::DataflowBlock(ffi::Array<Binding> bindings, Span span) {
+  ffi::ObjectPtr<DataflowBlockNode> n = ffi::make_object<DataflowBlockNode>();
   n->bindings = std::move(bindings);
   n->span = span;
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.DataflowBlock", [](Array<Binding> bindings, Span span) {
+  refl::GlobalDef().def("relax.DataflowBlock", [](ffi::Array<Binding> bindings, Span span) {
     return DataflowBlock(bindings, span);
   });
-});
+}
 
 SeqExpr::SeqExpr(Expr body) {
   if (auto seq = body.as<SeqExpr>()) {
     *this = seq.value();
   } else {
-    *this = SeqExpr(Array<BindingBlock>{}, body);
+    *this = SeqExpr(ffi::Array<BindingBlock>{}, body);
   }
 }
 
-SeqExpr::SeqExpr(Array<BindingBlock> blocks, Expr body, Span span) {
-  ObjectPtr<SeqExprNode> n = make_object<SeqExprNode>();
+SeqExpr::SeqExpr(ffi::Array<BindingBlock> blocks, Expr body, Span span) {
+  ffi::ObjectPtr<SeqExprNode> n = ffi::make_object<SeqExprNode>();
   n->blocks = std::move(blocks);
   n->body = std::move(body);
   n->span = span;
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.SeqExpr", [](Array<BindingBlock> blocks, Expr body, Span span) {
+  refl::GlobalDef().def("relax.SeqExpr", [](ffi::Array<BindingBlock> blocks, Expr body, Span span) {
     return SeqExpr(blocks, body, span);
   });
-});
+}
 
-Function::Function(Array<Var> params, Expr body, Optional<StructInfo> ret_struct_info, bool is_pure,
-                   DictAttrs attrs, Span span) {
+Function::Function(ffi::Array<Var> params, Expr body, ffi::Optional<StructInfo> ret_struct_info,
+                   bool is_pure, DictAttrs attrs, Span span) {
   if (!attrs.defined()) {
     attrs = DictAttrs();
   }
@@ -546,21 +549,21 @@ Function::Function(Array<Var> params, Expr body, Optional<StructInfo> ret_struct
   // Set the function type.
   // For function, we take a conservative approach and require the function type
   // to be known at construction time.
-  Array<StructInfo> param_sinfo;
+  ffi::Array<StructInfo> param_sinfo;
 
   for (const Var& param : params) {
-    CHECK(param->struct_info_.defined())
+    TVM_FFI_ICHECK(param->struct_info_.defined())
         << "relax.Function requires params to contain struct_info_";
     param_sinfo.push_back(GetStructInfo(param));
   }
 
-  Optional<StructInfo> body_sinfo;
+  ffi::Optional<StructInfo> body_sinfo;
 
   if (body->struct_info_.defined()) {
     body_sinfo = GetStructInfo(body);
   }
 
-  CHECK(body_sinfo.defined() || ret_struct_info.defined())
+  TVM_FFI_ICHECK(body_sinfo.defined() || ret_struct_info.defined())
       << "Function must be constructed with either "
       << "an explicit struct info for the return type, "
       << "or a normalized body with struct info.";
@@ -579,8 +582,8 @@ Function::Function(Array<Var> params, Expr body, Optional<StructInfo> ret_struct
     // used if they were defined by the function's parameters.
     auto f_shape_var_map = [&] {
       auto tir_vars = DefinableTIRVarsInStructInfo(TupleStructInfo(params.Map(GetStructInfo)));
-      std::unordered_set<tir::Var> lookup(tir_vars.begin(), tir_vars.end());
-      return [lookup = std::move(lookup)](const tir::Var& var) -> Optional<PrimExpr> {
+      std::unordered_set<tirx::Var> lookup(tir_vars.begin(), tir_vars.end());
+      return [lookup = std::move(lookup)](const tirx::Var& var) -> ffi::Optional<PrimExpr> {
         if (lookup.count(var)) {
           return var;
         } else {
@@ -594,7 +597,7 @@ Function::Function(Array<Var> params, Expr body, Optional<StructInfo> ret_struct
   FuncStructInfo func_sinfo(param_sinfo, ret_struct_info.value(), is_pure);
 
   // set the fields
-  ObjectPtr<FunctionNode> n = make_object<FunctionNode>();
+  ffi::ObjectPtr<FunctionNode> n = ffi::make_object<FunctionNode>();
   n->params = std::move(params);
   n->body = std::move(body);
   n->ret_struct_info = ret_struct_info.value();
@@ -605,20 +608,20 @@ Function::Function(Array<Var> params, Expr body, Optional<StructInfo> ret_struct
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.Function",
-                        [](Array<Var> params, Expr body, Optional<StructInfo> ret_struct_info,
-                           bool is_pure, DictAttrs attrs, Span span) {
-                          return Function(params, body, ret_struct_info, is_pure, attrs, span);
-                        });
-});
+  refl::GlobalDef().def("relax.Function", [](ffi::Array<Var> params, Expr body,
+                                             ffi::Optional<StructInfo> ret_struct_info,
+                                             bool is_pure, DictAttrs attrs, Span span) {
+    return Function(params, body, ret_struct_info, is_pure, attrs, span);
+  });
+}
 
-Function Function::CreateEmpty(Array<Var> params, StructInfo ret_struct_info, bool is_pure,
+Function Function::CreateEmpty(ffi::Array<Var> params, StructInfo ret_struct_info, bool is_pure,
                                DictAttrs attrs, Span span) {
-  Array<StructInfo> param_sinfo;
+  ffi::Array<StructInfo> param_sinfo;
   for (const Var& param : params) {
-    ICHECK(param->struct_info_.defined())
+    TVM_FFI_ICHECK(param->struct_info_.defined())
         << "relax.Function requires params to contain struct_info_.";
     param_sinfo.push_back(GetStructInfo(param));
   }
@@ -634,7 +637,7 @@ Function Function::CreateEmpty(Array<Var> params, StructInfo ret_struct_info, bo
   }();
 
   // set the fields
-  ObjectPtr<FunctionNode> n = make_object<FunctionNode>();
+  ffi::ObjectPtr<FunctionNode> n = ffi::make_object<FunctionNode>();
   n->params = std::move(params);
   n->body = std::move(body);
   n->is_pure = is_pure;
@@ -645,22 +648,22 @@ Function Function::CreateEmpty(Array<Var> params, StructInfo ret_struct_info, bo
   return Function(std::move(n));
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def(
-      "relax.FunctionCreateEmpty",
-      [](Array<Var> params, StructInfo ret_struct_info, bool is_pure, DictAttrs attrs, Span span) {
+      "relax.FunctionCreateEmpty", [](ffi::Array<Var> params, StructInfo ret_struct_info,
+                                      bool is_pure, DictAttrs attrs, Span span) {
         return Function::CreateEmpty(params, ret_struct_info, is_pure, attrs, span);
       });
-});
+}
 
 // Special opaque derivation function for ExternFunc
 // Take look at sinfo_args to figure out the return StructInfo.
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tvm.relax.struct_info.infer_by_sinfo_args",
                         [](const Call& call, const BlockBuilder& ctx) -> StructInfo {
-                          ICHECK(call->sinfo_args.defined())
+                          TVM_FFI_ICHECK(call->sinfo_args.defined())
                               << "sinfo_args field of CallNode should always be defined";
                           if (call->sinfo_args.empty()) {
                             return ObjectStructInfo();
@@ -670,7 +673,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
                             return TupleStructInfo(call->sinfo_args);
                           }
                         });
-});
+}
 
 // Get the derive function.
 FuncStructInfo GetExternFuncStructInfo() {
@@ -680,39 +683,40 @@ FuncStructInfo GetExternFuncStructInfo() {
   return FuncStructInfo::OpaqueFunc(derive);
 }
 
-ExternFunc::ExternFunc(String global_symbol, Span span)
+ExternFunc::ExternFunc(ffi::String global_symbol, Span span)
     : ExternFunc(global_symbol, GetExternFuncStructInfo(), span) {}
 
-ExternFunc::ExternFunc(String global_symbol, StructInfo struct_info, Span span) {
-  CHECK(struct_info.as<FuncStructInfoNode>())
+ExternFunc::ExternFunc(ffi::String global_symbol, StructInfo struct_info, Span span) {
+  TVM_FFI_ICHECK(struct_info.as<FuncStructInfoNode>())
       << "ExternFunc must have FuncStructInfo, "
       << "but declaration of '" << global_symbol << "' received " << struct_info;
 
-  ObjectPtr<ExternFuncNode> n = make_object<ExternFuncNode>();
+  ffi::ObjectPtr<ExternFuncNode> n = ffi::make_object<ExternFuncNode>();
   n->global_symbol = std::move(global_symbol);
   n->span = span;
   n->struct_info_ = struct_info;
   data_ = std::move(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
-  refl::GlobalDef().def("relax.ExternFunc",
-                        [](String global_symbol, Optional<StructInfo> struct_info, Span span) {
-                          if (struct_info.defined()) {
-                            return ExternFunc(global_symbol, struct_info.value(), span);
-                          } else {
-                            return ExternFunc(global_symbol, span);
-                          }
-                        });
-});
+  refl::GlobalDef().def("relax.ExternFunc", [](ffi::String global_symbol,
+                                               ffi::Optional<StructInfo> struct_info, Span span) {
+    if (struct_info.defined()) {
+      return ExternFunc(global_symbol, struct_info.value(), span);
+    } else {
+      return ExternFunc(global_symbol, span);
+    }
+  });
+}
 
 Expr GetShapeOf(const Expr& expr) {
   // default case, to be normalized.
-  ICHECK(expr->struct_info_.defined()) << "GetShapeOf can only be applied to normalized expr";
+  TVM_FFI_ICHECK(expr->struct_info_.defined())
+      << "GetShapeOf can only be applied to normalized expr";
   auto* tinfo = GetStructInfoAs<TensorStructInfoNode>(expr);
 
-  ICHECK(tinfo != nullptr) << "ShapeOf can only be applied to expr with TensorStructInfo";
+  TVM_FFI_ICHECK(tinfo != nullptr) << "ShapeOf can only be applied to expr with TensorStructInfo";
   if (tinfo->shape.defined()) return tinfo->shape.value();
 
   static const Op& op = Op::Get("relax.shape_of");
@@ -722,31 +726,31 @@ Expr GetShapeOf(const Expr& expr) {
   return call_shape_of;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("relax.GetShapeOf", [](const Expr& expr) { return GetShapeOf(expr); })
       .def("relax.FuncWithAttr",
-           [](BaseFunc func, String key, ObjectRef value) -> Optional<Function> {
+           [](BaseFunc func, ffi::String key, ffi::ObjectRef value) -> ffi::Optional<Function> {
              if (func->IsInstance<relax::FunctionNode>()) {
                return WithAttr(Downcast<relax::Function>(std::move(func)), key, value);
              }
              return std::nullopt;
            })
       .def("relax.FuncWithAttrs",
-           [](BaseFunc func, Map<String, ffi::Any> attr_map) -> Optional<Function> {
+           [](BaseFunc func, ffi::Map<ffi::String, ffi::Any> attr_map) -> ffi::Optional<Function> {
              if (func->IsInstance<relax::FunctionNode>()) {
                return WithAttrs(Downcast<relax::Function>(std::move(func)), attr_map);
              }
              return std::nullopt;
            })
-      .def("relax.FuncWithoutAttr", [](BaseFunc func, String key) -> Optional<Function> {
+      .def("relax.FuncWithoutAttr", [](BaseFunc func, ffi::String key) -> ffi::Optional<Function> {
         if (func->IsInstance<relax::FunctionNode>()) {
           return WithoutAttr(Downcast<relax::Function>(std::move(func)), key);
         }
         return std::nullopt;
       });
-});
+}
 
 }  // namespace relax
 }  // namespace tvm

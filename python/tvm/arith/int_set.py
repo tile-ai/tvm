@@ -15,12 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 """Integer set."""
-import tvm.ffi
+
+import tvm_ffi
+
 from tvm.runtime import Object
+
 from . import _ffi_api
 
 
-@tvm.ffi.register_object("ir.IntSet")
+@tvm_ffi.register_object("ir.IntSet")
 class IntSet(Object):
     """Represent a set of integer in one dimension."""
 
@@ -65,7 +68,7 @@ class IntSet(Object):
         return _ffi_api.intset_single_point(point)
 
 
-@tvm.ffi.register_object("arith.IntervalSet")
+@tvm_ffi.register_object("arith.IntervalSet")
 class IntervalSet(IntSet):
     """Represent set of continuous interval [min_value, max_value]
 
@@ -82,7 +85,7 @@ class IntervalSet(IntSet):
         self.__init_handle_by_constructor__(_ffi_api.IntervalSet, min_value, max_value)
 
 
-@tvm.ffi.register_object("arith.PresburgerSet")
+@tvm_ffi.register_object("arith.PresburgerSet")
 class PresburgerSet(IntSet):
     """Represent of Presburger Set"""
 
@@ -99,7 +102,7 @@ def estimate_region_lower_bound(region, var_dom, predicate):
     region : List[Range]
         The region to be analyzed.
 
-    var_dom : Dict[Var, Range]
+    var_dom : Dict[tvm.tirx.Var, Range]
         The ranges of the variables
 
     predicate : PrimExpr
@@ -122,7 +125,7 @@ def estimate_region_strict_bound(region, var_dom, predicate):
     region : List[Range]
         The region to be analyzed.
 
-    var_dom : Dict[Var, Range]
+    var_dom : Dict[tvm.tirx.Var, Range]
         The ranges of the variables
 
     predicate : PrimExpr
@@ -146,7 +149,7 @@ def estimate_region_upper_bound(region, var_dom, predicate):
     region : List[Range]
         The region to be analyzed.
 
-    var_dom : Dict[Var, Range]
+    var_dom : Dict[tvm.tirx.Var, Range]
         The ranges of the variables
 
     predicate : PrimExpr
@@ -165,7 +168,7 @@ def pos_inf():
 
     Returns
     ----------
-    pos_inf : Var
+    pos_inf : tvm.tirx.Var
         A symbolic var that indicates positive infinity
     """
     return _ffi_api.PosInf()
@@ -176,7 +179,7 @@ def neg_inf():
 
     Returns
     ----------
-    neg_inf : Var
+    neg_inf : tvm.tirx.Var
         A symbolic var that indicates positive infinity
     """
     return _ffi_api.NegInf()

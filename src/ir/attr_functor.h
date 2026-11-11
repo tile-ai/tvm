@@ -30,8 +30,8 @@
 #ifndef TVM_IR_ATTR_FUNCTOR_H_
 #define TVM_IR_ATTR_FUNCTOR_H_
 
-#include <tvm/node/functor.h>
-#include <tvm/tir/expr.h>
+#include <tvm/ir/node_functor.h>
+#include <tvm/tirx/expr.h>
 
 #include <utility>
 
@@ -40,20 +40,22 @@ namespace tvm {
 template <typename FType>
 class AttrFunctor;
 
-#define ATTR_FUNCTOR_DEFAULT \
-  { return VisitAttrDefault_(op, std::forward<Args>(args)...); }
+#define ATTR_FUNCTOR_DEFAULT                                   \
+  {                                                            \
+    return VisitAttrDefault_(op, std::forward<Args>(args)...); \
+  }
 
-#define ATTR_FUNCTOR_DISPATCH(OP)                                                          \
-  vtable.template set_dispatch<OP>([](const ObjectRef& n, TSelf* self, Args... args) {     \
-    return self->VisitAttr_(static_cast<const OP*>(n.get()), std::forward<Args>(args)...); \
+#define ATTR_FUNCTOR_DISPATCH(OP)                                                           \
+  vtable.template set_dispatch<OP>([](const ffi::ObjectRef& n, TSelf* self, Args... args) { \
+    return self->VisitAttr_(static_cast<const OP*>(n.get()), std::forward<Args>(args)...);  \
   });
 
 // A functor for common attribute information.
 template <typename R, typename... Args>
-class AttrFunctor<R(const ObjectRef& n, Args...)> {
+class AttrFunctor<R(const ffi::ObjectRef& n, Args...)> {
  private:
-  using TSelf = AttrFunctor<R(const ObjectRef& n, Args...)>;
-  using FType = tvm::NodeFunctor<R(const ObjectRef& n, TSelf* self, Args...)>;
+  using TSelf = AttrFunctor<R(const ffi::ObjectRef& n, Args...)>;
+  using FType = tvm::NodeFunctor<R(const ffi::ObjectRef& n, TSelf* self, Args...)>;
 
  public:
   /*! \brief the result type of this functor */
@@ -66,7 +68,7 @@ class AttrFunctor<R(const ObjectRef& n, Args...)> {
    * \param args Additional arguments.
    * \return The result of the call
    */
-  virtual R VisitAttr(const ObjectRef& n, Args... args) {
+  virtual R VisitAttr(const ffi::ObjectRef& n, Args... args) {
     static FType vtable = InitVTable();
     if (vtable.can_dispatch(n)) {
       return vtable(n, this, std::forward<Args>(args)...);
@@ -74,42 +76,42 @@ class AttrFunctor<R(const ObjectRef& n, Args...)> {
       return VisitAttrDefault_(n.get(), std::forward<Args>(args)...);
     }
   }
-  virtual R VisitAttrDefault_(const Object* node, Args... args) = 0;
+  virtual R VisitAttrDefault_(const ffi::Object* node, Args... args) = 0;
   virtual R VisitAttr_(const ffi::ArrayObj* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::IntImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::FloatImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::StringImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::IntImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::FloatImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::StringImmNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
   // deep comparison of symbolic integer expressions.
-  virtual R VisitAttr_(const tir::VarNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::SizeVarNode* op, Args... args) {
-    return VisitAttr_(static_cast<const tir::VarNode*>(op), std::forward<Args>(args)...);
+  virtual R VisitAttr_(const tirx::VarNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::SizeVarNode* op, Args... args) {
+    return VisitAttr_(static_cast<const tirx::VarNode*>(op), std::forward<Args>(args)...);
   }
-  virtual R VisitAttr_(const tir::AddNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::SubNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::MulNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::DivNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::ModNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::FloorDivNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::FloorModNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::MinNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::MaxNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::GENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::GTNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::LTNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::LENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::EQNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::NENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::AndNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::OrNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::NotNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::CastNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::CallNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
-  virtual R VisitAttr_(const tir::SelectNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::AddNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::SubNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::MulNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::DivNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::ModNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::FloorDivNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::FloorModNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::MinNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::MaxNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::GENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::GTNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::LTNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::LENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::EQNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::NENode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::AndNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::OrNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::NotNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::CastNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::CallNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
+  virtual R VisitAttr_(const tirx::SelectNode* op, Args... args) ATTR_FUNCTOR_DEFAULT;
 
  private:
   // initialize the vtable.
   static FType InitVTable() {
-    using namespace tir;
+    using namespace tirx;
     FType vtable;
     // Set dispatch
     ATTR_FUNCTOR_DISPATCH(ffi::ArrayObj);
