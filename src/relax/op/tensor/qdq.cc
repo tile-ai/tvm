@@ -34,22 +34,22 @@
 namespace tvm {
 namespace relax {
 
-TVM_FFI_STATIC_INIT_BLOCK({ QuantizeAttrs::RegisterReflection(); });
+TVM_FFI_STATIC_INIT_BLOCK() { QuantizeAttrs::RegisterReflection(); }
 
 /* relax.quantize */
 
 Expr quantize(Expr data, Expr scale, Expr zero_point, int axis, DataType out_dtype) {
-  ObjectPtr<QuantizeAttrs> attrs = make_object<QuantizeAttrs>();
+  ffi::ObjectPtr<QuantizeAttrs> attrs = ffi::make_object<QuantizeAttrs>();
   attrs->axis = axis;
   attrs->out_dtype = out_dtype;
   static const Op& op = Op::Get("relax.quantize");
   return Call(op, {std::move(data), std::move(scale), std::move(zero_point)}, Attrs(attrs));
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.quantize", quantize);
-});
+}
 
 StructInfo InferStructInfoQuantize(const Call& call, const BlockBuilder& ctx) {
   const auto* attrs = call->attrs.as<QuantizeAttrs>();
@@ -79,10 +79,14 @@ StructInfo InferStructInfoQuantize(const Call& call, const BlockBuilder& ctx) {
   }
 
   // Check datatype of zero_point param:
-  if (zp_sinfo->dtype != DataType::Int(8) && zp_sinfo->dtype != DataType::Float(16)) {
+  if (zp_sinfo->dtype != DataType::Int(8) && zp_sinfo->dtype != DataType::UInt(8) &&
+      zp_sinfo->dtype != DataType::Int(16) && zp_sinfo->dtype != DataType::UInt(16) &&
+      zp_sinfo->dtype != DataType::Int(32) && zp_sinfo->dtype != DataType::UInt(32) &&
+      zp_sinfo->dtype != DataType::Float(16)) {
     ctx->ReportFatal(Diagnostic::Error(call)
-                     << "zero_point param datatype should be 'int8' or 'float16', but got "
-                     << zp_sinfo->dtype);
+                     << "zero_point param datatype should be one of "
+                     << "['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'float16'], "
+                     << "but got " << zp_sinfo->dtype);
   }
 
   // Check that "axis" attribute is not out of range:
@@ -93,7 +97,7 @@ StructInfo InferStructInfoQuantize(const Call& call, const BlockBuilder& ctx) {
   }
 
   auto check_param_size = [&](const TensorStructInfo& param_sinfo,
-                              const TensorStructInfo& data_sinfo, String param_name) {
+                              const TensorStructInfo& data_sinfo, ffi::String param_name) {
     const PrimExpr& param_dim = param_sinfo->GetShape().value()[0];
     const PrimExpr& input_dim = data_sinfo->GetShape().value()[axis];
     if (!ctx->GetAnalyzer()->CanProveEqual(param_dim, input_dim)) {
@@ -104,11 +108,26 @@ StructInfo InferStructInfoQuantize(const Call& call, const BlockBuilder& ctx) {
     }
   };
 
-  // Check size matching of scale/zp params with input shape at dim = attrs->axis.
-  if (!IsScalarTensor(scale_sinfo)) check_param_size(scale_sinfo, input_sinfo, "scale");
-  if (!IsScalarTensor(zp_sinfo)) check_param_size(zp_sinfo, input_sinfo, "zero_point");
+  auto is_scalar_or_singleton_vector = [&](const TensorStructInfo& param_sinfo) {
+    if (IsScalarTensor(param_sinfo)) return true;
+    if (param_sinfo->shape.defined() && param_sinfo->shape->IsInstance<ShapeExprNode>()) {
+      const auto& values = param_sinfo->shape.as<ShapeExprNode>()->values;
+      if (!values.empty()) {
+        return std::all_of(values.begin(), values.end(), [&](const PrimExpr& dim) {
+          return ctx->GetAnalyzer()->CanProveEqual(dim, 1);
+        });
+      }
+    }
+    return false;
+  };
 
-  auto output_sinfo = make_object<TensorStructInfoNode>(*input_sinfo.get());
+  // Check size matching of scale/zp params with input shape at dim = attrs->axis.
+  if (!is_scalar_or_singleton_vector(scale_sinfo))
+    check_param_size(scale_sinfo, input_sinfo, "scale");
+  if (!is_scalar_or_singleton_vector(zp_sinfo))
+    check_param_size(zp_sinfo, input_sinfo, "zero_point");
+
+  auto output_sinfo = ffi::make_object<TensorStructInfoNode>(*input_sinfo.get());
   output_sinfo->dtype = attrs->out_dtype;
   return TensorStructInfo(output_sinfo);
 }
@@ -125,17 +144,17 @@ TVM_REGISTER_OP("relax.quantize")
 /* relax.dequantize */
 
 Expr dequantize(Expr data, Expr scale, Expr zero_point, int axis, DataType out_dtype) {
-  ObjectPtr<QuantizeAttrs> attrs = make_object<QuantizeAttrs>();
+  ffi::ObjectPtr<QuantizeAttrs> attrs = ffi::make_object<QuantizeAttrs>();
   attrs->axis = axis;
   attrs->out_dtype = out_dtype;
   static const Op& op = Op::Get("relax.dequantize");
   return Call(op, {std::move(data), std::move(scale), std::move(zero_point)}, Attrs(attrs));
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.op.dequantize", dequantize);
-});
+}
 
 StructInfo InferStructInfoDequantize(const Call& call, const BlockBuilder& ctx) {
   const auto* attrs = call->attrs.as<QuantizeAttrs>();
@@ -167,10 +186,14 @@ StructInfo InferStructInfoDequantize(const Call& call, const BlockBuilder& ctx) 
   }
 
   // Check datatype of zero_point param:
-  if (zp_sinfo->dtype != DataType::Int(8) && zp_sinfo->dtype != DataType::Float(16)) {
+  if (zp_sinfo->dtype != DataType::Int(8) && zp_sinfo->dtype != DataType::UInt(8) &&
+      zp_sinfo->dtype != DataType::Int(16) && zp_sinfo->dtype != DataType::UInt(16) &&
+      zp_sinfo->dtype != DataType::Int(32) && zp_sinfo->dtype != DataType::UInt(32) &&
+      zp_sinfo->dtype != DataType::Float(16)) {
     ctx->ReportFatal(Diagnostic::Error(call)
-                     << "zero_point param datatype should be 'int8' or 'float16', but got "
-                     << zp_sinfo->dtype);
+                     << "zero_point param datatype should be one of "
+                     << "['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'float16'], "
+                     << "but got " << zp_sinfo->dtype);
   }
 
   // Check that "axis" attribute is not out of range:
@@ -181,7 +204,7 @@ StructInfo InferStructInfoDequantize(const Call& call, const BlockBuilder& ctx) 
   }
 
   auto check_param_size = [&](const TensorStructInfo& param_sinfo,
-                              const TensorStructInfo& data_sinfo, String param_name) {
+                              const TensorStructInfo& data_sinfo, ffi::String param_name) {
     const PrimExpr& param_dim = param_sinfo->GetShape().value()[0];
     const PrimExpr& input_dim = data_sinfo->GetShape().value()[axis];
     if (!ctx->GetAnalyzer()->CanProveEqual(param_dim, input_dim)) {
@@ -192,11 +215,26 @@ StructInfo InferStructInfoDequantize(const Call& call, const BlockBuilder& ctx) 
     }
   };
 
-  // Check size matching of scale/zp params with input shape at dim = attrs->axis.
-  if (!IsScalarTensor(scale_sinfo)) check_param_size(scale_sinfo, input_sinfo, "scale");
-  if (!IsScalarTensor(zp_sinfo)) check_param_size(zp_sinfo, input_sinfo, "zero_point");
+  auto is_scalar_or_singleton_vector = [&](const TensorStructInfo& param_sinfo) {
+    if (IsScalarTensor(param_sinfo)) return true;
+    if (param_sinfo->shape.defined() && param_sinfo->shape->IsInstance<ShapeExprNode>()) {
+      const auto& values = param_sinfo->shape.as<ShapeExprNode>()->values;
+      if (!values.empty()) {
+        return std::all_of(values.begin(), values.end(), [&](const PrimExpr& dim) {
+          return ctx->GetAnalyzer()->CanProveEqual(dim, 1);
+        });
+      }
+    }
+    return false;
+  };
 
-  auto output_sinfo = make_object<TensorStructInfoNode>(*input_sinfo.get());
+  // Check size matching of scale/zp params with input shape at dim = attrs->axis.
+  if (!is_scalar_or_singleton_vector(scale_sinfo))
+    check_param_size(scale_sinfo, input_sinfo, "scale");
+  if (!is_scalar_or_singleton_vector(zp_sinfo))
+    check_param_size(zp_sinfo, input_sinfo, "zero_point");
+
+  auto output_sinfo = ffi::make_object<TensorStructInfoNode>(*input_sinfo.get());
   output_sinfo->dtype = attrs->out_dtype;
   return TensorStructInfo(output_sinfo);
 }

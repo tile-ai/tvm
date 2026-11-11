@@ -14,21 +14,30 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# ruff: noqa: F821
 """Bring Your Own Datatypes custom datatype framework
 
 TODO(@gussmith23 @hypercubestart) link to BYODT docs when they exist"""
+
+from tvm_ffi import get_global_func
+from tvm_ffi import register_global_func as _register_global_func
+
 import tvm
-from tvm.runtime import convert, DataType
-from tvm.tir.expr import (
-    Call as _Call,
-    Cast as _Cast,
-    FloatImm as _FloatImm,
+from tvm.runtime import DataType, convert
+from tvm.tirx import call_intrin
+from tvm.tirx.expr import (
     BinaryOpExpr as _BinaryOpExpr,
 )
-from tvm.tir.op import call_pure_extern
-from tvm.ffi import get_global_func
-from tvm.ffi import register_func as _register_func
-from tvm.tir import call_intrin
+from tvm.tirx.expr import (
+    Call as _Call,
+)
+from tvm.tirx.expr import (
+    Cast as _Cast,
+)
+from tvm.tirx.expr import (
+    FloatImm as _FloatImm,
+)
+from tvm.tirx.op import call_pure_extern
 
 
 def register(type_name, type_code):
@@ -215,7 +224,7 @@ def register_op(
         )
     else:
         lower_func_name = "tvm.datatype.lower." + target + "." + op_name + "." + src_type_name
-    tvm.ffi.register_func(lower_func_name, lower_func)
+    tvm_ffi.register_global_func(lower_func_name, lower_func)
 
 
 def register_min_func(func, type_name):
@@ -244,7 +253,7 @@ def register_min_func(func, type_name):
     type_name : str
         The name of the custom datatype, e.g. posites2 (but not custom[posites2]32).
     """
-    _register_func("tvm.datatype.min." + type_name, func)
+    _register_global_func("tvm.datatype.min." + type_name, func)
 
 
 def create_min_lower_func(extern_func_map, type_name):
@@ -329,7 +338,7 @@ def lower_ite(ite_op):
     ----------
     ite_op : Op
         Takes an if then else op and returns a
-        call to tir.if_then_else function, passing the op's
+        call to tirx.if_then_else function, passing the op's
         arguments. The return type of the call if a uint of the same
         width as the custom type is returned.
     """
@@ -341,7 +350,7 @@ def lower_ite(ite_op):
         dtype += "x" + str(t.lanes)
     return call_intrin(
         dtype,
-        "tir.if_then_else",
+        "tirx.if_then_else",
         convert(ite_op.args[0]),
         convert(ite_op.args[1]),
         convert(ite_op.args[2]),
@@ -357,7 +366,7 @@ def lower_call_pure_extern(op):
     ----------
     ite_op : Op
         Takes a call_pure_extern op and returns a
-        call to tir.call_pure_extern function, passing the op's
+        call to tirx.call_pure_extern function, passing the op's
         arguments. The return type of the call if a uint of the same
         width as the custom type is returned.
     """
@@ -367,4 +376,4 @@ def lower_call_pure_extern(op):
     dtype = "uint" + str(t.bits)
     if t.lanes > 1:
         dtype += "x" + str(t.lanes)
-    return call_intrin(dtype, "tir.call_pure_extern", *op.args)
+    return call_intrin(dtype, "tirx.call_pure_extern", *op.args)

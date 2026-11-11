@@ -26,8 +26,8 @@
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/te/operation.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/stmt_functor.h>
 
 #include <unordered_set>
 #include <vector>
@@ -37,10 +37,10 @@ namespace te {
 
 // construct a read graph that gives readers of each operation
 // that the root depend on
-ReadGraph CreateReadGraph(const Array<Operation>& roots) {
+ReadGraph CreateReadGraph(const ffi::Array<Operation>& roots) {
   ReadGraph rmap;
   std::vector<Operation> stack;
-  std::unordered_set<const Object*> visited;
+  std::unordered_set<const ffi::Object*> visited;
   // initialize the roots
   for (Operation op : roots) {
     stack.push_back(op);
@@ -50,7 +50,7 @@ ReadGraph CreateReadGraph(const Array<Operation>& roots) {
   while (!stack.empty()) {
     Operation op = stack.back();
     stack.pop_back();
-    Array<Tensor> deps = op->InputTensors();
+    ffi::Array<Tensor> deps = op->InputTensors();
     rmap.Set(op, deps);
     for (Tensor t : deps) {
       if (t->op.defined() && visited.count(t->op.get()) == 0) {
@@ -63,7 +63,7 @@ ReadGraph CreateReadGraph(const Array<Operation>& roots) {
 }
 
 void PostDFSOrder(const Operation& op, const ReadGraph& g, std::unordered_set<Operation>* visited,
-                  Array<Operation>* post_order) {
+                  ffi::Array<Operation>* post_order) {
   if (visited->count(op)) return;
   visited->insert(op);
   for (const auto& t : g.at(op)) {
@@ -72,23 +72,23 @@ void PostDFSOrder(const Operation& op, const ReadGraph& g, std::unordered_set<Op
   post_order->push_back(op);
 }
 
-Array<Operation> PostDFSOrder(const Array<Operation>& roots, const ReadGraph& g) {
+ffi::Array<Operation> PostDFSOrder(const ffi::Array<Operation>& roots, const ReadGraph& g) {
   std::unordered_set<Operation> visited;
-  Array<Operation> post_order;
+  ffi::Array<Operation> post_order;
   for (Operation op : roots) {
     PostDFSOrder(op, g, &visited, &post_order);
   }
   return post_order;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("schedule.CreateReadGraph", CreateReadGraph)
-      .def("schedule.PostDFSOrder", [](const Array<Operation>& roots, const ReadGraph& g) {
+      .def("schedule.PostDFSOrder", [](const ffi::Array<Operation>& roots, const ReadGraph& g) {
         return PostDFSOrder(roots, g);
       });
-});
+}
 
 }  // namespace te
 }  // namespace tvm

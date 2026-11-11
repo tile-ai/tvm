@@ -23,7 +23,6 @@
  */
 #ifdef TVM_LLVM_VERSION
 
-#include <dmlc/io.h>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
@@ -32,6 +31,7 @@
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/support/io.h>
 #if _WIN32
 #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
@@ -56,14 +56,14 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/container/array.h>
 #include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/string.h>
 #include <tvm/ir/module.h>
+#include <tvm/ir/with_context.h>
 #include <tvm/runtime/logging.h>
-#include <tvm/runtime/object.h>
-#include <tvm/support/with.h>
 #include <tvm/target/codegen.h>
 #include <tvm/target/target.h>
 
@@ -95,7 +95,7 @@ class LLVMModuleNode final : public ffi::ModuleObj {
 
   const char* kind() const final { return "llvm"; }
 
-  Optional<ffi::Function> GetFunction(const String& name) final;
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) final;
 
   /*! \brief Get the property of the runtime module .*/
   // TODO(tvm-team): Make it serializable
@@ -103,15 +103,15 @@ class LLVMModuleNode final : public ffi::ModuleObj {
     return ffi::Module::kRunnable | ffi::Module::kCompilationExportable;
   }
 
-  void WriteToFile(const String& file_name, const String& format) const final;
+  void WriteToFile(const ffi::String& file_name, const ffi::String& format) const final;
   ffi::Bytes SaveToBytes() const final;
-  String InspectSource(const String& format) const final;
+  ffi::String InspectSource(const ffi::String& format) const final;
 
   void Init(const IRModule& mod, const Target& target);
   void Init(std::unique_ptr<llvm::Module> module, std::unique_ptr<LLVMInstance> llvm_instance);
   void LoadIR(const std::string& file_name);
 
-  bool ImplementsFunction(const String& name) final;
+  bool ImplementsFunction(const ffi::String& name) final;
 
   void SetJITEngine(const std::string& jit_engine) { jit_engine_ = jit_engine; }
 
@@ -135,7 +135,7 @@ class LLVMModuleNode final : public ffi::ModuleObj {
   // (EngineBuilder takes ownership of the module).
   std::unique_ptr<llvm::Module> module_owning_ptr_;
   /* \brief names of the external functions declared in this module */
-  Array<String> function_names_;
+  ffi::Array<ffi::String> function_names_;
   std::string jit_engine_;
 };
 
@@ -149,14 +149,14 @@ LLVMModuleNode::~LLVMModuleNode() {
     auto dtorRunner = std::make_unique<llvm::orc::CtorDtorRunner>(orcjit_ee_->getMainJITDylib());
     dtorRunner->add(dtors);
     auto err = dtorRunner->run();
-    ICHECK(!err) << llvm::toString(std::move(err));
+    TVM_FFI_ICHECK(!err) << llvm::toString(std::move(err));
     orcjit_ee_.reset();
   }
   module_owning_ptr_.reset();
 }
 
-Optional<ffi::Function> LLVMModuleNode::GetFunction(const String& name) {
-  ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
+ffi::Optional<ffi::Function> LLVMModuleNode::GetFunction(const ffi::String& name) {
+  ffi::ObjectPtr<ffi::Object> sptr_to_self = ffi::GetObjectPtr<ffi::Object>(this);
   if (name == "__tvm_is_system_module") {
     bool flag = (module_->getFunction("__tvm_module_startup") != nullptr);
     return ffi::Function([flag](ffi::PackedArgs args, ffi::Any* rv) { *rv = flag; });
@@ -181,7 +181,7 @@ Optional<ffi::Function> LLVMModuleNode::GetFunction(const String& name) {
     return ffi::Function(
         [target_string](ffi::PackedArgs args, ffi::Any* rv) { *rv = target_string; });
   }
-  ICHECK(jit_engine_.size()) << "JIT engine type is missing";
+  TVM_FFI_ICHECK(jit_engine_.size()) << "JIT engine type is missing";
   if ((jit_engine_ == "mcjit") && (mcjit_ee_ == nullptr)) InitMCJIT();
   if ((jit_engine_ == "orcjit") && (orcjit_ee_ == nullptr)) InitORCJIT();
 
@@ -189,9 +189,10 @@ Optional<ffi::Function> LLVMModuleNode::GetFunction(const String& name) {
 
   TVMFFISafeCallType faddr;
   With<LLVMTarget> llvm_target(*llvm_instance_, LLVMTarget::GetTargetMetadata(*module_));
-  faddr = reinterpret_cast<TVMFFISafeCallType>(GetFunctionAddr(name, *llvm_target));
+  ffi::String name_with_prefix = ffi::symbol::tvm_ffi_symbol_prefix + name;
+  faddr = reinterpret_cast<TVMFFISafeCallType>(GetFunctionAddr(name_with_prefix, *llvm_target));
   if (faddr == nullptr) return std::nullopt;
-  ffi::Module self_strong_ref = GetRef<ffi::Module>(this);
+  ffi::Module self_strong_ref = ffi::GetRef<ffi::Module>(this);
   return ffi::Function::FromPacked([faddr, self_strong_ref](ffi::PackedArgs args, ffi::Any* rv) {
     TVM_FFI_ICHECK_LT(rv->type_index(), ffi::TypeIndex::kTVMFFIStaticObjectBegin);
     TVM_FFI_CHECK_SAFE_CALL((*faddr)(nullptr, reinterpret_cast<const TVMFFIAny*>(args.data()),
@@ -200,22 +201,11 @@ Optional<ffi::Function> LLVMModuleNode::GetFunction(const String& name) {
 }
 
 namespace {
-#if TVM_LLVM_VERSION <= 70
-constexpr auto llvm_open_output_flag = llvm::sys::fs::F_None;
-#else
 constexpr auto llvm_open_output_flag = llvm::sys::fs::OF_None;
-#endif
 
-#if TVM_LLVM_VERSION <= 60
-std::unique_ptr<llvm::Module> CloneLLVMModule(llvm::Module* mod) { return llvm::CloneModule(mod); }
-#else
 std::unique_ptr<llvm::Module> CloneLLVMModule(llvm::Module* mod) { return llvm::CloneModule(*mod); }
-#endif
 
-#if TVM_LLVM_VERSION <= 90
-constexpr auto llvm_object_file_target = llvm::TargetMachine::CGFT_ObjectFile;
-constexpr auto llvm_assembly_file_target = llvm::TargetMachine::CGFT_AssemblyFile;
-#elif TVM_LLVM_VERSION <= 170
+#if TVM_LLVM_VERSION <= 170
 constexpr auto llvm_object_file_target = llvm::CGFT_ObjectFile;
 constexpr auto llvm_assembly_file_target = llvm::CGFT_AssemblyFile;
 #else
@@ -226,22 +216,20 @@ constexpr auto llvm_assembly_file_target = llvm::CodeGenFileType::AssemblyFile;
 bool LLVMAddPassesToEmitFile(llvm::TargetMachine* tm, llvm::legacy::PassManager* pm,
                              llvm::raw_fd_ostream* dest,
                              decltype(llvm_object_file_target) llvm_file_target) {
-#if TVM_LLVM_VERSION <= 60
-  return tm->addPassesToEmitFile(*pm, *dest, llvm_file_target);
-#else
   return tm->addPassesToEmitFile(*pm, *dest, nullptr, llvm_file_target);
-#endif
 }
 
 }  // namespace
 
-void LLVMModuleNode::WriteToFile(const String& file_name_str, const String& format) const {
-  // CHECK(imports_.empty()) << "SaveToFile does not handle imported modules";
+void LLVMModuleNode::WriteToFile(const ffi::String& file_name_str,
+                                 const ffi::String& format) const {
+  // TVM_FFI_ICHECK(imports_.empty()) << "SaveToFile does not handle imported modules";
   std::string file_name = file_name_str;
   std::string fmt = runtime::GetFileFormat(file_name, format);
   std::error_code ecode;
   llvm::raw_fd_ostream dest(file_name, ecode, llvm_open_output_flag);
-  ICHECK_EQ(ecode.value(), 0) << "Cannot open file: " << file_name << " " << ecode.message();
+  TVM_FFI_ICHECK_EQ(ecode.value(), 0)
+      << "Cannot open file: " << file_name << " " << ecode.message();
   bool is_obj_file = fmt == "o" || fmt == "obj";
   bool is_asm_file = fmt == "s" || fmt == "asm";
   if (is_obj_file || is_asm_file) {
@@ -252,29 +240,25 @@ void LLVMModuleNode::WriteToFile(const String& file_name_str, const String& form
     llvm::TargetMachine* tm = llvm_target->GetOrCreateTargetMachine();
 
     auto err = LLVMAddPassesToEmitFile(tm, &pass, &dest, llvm_file_target);
-    ICHECK(!err) << "Cannot emit target CGFT_ObjectFile";
+    TVM_FFI_ICHECK(!err) << "Cannot emit target CGFT_ObjectFile";
 
     pass.run(*CloneLLVMModule(module_));
   } else if (fmt == "ll") {
     module_->print(dest, nullptr);
   } else if (fmt == "bc") {
-#if TVM_LLVM_VERSION <= 60
-    llvm::WriteBitcodeToFile(module_, dest);
-#else
     llvm::WriteBitcodeToFile(*module_, dest);
-#endif
   } else {
-    LOG(FATAL) << "Do not know how to save file " << file_name << " with format=\'" << format
-               << "\'";
+    TVM_FFI_THROW(InternalError) << "Do not know how to save file " << file_name
+                                 << " with format=\'" << format << "\'";
   }
   dest.close();
 }
 
 ffi::Bytes LLVMModuleNode::SaveToBytes() const {
-  LOG(FATAL) << "LLVMModule: SaveToBytes not supported";
+  TVM_FFI_THROW(InternalError) << "LLVMModule: SaveToBytes not supported";
 }
 
-String LLVMModuleNode::InspectSource(const String& format) const {
+ffi::String LLVMModuleNode::InspectSource(const ffi::String& format) const {
   std::string fmt = runtime::GetFileFormat("", format);
   std::string type_str;
   llvm::SmallString<256> str;
@@ -282,24 +266,15 @@ String LLVMModuleNode::InspectSource(const String& format) const {
 
   if (fmt == "s" || fmt == "asm") {
     With<LLVMTarget> llvm_target(*llvm_instance_, LLVMTarget::GetTargetMetadata(*module_));
-#if TVM_LLVM_VERSION <= 60
-    std::unique_ptr<llvm::Module> m = llvm::CloneModule(module_);
-#else
     std::unique_ptr<llvm::Module> m = llvm::CloneModule(*module_);
-#endif
     llvm::legacy::PassManager pass;
     llvm::TargetMachine* tm = llvm_target->GetOrCreateTargetMachine();
-#if TVM_LLVM_VERSION <= 60
-    ICHECK(tm->addPassesToEmitFile(pass, rso, llvm::TargetMachine::CGFT_AssemblyFile) == 0)
-        << "Cannot emit target CGFT_AssemblyFile";
-#elif TVM_LLVM_VERSION <= 90
-    ICHECK(tm->addPassesToEmitFile(pass, rso, nullptr, llvm::TargetMachine::CGFT_AssemblyFile) == 0)
-        << "Cannot emit target CGFT_AssemblyFile";
-#elif TVM_LLVM_VERSION <= 170
-    ICHECK(tm->addPassesToEmitFile(pass, rso, nullptr, llvm::CGFT_AssemblyFile) == 0)
+#if TVM_LLVM_VERSION <= 170
+    TVM_FFI_ICHECK(tm->addPassesToEmitFile(pass, rso, nullptr, llvm::CGFT_AssemblyFile) == 0)
         << "Cannot emit target CGFT_AssemblyFile";
 #else
-    ICHECK(tm->addPassesToEmitFile(pass, rso, nullptr, llvm::CodeGenFileType::AssemblyFile) == 0)
+    TVM_FFI_ICHECK(
+        tm->addPassesToEmitFile(pass, rso, nullptr, llvm::CodeGenFileType::AssemblyFile) == 0)
         << "Cannot emit target CodeGenFileType::AssemblyFile";
 #endif
     pass.run(*m);
@@ -307,11 +282,12 @@ String LLVMModuleNode::InspectSource(const String& format) const {
   } else if (fmt == "" || fmt == "ll") {
     std::string type_str;
     llvm::raw_string_ostream rso(type_str);
-    ICHECK(module_ != nullptr);
+    TVM_FFI_ICHECK(module_ != nullptr);
     module_->print(rso, nullptr);
     return rso.str();
   } else {
-    LOG(FATAL) << "Do not know how to get source code with format: " << format << "\'";
+    TVM_FFI_THROW(InternalError) << "Do not know how to get source code with format: " << format
+                                 << "\'";
   }
   return "";
 }
@@ -324,7 +300,8 @@ void LLVMModuleNode::Init(const IRModule& mod, const Target& target) {
 
   std::string entry_func;
 
-  Optional<String> system_lib_prefix = mod->GetAttr<String>(tvm::attr::kSystemLibPrefix);
+  ffi::Optional<ffi::String> system_lib_prefix =
+      mod->GetAttr<ffi::String>(tvm::attr::kSystemLibPrefix);
 
   for (auto kv : mod->functions) {
     if (!kv.second->IsInstance<PrimFuncNode>()) {
@@ -332,10 +309,10 @@ void LLVMModuleNode::Init(const IRModule& mod, const Target& target) {
       continue;
     }
     auto f = Downcast<PrimFunc>(kv.second);
-    auto global_symbol = f->GetAttr<String>(tvm::attr::kGlobalSymbol);
-    bool is_entry_func = f->HasNonzeroAttr(tir::attr::kIsEntryFunc);
+    auto global_symbol = f->GetAttr<ffi::String>(tvm::attr::kGlobalSymbol);
+    bool is_entry_func = f->HasNonzeroAttr(tirx::attr::kIsEntryFunc);
 
-    ICHECK(global_symbol || !is_entry_func) << "The entry func must be exposed externally.";
+    TVM_FFI_ICHECK(global_symbol || !is_entry_func) << "The entry func must be exposed externally.";
 
     if (global_symbol) {
       function_names_.push_back(global_symbol.value());
@@ -345,7 +322,7 @@ void LLVMModuleNode::Init(const IRModule& mod, const Target& target) {
     }
   }
   // TODO(@jroesch): follow up on this condition.
-  // ICHECK(funcs.size() > 0);
+  // TVM_FFI_ICHECK(funcs.size() > 0);
   // TODO(tqchen): remove the entry function behavior as it does not
   // makes sense when we start to use multiple modules.
   cg->Init("TVMMod", llvm_target.get(), system_lib_prefix, system_lib_prefix.has_value(), false);
@@ -385,8 +362,9 @@ void LLVMModuleNode::LoadIR(const std::string& file_name) {
   Init(std::move(module), std::move(llvm_instance));
 }
 
-bool LLVMModuleNode::ImplementsFunction(const String& name) {
-  return std::find(function_names_.begin(), function_names_.end(), name) != function_names_.end();
+bool LLVMModuleNode::ImplementsFunction(const ffi::String& name) {
+  return std::find(function_names_.begin(), function_names_.end(),
+                   ffi::symbol::tvm_ffi_symbol_prefix + name) != function_names_.end();
 }
 
 void LLVMModuleNode::InitMCJIT() {
@@ -412,23 +390,23 @@ void LLVMModuleNode::InitMCJIT() {
   // create the taget machine
   auto tm = std::unique_ptr<llvm::TargetMachine>(builder.selectTarget());
   if (!IsCompatibleWithHost(tm.get())) {
-    LOG(FATAL) << "Cannot run module, architecture mismatch";
+    TVM_FFI_THROW(InternalError) << "Cannot run module, architecture mismatch";
   }
 
   // data layout
   llvm::DataLayout layout(tm->createDataLayout());
-  ICHECK(layout == module_->getDataLayout())
+  TVM_FFI_ICHECK(layout == module_->getDataLayout())
       << "Data layout mismatch between module("
       << module_->getDataLayout().getStringRepresentation() << ")"
       << " and ExecutionEngine (" << layout.getStringRepresentation() << ")";
 
   // create MCJIT
   mcjit_ee_ = builder.create(tm.release());
-  ICHECK(mcjit_ee_ != nullptr) << "Failed to initialize LLVM MCJIT engine for "
+  TVM_FFI_ICHECK(mcjit_ee_ != nullptr) << "Failed to initialize LLVM MCJIT engine for "
 #if TVM_LLVM_VERSION >= 210
-                               << module_->getTargetTriple().str();
+                                       << module_->getTargetTriple().str();
 #else
-                               << module_->getTargetTriple();
+                                       << module_->getTargetTriple();
 #endif
 
   VLOG(2) << "LLVM MCJIT execute " << module_->getModuleIdentifier() << " for triple `"
@@ -443,7 +421,7 @@ void LLVMModuleNode::InitMCJIT() {
     *ctx_addr = this;
   }
 
-  ffi::Module::VisitContextSymbols([this, &llvm_target](const String& name, void* symbol) {
+  ffi::Module::VisitContextSymbols([this, &llvm_target](const ffi::String& name, void* symbol) {
     if (void** ctx_addr = reinterpret_cast<void**>(GetGlobalAddr(name, *llvm_target))) {
       *ctx_addr = symbol;
     }
@@ -487,13 +465,13 @@ void LLVMModuleNode::InitORCJIT() {
   // create the taget machine
   std::unique_ptr<llvm::TargetMachine> tm = llvm::cantFail(tm_builder.createTargetMachine());
   if (!IsCompatibleWithHost(tm.get())) {
-    LOG(FATAL) << "Cannot run module, architecture mismatch";
+    TVM_FFI_THROW(InternalError) << "Cannot run module, architecture mismatch";
   }
 
   // data layout
-  String module_name = module_->getModuleIdentifier();
+  ffi::String module_name = module_->getModuleIdentifier();
   llvm::DataLayout layout(tm->createDataLayout());
-  ICHECK(layout == module_->getDataLayout())
+  TVM_FFI_ICHECK(layout == module_->getDataLayout())
       << "Data layout mismatch between module("
       << module_->getDataLayout().getStringRepresentation() << ")"
       << " and ExecutionEngine (" << layout.getStringRepresentation() << ")";
@@ -504,7 +482,6 @@ void LLVMModuleNode::InitORCJIT() {
     return std::make_unique<llvm::orc::TMOwningSimpleCompiler>(std::move(tm));
   };
 
-#if TVM_LLVM_VERSION >= 130
   // linker
   const auto linkerBuilder =
 #if TVM_LLVM_VERSION >= 210
@@ -515,7 +492,13 @@ void LLVMModuleNode::InitORCJIT() {
           const llvm::Triple& triple) -> std::unique_ptr<llvm::orc::ObjectLayer> {
 #endif
 #if _WIN32
+#if TVM_LLVM_VERSION >= 210
+    auto GetMemMgr = [](const llvm::MemoryBuffer&) {
+      return std::make_unique<llvm::SectionMemoryManager>();
+    };
+#else
     auto GetMemMgr = []() { return std::make_unique<llvm::SectionMemoryManager>(); };
+#endif
     auto ObjLinkingLayer =
         std::make_unique<llvm::orc::RTDyldObjectLinkingLayer>(session, std::move(GetMemMgr));
 #else
@@ -535,24 +518,19 @@ void LLVMModuleNode::InitORCJIT() {
     return ObjLinkingLayer;
 #endif
   };  // NOLINT(readability/braces)
-#endif
 
   // create LLJIT
   orcjit_ee_ = llvm::cantFail(llvm::orc::LLJITBuilder()
-#if TVM_LLVM_VERSION >= 110
                                   .setDataLayout(layout)
-#endif
                                   .setCompileFunctionCreator(compilerBuilder)
-#if TVM_LLVM_VERSION >= 130
                                   .setObjectLinkingLayerCreator(linkerBuilder)
-#endif
                                   .create());
 
-  ICHECK(orcjit_ee_ != nullptr) << "Failed to initialize LLVM ORCJIT engine for "
+  TVM_FFI_ICHECK(orcjit_ee_ != nullptr) << "Failed to initialize LLVM ORCJIT engine for "
 #if TVM_LLVM_VERSION >= 210
-                                << module_->getTargetTriple().str();
+                                        << module_->getTargetTriple().str();
 #else
-                                << module_->getTargetTriple();
+                                        << module_->getTargetTriple();
 #endif
 
   // store ctors
@@ -563,7 +541,7 @@ void LLVMModuleNode::InitORCJIT() {
   // resolve system symbols (like pthread, dl, m, etc.)
   auto gen =
       llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(layout.getGlobalPrefix());
-  ICHECK(gen) << llvm::toString(gen.takeError()) << "\n";
+  TVM_FFI_ICHECK(gen) << llvm::toString(gen.takeError()) << "\n";
   orcjit_ee_->getMainJITDylib().addGenerator(std::move(gen.get()));
 
   // transfer module to a clone
@@ -573,7 +551,7 @@ void LLVMModuleNode::InitORCJIT() {
   // add the llvm module to run
   llvm::orc::ThreadSafeModule tsm(std::move(umod), std::move(uctx));
   auto err = orcjit_ee_->addIRModule(std::move(tsm));
-  ICHECK(!err) << llvm::toString(std::move(err));
+  TVM_FFI_ICHECK(!err) << llvm::toString(std::move(err));
 
   VLOG(2) << "LLVM ORCJIT execute " << module_->getModuleIdentifier() << " for triple `"
           << llvm_target->GetTargetTriple() << "`"
@@ -581,13 +559,13 @@ void LLVMModuleNode::InitORCJIT() {
 
   // run ctors
   err = ctorRunner.run();
-  ICHECK(!err) << llvm::toString(std::move(err));
+  TVM_FFI_ICHECK(!err) << llvm::toString(std::move(err));
 
   if (void** ctx_addr =
           reinterpret_cast<void**>(GetGlobalAddr(ffi::symbol::tvm_ffi_library_ctx, *llvm_target))) {
     *ctx_addr = this;
   }
-  ffi::Module::VisitContextSymbols([this, &llvm_target](const String& name, void* symbol) {
+  ffi::Module::VisitContextSymbols([this, &llvm_target](const ffi::String& name, void* symbol) {
     if (void** ctx_addr = reinterpret_cast<void**>(GetGlobalAddr(name, *llvm_target))) {
       *ctx_addr = symbol;
     }
@@ -612,14 +590,10 @@ void* LLVMModuleNode::GetGlobalAddr(const std::string& name, const LLVMTarget& l
     if (jit_engine_ == "mcjit") {
       return reinterpret_cast<void*>(mcjit_ee_->getGlobalValueAddress(name));
     } else if (jit_engine_ == "orcjit") {
-#if TVM_LLVM_VERSION >= 150
       auto addr = llvm::cantFail(orcjit_ee_->lookup(name)).getValue();
-#else
-      auto addr = llvm::cantFail(orcjit_ee_->lookup(name)).getAddress();
-#endif
       return reinterpret_cast<void*>(addr);
     } else {
-      LOG(FATAL) << "Either `mcjit` or `orcjit` are not initialized.";
+      TVM_FFI_THROW(InternalError) << "Either `mcjit` or `orcjit` are not initialized.";
     }
   }
   return nullptr;
@@ -632,14 +606,10 @@ void* LLVMModuleNode::GetFunctionAddr(const std::string& name,
     if (jit_engine_ == "mcjit") {
       return reinterpret_cast<void*>(mcjit_ee_->getFunctionAddress(name));
     } else if (jit_engine_ == "orcjit") {
-#if TVM_LLVM_VERSION >= 150
       auto addr = llvm::cantFail(orcjit_ee_->lookup(name)).getValue();
-#else
-      auto addr = llvm::cantFail(orcjit_ee_->lookup(name)).getAddress();
-#endif
       return reinterpret_cast<void*>(addr);
     } else {
-      LOG(FATAL) << "Either `mcjit` or `orcjit` are not initialized.";
+      TVM_FFI_THROW(InternalError) << "Either `mcjit` or `orcjit` are not initialized.";
     }
   }
   return nullptr;
@@ -650,7 +620,7 @@ static void LLVMReflectionRegister() {
   refl::GlobalDef()
       .def("target.build.llvm",
            [](IRModule mod, Target target) -> ffi::Module {
-             auto n = make_object<LLVMModuleNode>();
+             auto n = ffi::make_object<LLVMModuleNode>();
              n->Init(mod, target);
              return ffi::Module(n);
            })
@@ -658,7 +628,7 @@ static void LLVMReflectionRegister() {
            [](std::string target_str, std::string module_name) -> ffi::Module {
              auto llvm_instance = std::make_unique<LLVMInstance>();
              With<LLVMTarget> llvm_target(*llvm_instance, target_str);
-             auto n = make_object<LLVMModuleNode>();
+             auto n = ffi::make_object<LLVMModuleNode>();
              // Generate a LLVM module from an input target string
              auto module = std::make_unique<llvm::Module>(module_name, *llvm_target->GetContext());
              llvm_target->SetTargetMetadata(module.get());
@@ -681,10 +651,9 @@ static void LLVMReflectionRegister() {
 #endif
            })
       .def("target.llvm_get_intrinsic_name",
-           [](int64_t id) -> String { return llvmGetIntrinName(id); })
+           [](int64_t id) -> ffi::String { return llvmGetIntrinName(id); })
       .def("target.llvm_get_system_x86_vendor",
-           []() -> String {
-#if TVM_LLVM_VERSION >= 120
+           []() -> ffi::String {
 #if defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) || defined(_M_X64)
              using namespace llvm::sys::detail::x86;
              const auto x86_sign = getVendorSignature();
@@ -694,7 +663,6 @@ static void LLVMReflectionRegister() {
                return "amd";
              else if (x86_sign == VendorSignatures::UNKNOWN)
                return "unknown";
-#endif
 #endif
              return "unimplemented";
            })
@@ -712,22 +680,22 @@ static void LLVMReflectionRegister() {
              return llvm_backend.GetVectorWidth();
            })
       .def("target.llvm_get_system_triple",
-           []() -> String { return llvm::sys::getDefaultTargetTriple(); })
+           []() -> ffi::String { return llvm::sys::getDefaultTargetTriple(); })
       .def("target.llvm_get_system_cpu",
-           []() -> String { return llvm::sys::getHostCPUName().str(); })
+           []() -> ffi::String { return llvm::sys::getHostCPUName().str(); })
       .def("target.llvm_get_targets",
-           []() -> Array<String> {
+           []() -> ffi::Array<ffi::String> {
              auto llvm_instance = std::make_unique<LLVMInstance>();
              LLVMTargetInfo llvm_backend(*llvm_instance, "llvm");
              return llvm_backend.GetAllLLVMTargets();
            })
       .def("target.llvm_get_cpu_archlist",
-           [](const Target& target) -> Array<String> {
+           [](const Target& target) -> ffi::Array<ffi::String> {
              auto use_target = target.defined() ? target : Target::Current(false);
              // ignore non "llvm" target
              if (target.defined()) {
                if (target->kind->name != "llvm") {
-                 return Array<String>{};
+                 return ffi::Array<ffi::String>{};
                }
              }
              auto llvm_instance = std::make_unique<LLVMInstance>();
@@ -735,7 +703,7 @@ static void LLVMReflectionRegister() {
              return llvm_backend.GetAllLLVMTargetArches();
            })
       .def("target.llvm_get_cpu_features",
-           [](const Target& target) -> Map<String, String> {
+           [](const Target& target) -> ffi::Map<ffi::String, ffi::String> {
              auto use_target = target.defined() ? target : Target::Current(false);
              // ignore non "llvm" target
              if (target.defined()) {
@@ -748,7 +716,7 @@ static void LLVMReflectionRegister() {
              return llvm_backend.GetAllLLVMCpuFeatures();
            })
       .def("target.llvm_cpu_has_feature",
-           [](const String feature, const Target& target) -> bool {
+           [](const ffi::String feature, const Target& target) -> bool {
              auto use_target = target.defined() ? target : Target::Current(false);
              // ignore non "llvm" target
              if (target.defined()) {
@@ -763,7 +731,7 @@ static void LLVMReflectionRegister() {
              return has_feature;
            })
       .def("target.target_has_feature",
-           [](const String feature, const Target& target) -> bool {
+           [](const ffi::String feature, const Target& target) -> bool {
              auto use_target = target.defined() ? target : Target::Current(false);
              // ignore non "llvm" target
              if (target.defined()) {
@@ -775,10 +743,19 @@ static void LLVMReflectionRegister() {
              LLVMTargetInfo llvm_target(*llvm_instance, use_target);
              return llvm_target.TargetHasCPUFeature(feature);
            })
+      .def("target.llvm_is_valid_cpu",
+           [](ffi::String cpu, ffi::String triple) -> bool {
+             auto llvm_instance = std::make_unique<LLVMInstance>();
+             ffi::Map<ffi::String, ffi::Any> target_map;
+             target_map.Set("kind", ffi::String("llvm"));
+             target_map.Set("mtriple", triple);
+             LLVMTargetInfo llvm_backend(*llvm_instance, Target(target_map));
+             return llvm_backend.IsValidCPU(std::string(cpu));
+           })
       .def("target.llvm_version_major", []() -> int { return TVM_LLVM_VERSION / 10; })
       .def("ffi.Module.load_from_file.ll",
            [](std::string filename, std::string fmt) -> ffi::Module {
-             auto n = make_object<LLVMModuleNode>();
+             auto n = ffi::make_object<LLVMModuleNode>();
              n->SetJITEngine("orcjit");
              n->LoadIR(filename);
              return ffi::Module(n);
@@ -793,7 +770,7 @@ static void LLVMReflectionRegister() {
       .def("codegen.codegen_blob",
            [](std::string data, bool system_lib, std::string llvm_target_string,
               std::string c_symbol_prefix) -> ffi::Module {
-             auto n = make_object<LLVMModuleNode>();
+             auto n = ffi::make_object<LLVMModuleNode>();
              auto llvm_instance = std::make_unique<LLVMInstance>();
              With<LLVMTarget> llvm_target(*llvm_instance, llvm_target_string);
              std::unique_ptr<llvm::Module> blob =
@@ -804,7 +781,7 @@ static void LLVMReflectionRegister() {
            });
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({ LLVMReflectionRegister(); });
+TVM_FFI_STATIC_INIT_BLOCK() { LLVMReflectionRegister(); }
 
 }  // namespace codegen
 }  // namespace tvm

@@ -22,10 +22,11 @@
  * \brief A simple JSON runtime for HIPBLAS.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/runtime/ndarray.h>
+#include <tvm/runtime/tensor.h>
 
 #include <cstddef>
 #include <string>
@@ -44,19 +45,19 @@ using namespace tvm::runtime::json;
 class HipblasJSONRuntime : public JSONRuntimeBase {
  public:
   HipblasJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
-                     const Array<String> const_names)
+                     const ffi::Array<ffi::String> const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
-  void Init(const Array<NDArray>& consts) override {}
+  void Init(const ffi::Array<Tensor>& consts) override {}
 
-  ffi::Optional<ffi::Function> GetFunction(const String& name) override {
+  ffi::Optional<ffi::Function> GetFunction(const ffi::String& name) override {
     // JSONRuntimeBase::SetInputOutputBuffers(...) is not thread safe. Since HipblasJSONRuntime
     // can be used by multiple GPUs running on different threads, we avoid using that function
     // and directly call hipBLAS on the inputs from ffi::PackedArgs.
-    ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
+    ffi::ObjectPtr<ffi::Object> sptr_to_self = ffi::GetObjectPtr<ffi::Object>(this);
     if (this->symbol_name_ == name) {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
-        ICHECK(this->initialized_) << "The module has not been initialized";
+        TVM_FFI_ICHECK(this->initialized_) << "The module has not been initialized";
         this->Run(args);
       });
     } else {
@@ -75,8 +76,8 @@ class HipblasJSONRuntime : public JSONRuntimeBase {
                                            : EntryID(outputs_[i - input_var_eid_.size()]);
 
       const DLTensor* arg;
-      if (auto opt_nd = args[i].as<NDArray>()) {
-        NDArray arr = opt_nd.value();
+      if (auto opt_nd = args[i].as<Tensor>()) {
+        Tensor arr = opt_nd.value();
         arg = arr.operator->();
       } else {
         arg = args[i].cast<DLTensor*>();
@@ -89,12 +90,12 @@ class HipblasJSONRuntime : public JSONRuntimeBase {
       ROCM_CALL(hipGetDevice(&device_id));
     }
     auto* entry_ptr = tvm::contrib::HipBlasLtThreadEntry::ThreadLocal(DLDevice{kDLROCM, device_id});
-    hipStream_t stream = static_cast<hipStream_t>(TVMFFIEnvGetCurrentStream(kDLROCM, device_id));
+    hipStream_t stream = static_cast<hipStream_t>(TVMFFIEnvGetStream(kDLROCM, device_id));
 
     auto get_input = [this, &dl_tensors](const JSONGraphNode& node, int idx) {
-      ICHECK_LT(idx, node.GetInputs().size());
+      TVM_FFI_ICHECK_LT(idx, node.GetInputs().size());
       auto eid = EntryID(node.GetInputs()[idx]);
-      ICHECK(eid < dl_tensors.size());
+      TVM_FFI_ICHECK(eid < dl_tensors.size());
       return dl_tensors[eid];
     };
 
@@ -137,22 +138,22 @@ class HipblasJSONRuntime : public JSONRuntimeBase {
     }
   }
 
-  void Run() override { LOG(FATAL) << "Unreachable"; }
+  void Run() override { TVM_FFI_THROW(InternalError) << "Unreachable"; }
 };
 
-ffi::Module HipblasJSONRuntimeCreate(String symbol_name, String graph_json,
-                                     const Array<String>& const_names) {
-  auto n = make_object<HipblasJSONRuntime>(symbol_name, graph_json, const_names);
+ffi::Module HipblasJSONRuntimeCreate(ffi::String symbol_name, ffi::String graph_json,
+                                     const ffi::Array<ffi::String>& const_names) {
+  auto n = ffi::make_object<HipblasJSONRuntime>(symbol_name, graph_json, const_names);
   return ffi::Module(n);
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.HipblasJSONRuntimeCreate", HipblasJSONRuntimeCreate)
       .def("ffi.Module.load_from_bytes.hipblas_json",
            JSONRuntimeBase::LoadFromBytes<HipblasJSONRuntime>);
-});
+}
 
 }  // namespace contrib
 }  // namespace runtime

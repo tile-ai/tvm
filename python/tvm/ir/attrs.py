@@ -15,14 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 """TVM Attribute module, which is mainly used for defining attributes of operators."""
-import tvm.ffi
+
+import tvm_ffi
+import tvm_ffi._ffi_api as _tvm_ffi_api
 
 from tvm.runtime import Object
-import tvm.runtime._ffi_node_api
+
 from . import _ffi_api
 
 
-@tvm.ffi.register_object("ir.Attrs")
+@tvm_ffi.register_object("ir.Attrs")
 class Attrs(Object):
     """Attribute node, which is mainly use for defining attributes of operators.
 
@@ -73,9 +75,19 @@ class Attrs(Object):
         return getattr(self, item)
 
 
-@tvm.ffi.register_object("ir.DictAttrs")
+@tvm_ffi.register_object("ir.DictAttrs")
 class DictAttrs(Attrs):
     """Dictionary attributes."""
+
+    @property
+    def __dict__(self):
+        """Return the underlying key-value map as a Python dict.
+
+        Defining this property explicitly prevents tvm_ffi from trying to
+        install the reflected C++ field named ``__dict__``.  Python reserves
+        that class attribute, so installing it via ``setattr`` fails.
+        """
+        return dict(self._dict())
 
     def _dict(self):
         """Get internal dict"""
@@ -144,10 +156,14 @@ def make_node(type_key, **kwargs):
     .. code-block:: python
 
        x = tvm.ir.make_node("ir.IntImm", dtype="int32", value=10, span=None)
-       assert isinstance(x, tvm.tir.IntImm)
+       assert isinstance(x, tvm.tirx.IntImm)
        assert x.value == 10
     """
+    if type_key == "ir.DictAttrs":
+        # DictAttrs stores kwargs as a key-value dict, not as named fields.
+        # MakeObjectFromPackedArgs would look for a field named "__dict__".
+        return _tvm_ffi_api.MakeObjectFromPackedArgs("ir.DictAttrs", "__dict__", kwargs)
     args = [type_key]
     for k, v in kwargs.items():
         args += [k, v]
-    return tvm.runtime._ffi_node_api.MakeNode(*args)
+    return _tvm_ffi_api.MakeObjectFromPackedArgs(*args)

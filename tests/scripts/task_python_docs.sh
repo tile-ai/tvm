@@ -47,8 +47,8 @@ sphinx_precheck() {
     clean_files
     echo "PreCheck sphinx doc generation WARNINGS.."
 
-    # setup cython
-    cd python; python3 setup.py build_ext --inplace; cd ..
+    # setup tvm-ffi into python folder
+    uv pip install -v --target=python ./3rdparty/tvm-ffi/
 
     pushd docs
     make clean
@@ -91,6 +91,9 @@ IGNORED_WARNINGS=(
     # Warning is thrown during TFLite quantization for micro_train tutorial
     'absl:For model inputs containing unsupported operations which cannot be quantized, the `inference_input_type` attribute will default to the original type.'
     'absl:Found untraced functions such as _jit_compiled_convolution_op'
+    # TF C++ runtime prints this before absl logging is initialized
+    'absl::InitializeLog'
+    'absl:Please consider providing the trackable_obj argument'
     'You are using pip version'
     # Tutorial READMEs can be ignored, but other docs should be included
     "tutorials/README.rst: WARNING: document isn't included in any toctree"
@@ -126,8 +129,8 @@ clean_files
 find . -type f -path "*.log" | xargs rm -f
 find . -type f -path "*.pyc" | xargs rm -f
 
-# setup cython
-cd python; python3 setup.py build_ext --inplace; cd ..
+# setup tvm-ffi into python folder
+uv pip install -v --target=python ./3rdparty/tvm-ffi/
 
 
 cd docs
@@ -149,11 +152,11 @@ if [ "$IS_LOCAL" == "1" ] && [ "$PYTHON_DOCS_ONLY" == "1" ]; then
 fi
 
 # C++ doc
-make cppdoc
+doxygen docs/Doxyfile
 rm -f docs/doxygen/html/*.map docs/doxygen/html/*.md5
 
 # Java doc
-make javadoc
+(cd jvm && mvn "javadoc:javadoc" -Dnotimestamp=true)
 
 # type doc
 cd web

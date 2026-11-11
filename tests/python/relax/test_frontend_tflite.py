@@ -1,0 +1,4033 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# pylint: disable=import-self, invalid-name, unused-argument, too-many-lines, len-as-condition, broad-except
+# pylint: disable=import-outside-toplevel, redefined-builtin
+"""TFLite to Relax converter tests"""
+
+import os
+
+import flatbuffers
+import numpy as np
+import pytest
+import tensorflow as tf
+import tflite.Model
+from tensorflow.keras import applications as keras_app
+
+import tvm
+import tvm.relax.frontend.tflite.tflite_frontend as tflite_frontend
+from tvm import relax
+from tvm.relax.frontend.tflite import from_tflite
+from tvm.script.parser import ir as I
+from tvm.script.parser import relax as R
+from tvm.script.parser import tirx as T
+
+
+def _get_mod_from_cfunc(cfunc):
+    converter = tf.lite.TFLiteConverter.from_concrete_functions([cfunc])
+    converter.target_spec.supported_ops = [
+        tf.lite.OpsSet.TFLITE_BUILTINS,
+        tf.lite.OpsSet.SELECT_TF_OPS,
+    ]
+
+    tflite_model_buf = converter.convert()
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+    return mod
+
+
+def verify(TestClass, expected=None):
+    if isinstance(TestClass, type):
+        cf = TestClass().func.get_concrete_function()
+    else:
+        cf = TestClass
+    mod = _get_mod_from_cfunc(cf)
+
+    if expected:
+        tvm.ir.assert_structural_equal(mod, expected)
+
+    # Run E2E test only on nightly
+    if "CI_ENV_NIGHTLY" not in os.environ:
+        return
+
+    # Inputs
+    tf_inputs = []
+    tvm_inputs = []
+    for arg in mod["main"].params:
+        shape = tuple(shape_val.value for shape_val in arg.struct_info.shape.values)
+        data = np.random.uniform(0, 1, size=shape).astype(arg.struct_info.dtype)
+        tvm_inputs.append(data)
+        tf_inputs.append(tf.constant(data))
+
+    # TF Run
+    tf_output = cf(*tf_inputs)
+
+    # TVM Run
+    tgt = tvm.target.Target("llvm")
+    ex = tvm.compile(mod, tgt)
+    vm = relax.VirtualMachine(ex, tvm.cpu())
+    vm.set_input("main", *tvm_inputs)
+    vm.invoke_stateful("main")
+    tvm_output = vm.get_outputs("main")
+
+    if isinstance(tf_output, tuple):
+        for tf_out, tvm_out in zip(tf_output, tvm_output):
+            np.testing.assert_allclose(tf_out.numpy(), tvm_out.numpy(), rtol=1e-5, atol=1e-5)
+    else:
+        np.testing.assert_allclose(tf_output.numpy(), tvm_output.numpy(), rtol=1e-5, atol=1e-5)
+
+
+def _verify_random_with_inputs(cfunc, inputs):
+    """E2E verify random ops by shape/dtype and TVM seeded self-consistency."""
+    if "CI_ENV_NIGHTLY" not in os.environ:
+        return
+
+    mod = _get_mod_from_cfunc(cfunc)
+    tvm_inputs = [np.asarray(data) for data in inputs]
+    tf_inputs = [tf.constant(data) for data in tvm_inputs]
+
+    tf_output = cfunc(*tf_inputs)
+
+    tgt = tvm.target.Target("llvm")
+    ex = tvm.compile(mod, tgt)
+    vm = relax.VirtualMachine(ex, tvm.cpu())
+
+    def run_tvm():
+        vm.set_input("main", *tvm_inputs)
+        vm.invoke_stateful("main")
+        return vm.get_outputs("main")
+
+    tvm_output = run_tvm()
+    tvm_output_again = run_tvm()
+
+    if not isinstance(tf_output, tuple):
+        tf_output = (tf_output,)
+        tvm_output = (tvm_output,)
+        tvm_output_again = (tvm_output_again,)
+
+    for tf_out, tvm_out, tvm_out_again in zip(tf_output, tvm_output, tvm_output_again):
+        tf_np = tf_out.numpy()
+        tvm_np = tvm_out.numpy()
+        assert tvm_np.shape == tf_np.shape
+        assert tvm_np.dtype == tf_np.dtype
+        np.testing.assert_equal(tvm_np, tvm_out_again.numpy())
+
+
+def test_add_one_2d():
+    class AddOne2D(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 2), dtype=tf.float32)])
+        def func(self, x):
+            return x + 1
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 2), dtype="float32")) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = R.add(x, R.const(1.0, "float32"))
+                R.output(gv)
+            return gv
+
+    verify(AddOne2D, Expected)
+
+
+def test_add_n():
+    class AddN(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y, z):
+            return tf.add_n([x, y, z])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"),
+            y: R.Tensor((2, 2), dtype="float32"),
+            z: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 3})
+            with R.dataflow():
+                lv: R.Tensor((2, 2), dtype="float32") = R.add(x, y)
+                gv: R.Tensor((2, 2), dtype="float32") = R.add(lv, z)
+                R.output(gv)
+            return gv
+
+    verify(AddN, Expected)
+
+
+def test_cumsum():
+    class Cumsum(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(3, 4), dtype=tf.float32),
+                tf.TensorSpec(shape=(5, 6), dtype=tf.int32)
+            ]
+        )
+        def func(self, x, y):
+            out1 = tf.math.cumsum(x, axis=0)
+            out2 = tf.math.cumsum(y, axis=1, exclusive=True)
+            return out1, out2
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((3, 4), dtype="float32"),
+            y: R.Tensor((5, 6), dtype="int32"),
+        ) -> R.Tuple(R.Tensor((3, 4), dtype="float32"), R.Tensor((5, 6), dtype="int32")):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv1: R.Tensor((3, 4), dtype="float32") = R.cumsum(
+                    x, axis=0, dtype="float32", exclusive=False
+                )
+                gv2: R.Tensor((5, 6), dtype="int32") = R.cumsum(
+                    y, axis=1, dtype="int32", exclusive=True
+                )
+                gv = (gv1, gv2)
+                R.output(gv)
+            return gv
+
+    verify(Cumsum, Expected)
+
+
+def test_split():
+    class Split(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            a, b, c = tf.split(x, 3, axis=1)
+            return tf.raw_ops.Pack(values=[a, b, c], axis=1)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 3, 10), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(
+                    R.Tensor((1, 10), dtype="float32"),
+                    R.Tensor((1, 10), dtype="float32"),
+                    R.Tensor((1, 10), dtype="float32"),
+                ) = R.split(x, indices_or_sections=3, axis=1)
+                lv1: R.Tensor((1, 10), dtype="float32") = lv[0]
+                lv2: R.Tensor((1, 1, 10), dtype="float32") = R.expand_dims(lv1, axis=[1])
+                lv3: R.Tensor((1, 10), dtype="float32") = lv[1]
+                lv4: R.Tensor((1, 1, 10), dtype="float32") = R.expand_dims(lv3, axis=[1])
+                lv5: R.Tensor((1, 10), dtype="float32") = lv[2]
+                lv6: R.Tensor((1, 1, 10), dtype="float32") = R.expand_dims(lv5, axis=[1])
+                gv: R.Tensor((1, 3, 10), dtype="float32") = R.concat((lv2, lv4, lv6), axis=1)
+                R.output(gv)
+            return gv
+
+    verify(Split, Expected)
+
+
+def test_split_v_dynamic():
+    """SPLIT_V with runtime split sizes imports shape-aware Relax IR."""
+
+    class TfSplitVDynamic(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(10,), dtype=tf.float32),
+                tf.TensorSpec(shape=(3,), dtype=tf.int32),
+            ]
+        )
+        def func(self, x, size_splits):
+            return tf.split(x, size_splits, axis=0)
+
+    cf = TfSplitVDynamic().func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    ir = mod.script()
+    assert "R.dynamic_strided_slice" in ir
+    assert "R.scatter_elements" in ir
+
+
+def test_split_v_static():
+    """SPLIT_V with static unequal size_splits lowers to Relax split."""
+
+    class SplitVUnequal(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 10, 4), dtype=tf.float32)])
+        def func(self, x):
+            return tf.split(x, [2, 3, 5], axis=1)
+
+    @I.ir_module
+    class ExpectedUnequal:
+        @R.function
+        def main(x: R.Tensor((2, 10, 4), dtype="float32")) -> R.Tuple(
+            R.Tensor((2, 2, 4), dtype="float32"),
+            R.Tensor((2, 3, 4), dtype="float32"),
+            R.Tensor((2, 5, 4), dtype="float32"),
+        ):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(
+                    R.Tensor((2, 2, 4), dtype="float32"),
+                    R.Tensor((2, 3, 4), dtype="float32"),
+                    R.Tensor((2, 5, 4), dtype="float32"),
+                ) = R.split(x, indices_or_sections=[2, 5], axis=1)
+                lv1: R.Tensor((2, 2, 4), dtype="float32") = lv[0]
+                lv2: R.Tensor((2, 3, 4), dtype="float32") = lv[1]
+                lv3: R.Tensor((2, 5, 4), dtype="float32") = lv[2]
+                gv: R.Tuple(
+                    R.Tensor((2, 2, 4), dtype="float32"),
+                    R.Tensor((2, 3, 4), dtype="float32"),
+                    R.Tensor((2, 5, 4), dtype="float32"),
+                ) = lv1, lv2, lv3
+                R.output(gv)
+            return gv
+
+    verify(SplitVUnequal, ExpectedUnequal)
+
+
+def test_pack():
+    class Pack(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            return tf.raw_ops.Pack(values=[x, y], axis=0)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 3), dtype="float32"),
+            y: R.Tensor((2, 3), dtype="float32"),
+        ) -> R.Tensor((2, 2, 3), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((1, 2, 3), dtype="float32") = R.expand_dims(x, axis=[0])
+                lv1: R.Tensor((1, 2, 3), dtype="float32") = R.expand_dims(y, axis=[0])
+                gv: R.Tensor((2, 2, 3), dtype="float32") = R.concat((lv, lv1), axis=0)
+                R.output(gv)
+            return gv
+
+    verify(Pack, Expected)
+
+
+def test_cast():
+    class Cast(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.cast(x, tf.int32)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="int32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="int32") = R.astype(x, dtype="int32")
+                R.output(gv)
+            return gv
+
+    verify(Cast, Expected)
+
+
+def test_bitcast_float32_to_int32():
+    """BITCAST same-width: float32 -> int32, shape preserved."""
+
+    class BitcastF32ToI32(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.bitcast(x, tf.int32)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="int32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="int32") = R.memory.view(
+                    x, R.shape([1, 30]), R.dtype("int32")
+                )
+                R.output(gv)
+            return gv
+
+    verify(BitcastF32ToI32, Expected)
+
+
+def test_bitcast_uint8_to_int8():
+    """BITCAST same-width 8-bit: uint8 -> int8."""
+
+    class BitcastU8ToI8(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4,), dtype=tf.uint8)])
+        def func(self, x):
+            return tf.bitcast(x, tf.int8)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((4,), dtype="uint8")) -> R.Tensor((4,), dtype="int8"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((4,), dtype="int8") = R.memory.view(x, R.shape([4]), R.dtype("int8"))
+                R.output(gv)
+            return gv
+
+    verify(BitcastU8ToI8, Expected)
+
+
+def test_bitcast_int32_to_int16_widens_shape():
+    """BITCAST width-changing (smaller): int32[3] -> int16[3, 2]."""
+
+    class BitcastI32ToI16(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3,), dtype=tf.int32)])
+        def func(self, x):
+            return tf.bitcast(x, tf.int16)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((3,), dtype="int32")) -> R.Tensor((3, 2), dtype="int16"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((3, 2), dtype="int16") = R.memory.view(
+                    x, R.shape([3, 2]), R.dtype("int16")
+                )
+                R.output(gv)
+            return gv
+
+    verify(BitcastI32ToI16, Expected)
+
+
+def test_bitcast_int16_to_int32_collapses_shape():
+    """BITCAST width-changing (larger): int16[5, 2] -> int32[5]."""
+
+    class BitcastI16ToI32(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(5, 2), dtype=tf.int16)])
+        def func(self, x):
+            return tf.bitcast(x, tf.int32)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((5, 2), dtype="int16")) -> R.Tensor((5,), dtype="int32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((5,), dtype="int32") = R.memory.view(x, R.shape([5]), R.dtype("int32"))
+                R.output(gv)
+            return gv
+
+    verify(BitcastI16ToI32, Expected)
+
+
+def test_expand_dims():
+    class ExpandDims(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.expand_dims(x, axis=2)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30, 1), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30, 1), dtype="float32") = R.reshape(x, R.shape([1, 30, 1]))
+                R.output(gv)
+            return gv
+
+    verify(ExpandDims, Expected)
+
+
+def test_transpose():
+    class Transpose(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            x = tf.expand_dims(x, axis=2)
+            return tf.transpose(x, perm=[0, 2, 1])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 1, 30), dtype="float32") = R.reshape(x, R.shape([1, 1, 30]))
+                R.output(gv)
+            return gv
+
+    verify(Transpose, Expected)
+
+
+def test_reshape():
+    class Reshape(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.reshape(x, (1, 2, 15))
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 2, 15), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 2, 15), dtype="float32") = R.reshape(x, R.shape([1, 2, 15]))
+                R.output(gv)
+            return gv
+
+    verify(Reshape, Expected)
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_type",
+    [
+        ((2, 3, 4), tf.int32),
+        ((5,), tf.int64),
+        ((1, 1, 1, 1), tf.int32),
+        ((), tf.int32),
+        ((0, 3), tf.int64),
+    ],
+)
+def test_shape(input_shape, out_type):
+    """SHAPE conversion for static-rank non-quantized tensors."""
+
+    class Shape(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=tf.float32)])
+        def func(self, x):
+            return tf.shape(x, out_type=out_type)
+
+    verify(Shape)
+
+
+def test_shape_dynamic_dim():
+    """SHAPE conversion with a dynamic input dimension."""
+
+    class ShapeDynamic(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(None, 3), dtype=tf.float32)])
+        def func(self, x):
+            return tf.shape(x, out_type=tf.int32)
+
+    verify(ShapeDynamic)
+
+
+@pytest.mark.parametrize(
+    "start, limit, delta, dtype",
+    [
+        (0, 8, 2, tf.int32),
+        (1, 9, 2, tf.int64),
+        (0.0, 1.0, 0.2, tf.float32),
+        (8, 0, -2, tf.int32),
+        (0, 0, 1, tf.int32),
+        (0, 7, 2, tf.int32),
+        (0.0, -1.0, -0.25, tf.float32),
+    ],
+)
+def test_range(start, limit, delta, dtype):
+    """RANGE conversion with non-quantized constant scalar bounds."""
+
+    class Range(tf.Module):
+        @tf.function(input_signature=[])
+        def func(self):
+            return tf.range(start, limit, delta, dtype=dtype)
+
+    verify(Range)
+
+
+def test_range_dynamic_scalar_inputs_not_supported():
+    """RANGE conversion currently rejects dynamic scalar inputs."""
+
+    class RangeDynamic(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(), dtype=tf.int32),
+                tf.TensorSpec(shape=(), dtype=tf.int32),
+                tf.TensorSpec(shape=(), dtype=tf.int32),
+            ]
+        )
+        def func(self, start, limit, delta):
+            return tf.range(start, limit, delta, dtype=tf.int32)
+
+    with pytest.raises(tvm.error.OpNotImplemented, match="dynamic scalar inputs"):
+        verify(RangeDynamic)
+        
+def test_tile_ir():
+    """TILE conversion with explicit Relax IR structural check."""
+
+    class Tile(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 3), dtype=tf.float32)])
+        def func(self, x):
+            return tf.tile(x, [2, 1])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 3), dtype="float32")) -> R.Tensor((4, 3), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((4, 3), dtype="float32") = R.tile(x, repeats=[2, 1])
+                R.output(gv)
+            return gv
+
+    verify(Tile, Expected)
+
+
+@pytest.mark.parametrize(
+    "input_shape, multiples, dtype",
+    [
+        ((2, 3), [2, 1], tf.float32),
+        ((1, 4, 2), [3, 1, 2], tf.float32),
+        ((2, 1, 3, 1), [1, 2, 1, 4], tf.float32),
+        ((2, 3), [1, 1], tf.float32),
+        ((3,), [2], tf.float32),
+        ((2, 3), [4, 2], tf.float32),
+        ((2, 2), [1, 3], tf.int32),
+    ],
+)
+def test_tile(input_shape, multiples, dtype):
+    """TILE conversion for non-quantized input and repeat factors."""
+
+    class Tile(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=dtype)])
+        def func(self, x):
+            return tf.tile(x, multiples)
+
+    verify(Tile)
+
+
+def test_concat_v2():
+    class ConcatV2(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            a, b, c = tf.split(x, 3, axis=1)
+            axis = tf.add(tf.constant(1, dtype="int32"), tf.constant(0, dtype="int32"))
+            return tf.raw_ops.ConcatV2(values=[a, b, c], axis=axis)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(
+                    R.Tensor((1, 10), dtype="float32"),
+                    R.Tensor((1, 10), dtype="float32"),
+                    R.Tensor((1, 10), dtype="float32"),
+                ) = R.split(x, indices_or_sections=3, axis=1)
+                lv1: R.Tensor((1, 10), dtype="float32") = lv[0]
+                lv2: R.Tensor((1, 10), dtype="float32") = lv[1]
+                lv3: R.Tensor((1, 10), dtype="float32") = lv[2]
+                gv: R.Tensor((1, 30), dtype="float32") = R.concat((lv1, lv2, lv3), axis=1)
+                R.output(gv)
+            return gv
+
+    verify(ConcatV2, Expected)
+
+
+def test_multi_output():
+    class MultiOutput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 2), dtype=tf.float32)])
+        def func(self, x):
+            y = 2 * x
+            return x, y
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"),
+        ) -> R.Tuple(R.Tensor((2, 2), dtype="float32"), R.Tensor((2, 2), dtype="float32")):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((2, 2), dtype="float32") = R.multiply(x, R.const(2.0, "float32"))
+                gv: R.Tuple(
+                    R.Tensor((2, 2), dtype="float32"), R.Tensor((2, 2), dtype="float32")
+                ) = (x, lv)
+                R.output(gv)
+            return gv
+
+    verify(MultiOutput, Expected)
+
+
+def test_elu():
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.elu(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 30), dtype="float32") = R.exp(x)
+                lv1: R.Tensor((1, 30), dtype="float32") = R.subtract(R.const(1.0, "float32"), lv)
+                lv2: R.Tensor((1, 30), dtype="float32") = R.nn.relu(lv1)
+                lv3: R.Tensor((1, 30), dtype="float32") = R.multiply(R.const(-1.0, "float32"), lv2)
+                lv4: R.Tensor((1, 30), dtype="float32") = R.nn.relu(x)
+                gv: R.Tensor((1, 30), dtype="float32") = R.add(lv3, lv4)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_gelu():
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.gelu(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 30), dtype="float32") = R.multiply(
+                    x, R.const(0.70710676908493042, "float32")
+                )
+                lv1: R.Tensor((1, 30), dtype="float32") = R.erf(lv)
+                lv2: R.Tensor((1, 30), dtype="float32") = R.multiply(lv1, R.const(0.5, "float32"))
+                lv3: R.Tensor((1, 30), dtype="float32") = R.add(R.const(0.5, "float32"), lv2)
+                gv: R.Tensor((1, 30), dtype="float32") = R.multiply(x, lv3)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_swish():
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.swish(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 30), dtype="float32") = R.sigmoid(x)
+                gv: R.Tensor((1, 30), dtype="float32") = R.multiply(x, lv)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_prelu():
+    alpha_init = tf.keras.initializers.Constant(np.linspace(0.1, 0.3, 30, dtype=np.float32))
+    prelu = tf.keras.layers.PReLU(alpha_initializer=alpha_init)
+
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return prelu(x)
+
+    verify(TfInput)
+
+
+def test_fill():
+    class TfInput(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(1, 30), dtype=tf.float32),
+                tf.TensorSpec(shape=(), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            fill_out = tf.fill((1, 30), y)
+            return x + fill_out
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((1, 30), dtype="float32"), y: R.Tensor((), dtype="float32")
+        ) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = R.add(x, y)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_fill_dynamic_dims():
+    """FILL with runtime dims legalizes and compiles."""
+
+    class TfFillDynamic(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2,), dtype=tf.int32),
+                tf.TensorSpec(shape=(), dtype=tf.float32),
+            ]
+        )
+        def func(self, dims, value):
+            return tf.fill(dims, value)
+
+    cf = TfFillDynamic().func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    ir = mod.script()
+    assert "R.tensor_to_shape" in ir
+    assert "R.full" in ir
+    tvm.compile(mod, tvm.target.Target("llvm"))
+    verify(cf)
+
+
+def test_random_uniform_dynamic_shape():
+    """RANDOM_UNIFORM imports dynamic shape and validates random output metadata."""
+
+    class TfRandomUniform(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2,), dtype=tf.int32)])
+        def func(self, shape):
+            return tf.raw_ops.RandomUniform(shape=shape, dtype=tf.float32, seed=7, seed2=11)
+
+    cf = TfRandomUniform().func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    ir = mod.script()
+    assert "R.tensor_to_shape" in ir
+    assert 'R.call_dps_packed("tvm.contrib.random.uniform"' in ir
+
+    _verify_random_with_inputs(cf, [np.array([2, 3], dtype="int32")])
+
+
+def test_random_standard_normal_dynamic_shape():
+    """RANDOM_STANDARD_NORMAL imports dynamic shape and validates random output metadata."""
+
+    class TfRandomStandardNormal(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2,), dtype=tf.int32)])
+        def func(self, shape):
+            return tf.raw_ops.RandomStandardNormal(
+                shape=shape, dtype=tf.float32, seed=3, seed2=5
+            )
+
+    cf = TfRandomStandardNormal().func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    ir = mod.script()
+    assert "R.tensor_to_shape" in ir
+    assert 'R.call_dps_packed("tvm.contrib.random.normal"' in ir
+
+    _verify_random_with_inputs(cf, [np.array([2, 4], dtype="int32")])
+
+
+def test_multinomial_dynamic_num_samples():
+    """MULTINOMIAL lowers through seeded uniform sampling with dynamic num_samples."""
+
+    class TfMultinomial(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(), dtype=tf.int32),
+            ]
+        )
+        def func(self, logits, num_samples):
+            return tf.raw_ops.Multinomial(
+                logits=logits,
+                num_samples=num_samples,
+                output_dtype=tf.int64,
+                seed=13,
+                seed2=17,
+            )
+
+    cf = TfMultinomial().func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    ir = mod.script()
+    assert "R.nn.softmax" in ir
+    assert "R.multinomial_from_uniform" in ir
+    assert "R.tensor_to_shape" in ir
+    assert "multinomial_num_samples" in ir
+    assert 'R.call_dps_packed("tvm.contrib.random.uniform"' in ir
+
+    _verify_random_with_inputs(
+        cf,
+        [
+            np.array([[2.0, 1.0, 0.5], [0.1, 0.2, 3.0]], dtype="float32"),
+            np.array(4, dtype="int32"),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.add, R.add),
+        (tf.subtract, R.subtract),
+        (tf.multiply, R.multiply),
+        (tf.divide, R.divide),
+        (tf.math.floormod, R.floor_mod),
+        (tf.math.floordiv, R.floor_divide),
+        (tf.math.atan2, R.atan2),
+    ],
+)
+def test_binary(tf_op, relax_op):
+    class Binary(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            return tf_op(x, y)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="float32"), y: R.Tensor((2, 2), dtype="float32")
+        ) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = relax_op(x, y)
+                R.output(gv)
+            return gv
+
+    verify(Binary, Expected)
+
+
+def test_pow():
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.math.pow(x, 4)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = R.power(x, R.const(4.0, "float32"))
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_square():
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.math.square(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = R.power(x, R.const(2.0, "float32"))
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_broadcast_args():
+    class TfInput(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(3,), dtype=tf.int32),
+                tf.TensorSpec(shape=(3,), dtype=tf.int32),
+            ]
+        )
+        def func(self, s0, s1):
+            return tf.broadcast_dynamic_shape(s0, s1)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            s0: R.Tensor((3,), dtype="int32"), s1: R.Tensor((3,), dtype="int32")
+        ) -> R.Tensor((3,), dtype="int32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((0,), dtype="int32") = R.full(
+                    R.shape([0]), R.const(1, "int32"), dtype="int32"
+                )
+                lv1: R.Tensor((3,), dtype="int32") = R.concat((lv, s0), axis=0)
+                lv2: R.Tensor((3,), dtype="bool") = R.equal(lv1, R.const(1, "int32"))
+                lv3: R.Tensor((0,), dtype="int32") = R.full(
+                    R.shape([0]), R.const(1, "int32"), dtype="int32"
+                )
+                lv4: R.Tensor((3,), dtype="int32") = R.concat((lv3, s1), axis=0)
+                lv5: R.Tensor((3,), dtype="bool") = R.equal(lv4, R.const(1, "int32"))
+                lv6: R.Tensor((3,), dtype="int32") = R.maximum(lv1, lv4)
+                lv7: R.Tensor((3,), dtype="int32") = R.where(lv5, lv1, lv6)
+                gv: R.Tensor((3,), dtype="int32") = R.where(lv2, lv4, lv7)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_broadcast_args_diff_length():
+    """BROADCAST_ARGS with shape inputs of different lengths."""
+
+    class TfInput(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(1,), dtype=tf.int32),
+                tf.TensorSpec(shape=(3,), dtype=tf.int32),
+            ]
+        )
+        def func(self, s0, s1):
+            return tf.broadcast_dynamic_shape(s0, s1)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            s0: R.Tensor((1,), dtype="int32"), s1: R.Tensor((3,), dtype="int32")
+        ) -> R.Tensor((3,), dtype="int32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((2,), dtype="int32") = R.full(
+                    R.shape([2]), R.const(1, "int32"), dtype="int32"
+                )
+                lv1: R.Tensor((3,), dtype="int32") = R.concat((lv, s0), axis=0)
+                lv2: R.Tensor((3,), dtype="bool") = R.equal(lv1, R.const(1, "int32"))
+                lv3: R.Tensor((0,), dtype="int32") = R.full(
+                    R.shape([0]), R.const(1, "int32"), dtype="int32"
+                )
+                lv4: R.Tensor((3,), dtype="int32") = R.concat((lv3, s1), axis=0)
+                lv5: R.Tensor((3,), dtype="bool") = R.equal(lv4, R.const(1, "int32"))
+                lv6: R.Tensor((3,), dtype="int32") = R.maximum(lv1, lv4)
+                lv7: R.Tensor((3,), dtype="int32") = R.where(lv5, lv1, lv6)
+                gv: R.Tensor((3,), dtype="int32") = R.where(lv2, lv4, lv7)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.nn.relu, R.nn.relu),
+        (tf.nn.relu6, R.nn.relu6),
+        (tf.math.floor, R.floor),
+        (tf.math.ceil, R.ceil),
+        (tf.math.tanh, R.tanh),
+        (tf.math.sigmoid, R.sigmoid),
+        (tf.math.abs, R.abs),
+        (tf.math.cos, R.cos),
+        (tf.math.sin, R.sin),
+        (tf.math.exp, R.exp),
+        (tf.math.log, R.log),
+        (tf.math.negative, R.negative),
+        (tf.round, R.round),
+        (tf.math.rsqrt, R.rsqrt),
+        (tf.nn.softmax, R.nn.softmax),
+        (tf.math.sqrt, R.sqrt),
+        (tf.nn.log_softmax, R.nn.log_softmax),
+    ],
+)
+def test_element_wise(tf_op, relax_op):
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf_op(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = relax_op(x)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.math.less, R.less),
+        (tf.math.less_equal, R.less_equal),
+        (tf.math.greater, R.greater),
+        (tf.math.greater_equal, R.greater_equal),
+        (tf.math.equal, R.equal),
+        (tf.math.not_equal, R.not_equal),
+    ],
+)
+def test_split_compare(tf_op, relax_op):
+    class Compare(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            a, b = tf.split(x, 2, axis=1)
+            return tf_op(a, b, name=None)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 15), dtype="bool"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(
+                    R.Tensor((1, 15), dtype="float32"),
+                    R.Tensor((1, 15), dtype="float32"),
+                ) = R.split(x, indices_or_sections=2, axis=1)
+                lv1: R.Tensor((1, 15), dtype="float32") = lv[0]
+                lv2: R.Tensor((1, 15), dtype="float32") = lv[1]
+                gv: R.Tensor((1, 15), dtype="bool") = relax_op(lv1, lv2)
+                R.output(gv)
+            return gv
+
+    verify(Compare, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.math.logical_not, R.logical_not),
+    ],
+)
+def test_logical_unary(tf_op, relax_op):
+    class Logical(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 2), dtype=tf.bool),
+            ]
+        )
+        def func(self, x):
+            return tf_op(x)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 2), dtype="bool"),
+        ) -> R.Tensor((2, 2), dtype="bool"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="bool") = relax_op(x)
+                R.output(gv)
+            return gv
+
+    verify(Logical, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.math.logical_or, R.logical_or),
+        (tf.math.logical_and, R.logical_and),
+    ],
+)
+def test_logical(tf_op, relax_op):
+    class Logical(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 2), dtype=tf.bool),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.bool),
+            ]
+        )
+        def func(self, x, y):
+            return tf_op(x, y)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 2), dtype="bool"), y: R.Tensor((2, 2), dtype="bool")) -> R.Tensor(
+            (2, 2), dtype="bool"
+        ):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="bool") = relax_op(x, y)
+                R.output(gv)
+            return gv
+
+    verify(Logical, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.add, R.add),
+        (tf.subtract, R.subtract),
+        (tf.multiply, R.multiply),
+        (tf.divide, R.divide),
+        (tf.math.floormod, R.floor_mod),
+        (tf.math.maximum, R.maximum),
+        (tf.math.minimum, R.minimum),
+    ],
+)
+def test_split_binary(tf_op, relax_op):
+    class Binary(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            a, b = tf.split(x, 2, axis=1)
+            return tf_op(a, b, name=None)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 15), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(
+                    R.Tensor((1, 15), dtype="float32"),
+                    R.Tensor((1, 15), dtype="float32"),
+                ) = R.split(x, indices_or_sections=2, axis=1)
+                lv1: R.Tensor((1, 15), dtype="float32") = lv[0]
+                lv2: R.Tensor((1, 15), dtype="float32") = lv[1]
+                gv: R.Tensor((1, 15), dtype="float32") = relax_op(lv1, lv2)
+                R.output(gv)
+            return gv
+
+    verify(Binary, Expected)
+
+
+def test_squared_difference():
+    class SquaredDifference(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            return tf.math.squared_difference(x, y)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 3), dtype="float32"), y: R.Tensor((2, 3), dtype="float32")
+        ) -> R.Tensor((2, 3), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((2, 3), dtype="float32") = R.subtract(x, y)
+                gv: R.Tensor((2, 3), dtype="float32") = R.power(lv, R.const(2.0, "float32"))
+                R.output(gv)
+            return gv
+
+    verify(SquaredDifference, Expected)
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op, axis, out_shape",
+    [
+        (tf.math.argmax, R.argmax, 0, (30,)),
+        (tf.math.argmin, R.argmin, 1, (5,)),
+    ],
+)
+def test_reduce(tf_op, relax_op, axis, out_shape):
+    class TfInput(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(5, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf_op(x, axis=axis)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((5, 30), dtype="float32")) -> R.Tensor(out_shape, dtype="int64"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor(out_shape, dtype="int64") = relax_op(x, axis=axis, keepdims=False)
+                R.output(gv)
+            return gv
+
+    verify(TfInput, Expected)
+
+
+def test_fully_connected():
+    class FullyConnected(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 8), dtype=tf.float32)])
+        def func(self, x):
+            weight = tf.constant(np.arange(24, dtype=np.float32).reshape((3, 8)))
+            bias = tf.constant(np.array([0.5, 1.0, -1.0], dtype=np.float32))
+            out = tf.matmul(x, weight, transpose_b=True)
+            return tf.nn.bias_add(out, bias)
+
+    verify(FullyConnected)
+
+
+def test_depthwise_conv2d():
+    class DepthwiseConv2D(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(1, 8, 8, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(3, 3, 2, 1), dtype=tf.float32),
+            ]
+        )
+        def func(self, data, kernel):
+            return tf.nn.depthwise_conv2d(
+                input=data,
+                filter=kernel,
+                strides=[1, 1, 1, 1],
+                padding="SAME",
+            )
+
+    verify(DepthwiseConv2D)
+
+
+def test_transpose_conv():
+    class TransposeConv(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(1, 8, 8, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(3, 3, 3, 2), dtype=tf.float32),
+            ]
+        )
+        def func(self, data, kernel):
+            output_shape = tf.constant([1, 8, 8, 3], dtype=tf.int32)
+            return tf.nn.conv2d_transpose(
+                input=data,
+                filters=kernel,
+                output_shape=output_shape,
+                strides=[1, 1, 1, 1],
+                padding="SAME",
+            )
+
+    verify(TransposeConv)
+
+
+def test_l2_pool2d():
+    class L2Pool2D(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 8, 8, 2), dtype=tf.float32)])
+        def func(self, data):
+            squared = tf.math.square(data)
+            pooled = tf.nn.avg_pool2d(squared, ksize=[2, 2], strides=[1, 1], padding="SAME")
+            return tf.math.sqrt(pooled)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(data: R.Tensor((1, 8, 8, 2), dtype="float32")) -> R.Tensor(
+            (1, 8, 8, 2), dtype="float32"
+        ):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                squared = R.power(data, R.const(2.0, "float32"))
+                pooled = R.nn.avg_pool2d(
+                    squared,
+                    pool_size=[2, 2],
+                    strides=[1, 1],
+                    padding=[0, 0, 1, 1],
+                    layout="NHWC",
+                )
+                gv = R.sqrt(pooled)
+                R.output(gv)
+            return gv
+
+    verify(L2Pool2D, Expected)
+
+
+def test_l2_normalization():
+    class L2Normalization(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 4), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.l2_normalize(x, axis=-1)
+
+    verify(L2Normalization)
+
+
+def test_local_response_normalization():
+    class LocalResponseNormalization(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 8, 8, 4), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.local_response_normalization(
+                x,
+                depth_radius=2,
+                bias=1.0,
+                alpha=1e-4,
+                beta=0.75,
+            )
+
+    verify(LocalResponseNormalization)
+
+
+def test_slice():
+    class Slice(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3, 4), dtype=tf.float32)])
+        def func(self, x):
+            return tf.slice(x, begin=[1, 1], size=[2, 2])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((3, 4), dtype="float32")) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = R.strided_slice(
+                    x, axes=[0, 1], begin=[1, 1], end=[3, 3]
+                )
+                R.output(gv)
+            return gv
+
+    verify(Slice, Expected)
+
+
+def test_strided_slice_stride():
+    class StridedSliceStride(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4, 6), dtype=tf.float32)])
+        def func(self, x):
+            return x[0:2, 1:5:2]
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((4, 6), dtype="float32")) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((2, 2), dtype="float32") = R.strided_slice(
+                    x,
+                    axes=[0, 1],
+                    begin=[0, 1],
+                    end=[2, 5],
+                    strides=[1, 2],
+                    assume_inbound=False,
+                )
+                gv: R.Tensor((2, 2), dtype="float32") = R.reshape(lv, R.shape([2, 2]))
+                R.output(gv)
+            return gv
+
+    verify(StridedSliceStride, Expected)
+
+
+def test_strided_slice_negative_stride():
+    class StridedSliceNegativeStride(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(4,), dtype=tf.float32)])
+        def func(self, x):
+            return x[::-1]
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((4,), dtype="float32")) -> R.Tensor((4,), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((4,), dtype="float32") = R.strided_slice(
+                    x, axes=[0], begin=[4], end=[-5], strides=[-1], assume_inbound=False
+                )
+                gv: R.Tensor((4,), dtype="float32") = R.reshape(lv, R.shape([4]))
+                R.output(gv)
+            return gv
+
+    verify(StridedSliceNegativeStride, Expected)
+
+
+def test_reverse_v2():
+    class ReverseV2(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 3), dtype=tf.float32)])
+        def func(self, x):
+            return tf.reverse(x, axis=[1])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 3), dtype="float32")) -> R.Tensor((2, 3), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 3), dtype="float32") = R.flip(x, axis=1)
+                R.output(gv)
+            return gv
+
+    verify(ReverseV2, Expected)
+
+def _make_conv2d_module(data_shape, kernel_shape, data_format, strides, padding):
+    class Conv2DModule(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=data_shape, dtype=tf.float32),
+                tf.TensorSpec(shape=kernel_shape, dtype=tf.float32),
+            ]
+        )
+        def func(self, data, kernel):
+            return tf.nn.conv2d(
+                input=data,
+                filters=kernel,
+                data_format=data_format,
+                strides=strides,
+                padding=padding,
+            )
+
+    return Conv2DModule
+
+
+def test_conv2d_same():
+    Conv2DModule = _make_conv2d_module(
+        (1, 128, 128, 32), (3, 3, 32, 32), "NHWC", (1, 1, 1, 1), "SAME"
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            data: R.Tensor((1, 128, 128, 32), dtype="float32"),
+            kernel: R.Tensor((3, 3, 32, 32), dtype="float32"),
+        ) -> R.Tensor((1, 128, 128, 32), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((32, 3, 3, 32), dtype="float32") = R.permute_dims(
+                    kernel, axes=[3, 0, 1, 2]
+                )
+                lv1: R.Tensor((3, 3, 32, 32), dtype="float32") = R.permute_dims(
+                    lv, axes=[1, 2, 3, 0]
+                )
+                lv2: R.Tensor((1, 128, 128, 32), dtype="float32") = R.nn.conv2d(
+                    data,
+                    lv1,
+                    strides=[1, 1],
+                    padding=[1, 1, 1, 1],
+                    dilation=[1, 1],
+                    groups=1,
+                    data_layout="NHWC",
+                    kernel_layout="HWIO",
+                    out_layout="NHWC",
+                    out_dtype="void",
+                )
+                gv: R.Tensor((1, 128, 128, 32), dtype="float32") = R.add(
+                    lv2, R.const(np.zeros((32,), dtype="float32"))
+                )
+                R.output(gv)
+            return gv
+
+    verify(Conv2DModule, Expected)
+
+
+def test_conv2d_valid():
+    Conv2DModule = _make_conv2d_module(
+        (1, 128, 128, 32), (3, 3, 32, 32), "NHWC", (1, 1, 1, 1), "VALID"
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            data: R.Tensor((1, 128, 128, 32), dtype="float32"),
+            kernel: R.Tensor((3, 3, 32, 32), dtype="float32"),
+        ) -> R.Tensor((1, 126, 126, 32), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((32, 3, 3, 32), dtype="float32") = R.permute_dims(
+                    kernel, axes=[3, 0, 1, 2]
+                )
+                lv1: R.Tensor((3, 3, 32, 32), dtype="float32") = R.permute_dims(
+                    lv, axes=[1, 2, 3, 0]
+                )
+                lv2: R.Tensor((1, 126, 126, 32), dtype="float32") = R.nn.conv2d(
+                    data,
+                    lv1,
+                    strides=[1, 1],
+                    padding=[0, 0, 0, 0],
+                    dilation=[1, 1],
+                    groups=1,
+                    data_layout="NHWC",
+                    kernel_layout="HWIO",
+                    out_layout="NHWC",
+                    out_dtype="void",
+                )
+                gv: R.Tensor((1, 126, 126, 32), dtype="float32") = R.add(
+                    lv2, R.const(np.zeros((32,), dtype="float32"))
+                )
+                R.output(gv)
+            return gv
+
+    verify(Conv2DModule, Expected)
+
+
+def _make_pool2d_module(pool, data_shape, ksize, data_format, strides, padding):
+    class Pool2DModule(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=data_shape, dtype=tf.float32),
+            ]
+        )
+        def func(self, data):
+            return pool(
+                input=data,
+                ksize=ksize,
+                data_format=data_format,
+                strides=strides,
+                padding=padding,
+            )
+
+    return Pool2DModule
+
+
+def test_avg_pool2d_same():
+    Pool2DModule = _make_pool2d_module(
+        tf.nn.avg_pool2d, (1, 128, 128, 32), (2, 2), "NHWC", (1, 1, 1, 1), "SAME"
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            data: R.Tensor((1, 128, 128, 32), dtype="float32"),
+        ) -> R.Tensor((1, 128, 128, 32), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 128, 128, 32), dtype="float32") = R.nn.avg_pool2d(
+                    data,
+                    pool_size=[2, 2],
+                    strides=[1, 1],
+                    dilation=[1, 1],
+                    padding=[0, 0, 1, 1],
+                    ceil_mode=False,
+                    count_include_pad=False,
+                    layout="NHWC",
+                    out_layout="NHWC",
+                )
+                R.output(gv)
+            return gv
+
+    verify(Pool2DModule, Expected)
+
+
+def test_avg_pool2d_valid():
+    Pool2DModule = _make_pool2d_module(
+        tf.nn.avg_pool2d, (1, 128, 128, 32), (2, 2), "NHWC", (1, 1, 1, 1), "VALID"
+    )
+    verify(Pool2DModule)
+
+
+def test_max_pool2d_same():
+    Pool2DModule = _make_pool2d_module(
+        tf.nn.max_pool2d, (1, 128, 128, 32), (2, 2), "NHWC", (1, 1, 1, 1), "SAME"
+    )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            data: R.Tensor((1, 128, 128, 32), dtype="float32"),
+        ) -> R.Tensor((1, 128, 128, 32), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 128, 128, 32), dtype="float32") = R.nn.max_pool2d(
+                    data,
+                    pool_size=[2, 2],
+                    strides=[1, 1],
+                    dilation=[1, 1],
+                    padding=[0, 0, 1, 1],
+                    ceil_mode=False,
+                    layout="NHWC",
+                    out_layout="NHWC",
+                )
+                R.output(gv)
+            return gv
+
+    verify(Pool2DModule, Expected)
+
+
+def test_max_pool2d_valid():
+    Pool2DModule = _make_pool2d_module(
+        tf.nn.max_pool2d, (1, 128, 128, 32), (2, 2), "NHWC", (1, 1, 1, 1), "VALID"
+    )
+    verify(Pool2DModule)
+
+
+@pytest.mark.parametrize(
+    "net, shape",
+    [
+        # Limiting the tests for CI
+        (keras_app.Xception, (1, 299, 299, 3)),
+        # (keras_app.VGG16, (1, 224, 224, 3)),
+        # (keras_app.VGG19, (1, 224, 224, 3)),
+        (keras_app.ResNet50, (1, 224, 224, 3)),
+        # (keras_app.ResNet50V2, (1, 224, 224, 3)),
+        # (keras_app.ResNet101, (1, 224, 224, 3)),
+        # (keras_app.ResNet101V2, (1, 224, 224, 3)),
+        # (keras_app.ResNet152, (1, 224, 224, 3)),
+        # (keras_app.ResNet152V2, (1, 224, 224, 3)),
+        (keras_app.InceptionResNetV2, (1, 299, 299, 3)),
+        # (keras_app.MobileNet, (1, 224, 224, 3)),
+        (keras_app.MobileNetV2, (1, 224, 224, 3)),
+        (keras_app.DenseNet121, (1, 224, 224, 3)),
+        # (keras_app.DenseNet169, (1, 224, 224, 3)),
+        # (keras_app.DenseNet201, (1, 224, 224, 3)),
+        (keras_app.NASNetMobile, (1, 224, 224, 3)),
+        # (keras_app.NASNetLarge, (1, 331, 331, 3)),
+        (keras_app.EfficientNetB0, (1, 224, 224, 3)),
+        # (keras_app.EfficientNetB1, (1, 240, 240, 3)),
+        # (keras_app.EfficientNetB2, (1, 260, 260, 3)),
+        # (keras_app.EfficientNetB3, (1, 300, 300, 3)),
+        # (keras_app.EfficientNetB4, (1, 380, 380, 3)),
+        # (keras_app.EfficientNetB5, (1, 456, 456, 3)),
+        # (keras_app.EfficientNetB6, (1, 528, 528, 3)),
+        # (keras_app.EfficientNetB7, (1, 600, 600, 3)),
+        (keras_app.EfficientNetV2B0, (1, 224, 224, 3)),
+        # (keras_app.EfficientNetV2B1, (1, 240, 240, 3)),
+        # (keras_app.EfficientNetV2B2, (1, 260, 260, 3)),
+        # (keras_app.EfficientNetV2B3, (1, 300, 300, 3)),
+        # (keras_app.EfficientNetV2S, (1, 384, 384, 3)),
+        # (keras_app.EfficientNetV2M, (1, 480, 480, 3)),
+        # (keras_app.EfficientNetV2L, (1, 480, 480, 3)),
+        # (keras_app.ConvNeXtTiny, (1, 224, 224, 3)),
+        # (keras_app.ConvNeXtSmall, (1, 224, 224, 3)),
+        # (keras_app.ConvNeXtBase, (1, 224, 224, 3)),
+        # (keras_app.ConvNeXtLarge, (1, 224, 224, 3)),
+        # (keras_app.ConvNeXtXLarge, (1, 224, 224, 3)),
+    ],
+)
+def test_networks(net, shape):
+    # Run network tests only in nightly builds
+    if "CI_ENV_NIGHTLY" not in os.environ:
+        return
+
+    class NetworkModule(tf.Module):
+        def __init__(self):
+            self.model = net(weights=None, include_top=True)
+
+        @tf.function
+        def func(self, data):
+            return self.model(data, training=False)
+
+    model = NetworkModule()
+    concrete_func = model.func.get_concrete_function(tf.TensorSpec(shape=shape, dtype=tf.float32))
+
+    verify(concrete_func)
+
+
+def test_broadcast_to():
+    class Model(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 2), dtype=tf.float32)])
+        def func(self, x):
+            return tf.broadcast_to(x, [3, 2, 2])
+
+    verify(Model)
+
+    class ModelScalarAndInt(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(), dtype=tf.int32)])
+        def func(self, x):
+            return tf.broadcast_to(x, [4, 4])
+
+    verify(ModelScalarAndInt)
+
+
+def test_embedding_lookup():
+    class Model(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3,), dtype=tf.int32)])
+        def func(self, indices):
+            params = tf.constant([[1, 2], [3, 4], [5, 6]], dtype=tf.float32)
+            return tf.nn.embedding_lookup(params, indices)
+
+    verify(Model)
+
+    class ModelMultidim(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 3), dtype=tf.int32)])
+        def func(self, indices):
+            params = tf.constant([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=tf.float32)
+            return tf.nn.embedding_lookup(params, indices)
+
+    verify(ModelMultidim)
+
+
+def test_select_v2():
+    class Model(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 2), dtype=tf.bool),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+            ]
+        )
+        def func(self, condition, x, y):
+            return tf.where(condition, x, y)
+
+    verify(Model)
+
+    class ModelBroadcasting(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 1), dtype=tf.bool),
+                tf.TensorSpec(shape=(2, 2), dtype=tf.float32),
+                tf.TensorSpec(shape=(), dtype=tf.float32),
+            ]
+        )
+        def func(self, condition, x, y):
+            return tf.where(condition, x, y)
+
+    verify(ModelBroadcasting)
+
+def test_scatter_nd():
+    class Model(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(4, 1), dtype=tf.int32),
+                tf.TensorSpec(shape=(4,), dtype=tf.float32),
+                tf.TensorSpec(shape=(1,), dtype=tf.int32),
+            ]
+        )
+        def func(self, indices, updates, shape):
+            return tf.scatter_nd(indices, updates, shape)
+
+    verify(Model)
+
+
+def test_batch_matmul():
+    class BatchMatMul(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 3, 4), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 4, 5), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            return tf.matmul(x, y)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 3, 4), dtype="float32"),
+            y: R.Tensor((2, 4, 5), dtype="float32"),
+        ) -> R.Tensor((2, 3, 5), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((2, 3, 5), dtype="float32") = R.matmul(x, y, out_dtype="void")
+                gv: R.Tensor((2, 3, 5), dtype="float32") = R.reshape(lv, R.shape([2, 3, 5]))
+                R.output(gv)
+            return gv
+
+    verify(BatchMatMul, Expected)
+
+
+def test_batch_matmul_adj():
+    class BatchMatMulAdj(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 4, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 5, 4), dtype=tf.float32),
+            ]
+        )
+        def func(self, x, y):
+            return tf.matmul(x, y, transpose_a=True, transpose_b=True)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((2, 4, 3), dtype="float32"),
+            y: R.Tensor((2, 5, 4), dtype="float32"),
+        ) -> R.Tensor((2, 3, 5), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                lv: R.Tensor((2, 3, 4), dtype="float32") = R.permute_dims(x, axes=[0, 2, 1])
+                lv1: R.Tensor((2, 4, 5), dtype="float32") = R.permute_dims(y, axes=[0, 2, 1])
+                lv2: R.Tensor((2, 3, 5), dtype="float32") = R.matmul(lv, lv1, out_dtype="void")
+                gv: R.Tensor((2, 3, 5), dtype="float32") = R.reshape(lv2, R.shape([2, 3, 5]))
+                R.output(gv)
+            return gv
+
+    verify(BatchMatMulAdj, Expected)
+
+
+def _verify_nms_v4(mod, tf_func, boxes_np, scores_np):
+    """E2E verify for NMS V4: only run on nightly, compare valid outputs only."""
+    if "CI_ENV_NIGHTLY" not in os.environ:
+        return
+
+    tf_indices, tf_valid = tf_func(tf.constant(boxes_np), tf.constant(scores_np))
+    n_valid = int(tf_valid.numpy())
+
+    tgt = tvm.target.Target("llvm")
+    ex = tvm.compile(mod, tgt)
+    vm = relax.VirtualMachine(ex, tvm.cpu())
+    vm.set_input("main", boxes_np, scores_np)
+    vm.invoke_stateful("main")
+    tvm_indices, tvm_valid = vm.get_outputs("main")
+
+    assert int(tvm_valid.numpy()) == n_valid
+    np.testing.assert_array_equal(
+        tf_indices.numpy()[:n_valid],
+        tvm_indices.numpy()[:n_valid],
+    )
+
+
+def _build_nms_v4_mod(num_boxes, max_output_size, iou_threshold, score_threshold):
+    """Convert a NonMaxSuppressionV4 TFLite model to a Relax module.
+
+    Scalar params must be Python literals (not tf.constant) so TFLite can
+    statically infer output shapes during conversion.
+    """
+
+    class NMSv4Module(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(num_boxes, 4), dtype=tf.float32),
+                tf.TensorSpec(shape=(num_boxes,), dtype=tf.float32),
+            ]
+        )
+        def func(self, boxes, scores):
+            indices, valid = tf.raw_ops.NonMaxSuppressionV4(
+                boxes=boxes,
+                scores=scores,
+                max_output_size=max_output_size,
+                iou_threshold=iou_threshold,
+                score_threshold=score_threshold,
+                pad_to_max_output_size=True,
+            )
+            return indices, valid
+
+    instance = NMSv4Module()
+    cf = instance.func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    return mod, instance.func
+
+
+def _verify_nms_v5(mod, tf_func, boxes_np, scores_np, soft_nms_sigma=0.0):
+    """E2E verify for NMS: only run on nightly, compare valid outputs only."""
+    if "CI_ENV_NIGHTLY" not in os.environ:
+        return
+
+    tf_indices, tf_scores, tf_valid = tf_func(tf.constant(boxes_np), tf.constant(scores_np))
+    n_valid = int(tf_valid.numpy())
+
+    tgt = tvm.target.Target("llvm")
+    ex = tvm.compile(mod, tgt)
+    vm = relax.VirtualMachine(ex, tvm.cpu())
+    vm.set_input("main", boxes_np, scores_np)
+    vm.invoke_stateful("main")
+    tvm_indices, tvm_scores, tvm_valid = vm.get_outputs("main")
+
+    assert int(tvm_valid.numpy()) == n_valid
+    np.testing.assert_array_equal(
+        tf_indices.numpy()[:n_valid],
+        tvm_indices.numpy()[:n_valid],
+    )
+    np.testing.assert_allclose(
+        tf_scores.numpy()[:n_valid],
+        tvm_scores.numpy()[:n_valid],
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    if soft_nms_sigma > 0.0:
+        np.testing.assert_allclose(
+            tf_scores.numpy(),
+            tvm_scores.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_array_less(-1e-6, tvm_scores.numpy()[n_valid:])
+
+
+def _build_nms_v5_mod(
+    num_boxes, max_output_size, iou_threshold, score_threshold, soft_nms_sigma=0.0
+):
+    """Convert a NonMaxSuppressionV5 TFLite model to a Relax module.
+
+    Scalar params must be Python literals (not tf.constant) so TFLite can
+    statically infer output shapes during conversion.
+    """
+
+    class NMSv5Module(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(num_boxes, 4), dtype=tf.float32),
+                tf.TensorSpec(shape=(num_boxes,), dtype=tf.float32),
+            ]
+        )
+        def func(self, boxes, scores):
+            indices, out_scores, valid = tf.raw_ops.NonMaxSuppressionV5(
+                boxes=boxes,
+                scores=scores,
+                max_output_size=max_output_size,
+                iou_threshold=iou_threshold,
+                score_threshold=score_threshold,
+                soft_nms_sigma=soft_nms_sigma,
+                pad_to_max_output_size=True,
+            )
+            return indices, out_scores, valid
+
+    instance = NMSv5Module()
+    cf = instance.func.get_concrete_function()
+    mod = _get_mod_from_cfunc(cf)
+    return mod, instance.func
+
+
+class _StubDetectionPostprocessTensor:
+    def __init__(self, shape, name):
+        self._shape = list(shape)
+        self._name = name
+
+    def Shape(self, index):
+        return self._shape[index]
+
+    def Name(self):
+        return self._name
+
+    def Type(self):
+        return 0
+
+
+class _StubDetectionPostprocessOp:
+    def __init__(self, custom_options):
+        self._custom_options = _encode_detection_postprocess_custom_options(custom_options)
+
+    def CustomOptionsAsNumpy(self):
+        return np.frombuffer(self._custom_options, dtype="uint8")
+
+
+_DETECTION_POSTPROCESS_ANCHORS = np.array(
+    [
+        [0.5, 0.5, 1.0, 1.0],
+        [0.5, 0.2, 1.0, 1.0],
+        [0.1, 0.1, 0.5, 0.5],
+        [0.8, 0.8, 0.2, 0.2],
+    ],
+    dtype="float32",
+)
+
+
+def _encode_detection_postprocess_custom_options(custom_options):
+    from flatbuffers import flexbuffers
+
+    builder = flexbuffers.Builder()
+    with builder.Map():
+        for key, value in custom_options.items():
+            if isinstance(value, bool):
+                builder.Bool(key, value)
+            elif isinstance(value, int):
+                builder.Int(key, value)
+            else:
+                builder.Float(key, float(value))
+    return bytes(builder.Finish())
+
+
+def _make_detection_postprocess_tensor_wrapper(tensor_idx, shape, name):
+    return tflite_frontend.TensorWrapper(
+        tensor_idx,
+        _StubDetectionPostprocessTensor(shape, name),
+        None,
+    )
+
+
+def _build_detection_postprocess_mod(
+    *,
+    num_classes=1,
+    max_detections=4,
+    detections_per_class=4,
+    use_regular_nms=False,
+    nms_iou_threshold=0.5,
+    nms_score_threshold=0.3,
+    x_scale=10.0,
+    y_scale=10.0,
+    w_scale=5.0,
+    h_scale=5.0,
+    batch_size=2,
+    num_anchors=4,
+    input_num_classes=None,
+):
+    custom_options = {
+        "num_classes": num_classes,
+        "max_detections": max_detections,
+        "detections_per_class": detections_per_class,
+        "nms_iou_threshold": nms_iou_threshold,
+        "nms_score_threshold": nms_score_threshold,
+        "x_scale": x_scale,
+        "y_scale": y_scale,
+        "w_scale": w_scale,
+        "h_scale": h_scale,
+        "use_regular_nms": use_regular_nms,
+    }
+    return _convert_detection_postprocess_with_options(
+        custom_options,
+        batch_size=batch_size,
+        num_anchors=num_anchors,
+        num_classes=num_classes,
+        input_num_classes=input_num_classes,
+    )
+
+
+def _convert_detection_postprocess_with_options(
+    custom_options,
+    *,
+    batch_size=2,
+    num_anchors=4,
+    num_classes=1,
+    input_num_classes=None,
+    build_module=True,
+):
+    input_num_classes = num_classes if input_num_classes is None else input_num_classes
+    loc = relax.Var("loc", relax.TensorStructInfo((batch_size, num_anchors, 4), "float32"))
+    cls = relax.Var(
+        "cls", relax.TensorStructInfo((batch_size, num_anchors, input_num_classes), "float32")
+    )
+    inputs = [
+        _make_detection_postprocess_tensor_wrapper(0, (batch_size, num_anchors, 4), "loc"),
+        _make_detection_postprocess_tensor_wrapper(
+            1, (batch_size, num_anchors, input_num_classes), "cls"
+        ),
+        _make_detection_postprocess_tensor_wrapper(2, (num_anchors, 4), "anchors"),
+    ]
+    converter = tflite_frontend.OperatorConverter.__new__(tflite_frontend.OperatorConverter)
+    converter.bb = relax.BlockBuilder()
+    converter.exp_tab = tflite_frontend.ExprTable()
+    converter.get_input_tensors = lambda op: inputs
+    converter.get_expr = lambda tensor_idx: {0: loc, 1: cls}[tensor_idx]
+    converter.get_tensor_value = (
+        lambda tensor: _DETECTION_POSTPROCESS_ANCHORS if tensor.tensor_idx == 2 else None
+    )
+    converter.get_tensor_type_str = lambda tensor_type: "float32"
+    op = _StubDetectionPostprocessOp(custom_options)
+    if not build_module:
+        return converter.convert_detection_postprocess(op)
+    bb = converter.bb
+    with bb.function("main", [loc, cls]):
+        with bb.dataflow():
+            output = converter.convert_detection_postprocess(op)
+            gv = bb.emit_output(output)
+        bb.emit_func_output(gv)
+    return bb.get()
+
+
+def _make_valid_boxes(rng, n):
+    """Generate n random boxes with y1<=y2, x1<=x2 using the given RNG."""
+    raw = rng.random((n, 4), dtype=np.float32)
+    return np.stack(
+        [
+            np.minimum(raw[:, 0], raw[:, 2]),  # y1
+            np.minimum(raw[:, 1], raw[:, 3]),  # x1
+            np.maximum(raw[:, 0], raw[:, 2]),  # y2
+            np.maximum(raw[:, 1], raw[:, 3]),  # x2
+        ],
+        axis=1,
+    ).astype(np.float32)
+
+
+_NMS_V5_CASES = [
+    pytest.param(
+        6,
+        3,
+        0.5,
+        0.0,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.1, 1.0, 1.1],
+                [0.0, 0.0, 1.0, 0.9],
+                [0.5, 0.5, 1.5, 1.5],
+                [0.0, 0.0, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.75, 0.6, 0.5, 0.4, 0.3], dtype=np.float32),
+        id="basic",
+    ),
+    pytest.param(
+        8,
+        4,
+        0.5,
+        0.4,
+        _make_valid_boxes(np.random.default_rng(42), 8),
+        np.random.default_rng(42).random(8, dtype=np.float32),
+        id="score_threshold",
+    ),
+    pytest.param(
+        5,
+        3,
+        0.5,
+        0.99,
+        _make_valid_boxes(np.random.default_rng(0), 5),
+        np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32),
+        id="all_suppressed",
+    ),
+    pytest.param(
+        6,
+        6,
+        0.1,
+        0.0,
+        np.array(
+            [
+                [0.0, 0.0, 0.4, 0.4],
+                [0.5, 0.5, 0.9, 0.9],
+                [0.1, 0.1, 0.5, 0.5],
+                [0.6, 0.6, 1.0, 1.0],
+                [0.0, 0.5, 0.4, 0.9],
+                [0.5, 0.0, 0.9, 0.4],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.85, 0.7, 0.65, 0.6, 0.55], dtype=np.float32),
+        id="iou_threshold",
+    ),
+    pytest.param(
+        4,
+        10,
+        0.5,
+        0.0,
+        np.array(
+            [
+                [0.0, 0.0, 0.3, 0.3],
+                [0.5, 0.5, 0.8, 0.8],
+                [0.1, 0.1, 0.4, 0.4],
+                [0.6, 0.6, 0.9, 0.9],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.85, 0.7, 0.65], dtype=np.float32),
+        id="max_output_size_larger_than_boxes",
+    ),
+]
+
+
+_NMS_V5_SOFT_CASES = [
+    pytest.param(
+        6,
+        6,
+        0.5,
+        0.0,
+        0.5,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.1, 1.0, 1.1],
+                [0.0, 0.0, 1.0, 0.9],
+                [0.5, 0.5, 1.5, 1.5],
+                [0.0, 0.0, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.75, 0.6, 0.5, 0.4, 0.3], dtype=np.float32),
+        id="soft_nms_basic",
+    ),
+    pytest.param(
+        5,
+        5,
+        0.5,
+        0.0,
+        0.3,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.1, 0.1, 1.1, 1.1],
+                [0.2, 0.2, 1.2, 1.2],
+                [0.3, 0.3, 1.3, 1.3],
+                [2.0, 2.0, 3.0, 3.0],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.8, 0.7, 0.6, 0.5], dtype=np.float32),
+        id="soft_nms_tight_sigma",
+    ),
+    pytest.param(
+        3,
+        3,
+        0.5,
+        0.3,
+        0.1,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.2, 0.2, 1.2, 1.2],
+                [2.0, 2.0, 3.0, 3.0],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.8, 0.75], dtype=np.float32),
+        id="soft_nms_threshold_hole",
+    ),
+    pytest.param(
+        3,
+        3,
+        0.5,
+        0.0,
+        0.1,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.2, 0.2, 1.2, 1.2],
+                [2.0, 2.0, 3.0, 3.0],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.85, 0.8], dtype=np.float32),
+        id="soft_nms_reorder",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "num_boxes,max_output_size,iou_threshold,score_threshold,boxes,scores",
+    _NMS_V5_CASES,
+)
+def test_nms_v5(num_boxes, max_output_size, iou_threshold, score_threshold, boxes, scores):
+    """NON_MAX_SUPPRESSION_V5: conversion smoke test + E2E correctness (nightly only)."""
+    mod, tf_func = _build_nms_v5_mod(num_boxes, max_output_size, iou_threshold, score_threshold)
+    _verify_nms_v5(mod, tf_func, boxes, scores)
+
+
+@pytest.mark.parametrize(
+    "num_boxes,max_output_size,iou_threshold,score_threshold,soft_nms_sigma,boxes,scores",
+    _NMS_V5_SOFT_CASES,
+)
+def test_nms_v5_soft(
+    num_boxes, max_output_size, iou_threshold, score_threshold, soft_nms_sigma, boxes, scores
+):
+    """NON_MAX_SUPPRESSION_V5 with soft_nms_sigma: conversion smoke test + E2E correctness."""
+    mod, tf_func = _build_nms_v5_mod(
+        num_boxes, max_output_size, iou_threshold, score_threshold, soft_nms_sigma
+    )
+    _verify_nms_v5(mod, tf_func, boxes, scores, soft_nms_sigma=soft_nms_sigma)
+
+
+def test_nms_v5_ir():
+    """Verify the emitted Relax IR has correct structure for NON_MAX_SUPPRESSION_V5."""
+    num_boxes = 6
+    max_output_size = 3
+    mod, _ = _build_nms_v5_mod(
+        num_boxes=num_boxes,
+        max_output_size=max_output_size,
+        iou_threshold=0.5,
+        score_threshold=0.0,
+    )
+
+    ir = mod.script()
+
+    # Validate correct sorting/id indices are passed to valid_counts
+    assert "score_index=0" in ir
+    assert "id_index=-1" in ir
+    # NMS size limit validation
+    assert f"max_output_size={max_output_size}" in ir
+    # Valid output shape must be () statically
+    assert 'R.Tensor((), dtype="int32")' in ir
+    # Bounding boxes / scores tensor bounds checks
+    assert f"R.Tensor(({max_output_size},)" in ir
+
+
+def test_nms_v5_soft_ir():
+    """Verify the emitted Relax IR passes soft_nms_sigma for NON_MAX_SUPPRESSION_V5."""
+    num_boxes = 6
+    max_output_size = 3
+    mod, _ = _build_nms_v5_mod(
+        num_boxes=num_boxes,
+        max_output_size=max_output_size,
+        iou_threshold=0.5,
+        score_threshold=0.0,
+        soft_nms_sigma=0.5,
+    )
+
+    ir = mod.script()
+
+    # soft_nms_sigma must appear in the IR
+    assert "soft_nms_sigma=0.5" in ir
+    # score_threshold must also be forwarded
+    assert "score_threshold=0.0" in ir
+    # Soft-NMS padded scores must be clipped to non-negative values.
+    assert "R.clip(" in ir
+
+
+_NMS_V4_CASES = [
+    pytest.param(
+        6,
+        3,
+        0.5,
+        0.0,
+        np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.1, 1.0, 1.1],
+                [0.0, 0.0, 1.0, 0.9],
+                [0.5, 0.5, 1.5, 1.5],
+                [0.0, 0.0, 0.3, 0.3],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.75, 0.6, 0.5, 0.4, 0.3], dtype=np.float32),
+        id="basic",
+    ),
+    pytest.param(
+        8,
+        4,
+        0.5,
+        0.4,
+        _make_valid_boxes(np.random.default_rng(42), 8),
+        np.random.default_rng(42).random(8, dtype=np.float32),
+        id="score_threshold",
+    ),
+    pytest.param(
+        5,
+        3,
+        0.5,
+        0.99,
+        _make_valid_boxes(np.random.default_rng(0), 5),
+        np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32),
+        id="all_suppressed",
+    ),
+    pytest.param(
+        4,
+        10,
+        0.5,
+        0.0,
+        np.array(
+            [
+                [0.0, 0.0, 0.3, 0.3],
+                [0.5, 0.5, 0.8, 0.8],
+                [0.1, 0.1, 0.4, 0.4],
+                [0.6, 0.6, 0.9, 0.9],
+            ],
+            dtype=np.float32,
+        ),
+        np.array([0.9, 0.85, 0.7, 0.65], dtype=np.float32),
+        id="max_output_size_larger_than_boxes",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "num_boxes,max_output_size,iou_threshold,score_threshold,boxes,scores",
+    _NMS_V4_CASES,
+)
+def test_nms_v4(num_boxes, max_output_size, iou_threshold, score_threshold, boxes, scores):
+    """NON_MAX_SUPPRESSION_V4: conversion smoke test + E2E correctness (nightly only)."""
+    mod, tf_func = _build_nms_v4_mod(num_boxes, max_output_size, iou_threshold, score_threshold)
+    _verify_nms_v4(mod, tf_func, boxes, scores)
+
+
+def test_nms_v4_ir():
+    """Verify the emitted Relax IR has correct structure for NON_MAX_SUPPRESSION_V4."""
+    num_boxes = 6
+    max_output_size = 3
+    mod, _ = _build_nms_v4_mod(
+        num_boxes=num_boxes,
+        max_output_size=max_output_size,
+        iou_threshold=0.5,
+        score_threshold=0.0,
+    )
+
+    ir = mod.script()
+
+    # Validate correct sorting/id indices are passed to valid_counts
+    assert "score_index=0" in ir
+    assert "id_index=-1" in ir
+    # NMS size limit validation
+    assert f"max_output_size={max_output_size}" in ir
+    # Valid output shape must be () statically
+    assert 'R.Tensor((), dtype="int32")' in ir
+    # Selected indices tensor bounds check
+    assert f"R.Tensor(({max_output_size},)" in ir
+    # V4 must use hard-NMS (soft_nms_sigma left at default 0.0)
+    assert "soft_nms_sigma=0.0" in ir
+
+
+_DETECTION_POSTPROCESS_SMOKE_CASES = [
+    pytest.param(
+        {
+            "num_classes": 2,
+            "input_num_classes": 3,
+            "max_detections": 2,
+            "detections_per_class": 2,
+            "use_regular_nms": False,
+            "nms_iou_threshold": 0.5,
+            "nms_score_threshold": 0.5,
+            "batch_size": 1,
+            "num_anchors": 4,
+        },
+        2,
+        False,
+        id="basic_fast_nms",
+    ),
+    pytest.param(
+        {
+            "num_classes": 2,
+            "input_num_classes": 3,
+            "max_detections": 3,
+            "detections_per_class": 2,
+            "use_regular_nms": True,
+            "nms_iou_threshold": 0.45,
+            "nms_score_threshold": 0.25,
+            "batch_size": 2,
+            "num_anchors": 4,
+        },
+        1,
+        True,
+        id="regular_nms_multi_batch",
+    ),
+]
+
+
+_DETECTION_POSTPROCESS_SHAPE_CASES = [
+    pytest.param(
+        {
+            "num_classes": 2,
+            "input_num_classes": 5,
+            "max_detections": 2,
+            "detections_per_class": 2,
+            "use_regular_nms": False,
+            "nms_iou_threshold": 0.5,
+            "nms_score_threshold": 0.5,
+            "batch_size": 1,
+            "num_anchors": 4,
+        },
+        id="wider_input_classes",
+    ),
+    pytest.param(
+        {
+            "num_classes": 2,
+            "input_num_classes": 3,
+            "max_detections": 4,
+            "detections_per_class": 4,
+            "use_regular_nms": False,
+            "nms_iou_threshold": 0.5,
+            "nms_score_threshold": 0.5,
+            "batch_size": 1,
+            "num_anchors": 4,
+        },
+        id="larger_max_detections",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "build_kwargs,expected_topk_count,expected_keep_background",
+    _DETECTION_POSTPROCESS_SMOKE_CASES,
+)
+def test_detection_postprocess_smoke(build_kwargs, expected_topk_count, expected_keep_background):
+    mod = _build_detection_postprocess_mod(**build_kwargs)
+    ir = mod.script()
+
+    assert "R.vision.multibox_transform_loc" in ir
+    assert "R.vision.all_class_non_max_suppression" in ir
+    assert 'output_format="tensorflow"' in ir
+    assert "R.where" in ir
+    assert "R.gather_elements" in ir
+    assert "R.gather_nd" in ir
+    assert ir.count("R.topk(") == expected_topk_count
+    assert f"keep_background={expected_keep_background}" in ir
+    expected_batch = build_kwargs["batch_size"]
+    expected_max_detections = build_kwargs["max_detections"]
+    tvm.ir.assert_structural_equal(
+        mod["main"].ret_struct_info,
+        relax.TupleStructInfo(
+            [
+                relax.TensorStructInfo((expected_batch, expected_max_detections, 4), "float32"),
+                relax.TensorStructInfo((expected_batch, expected_max_detections), "float32"),
+                relax.TensorStructInfo((expected_batch, expected_max_detections), "float32"),
+                relax.TensorStructInfo((expected_batch,), "float32"),
+            ]
+        ),
+    )
+
+    legalized = relax.transform.LegalizeOps()(mod)
+    legalized_ir = legalized.script()
+    assert "R.vision.all_class_non_max_suppression(" not in legalized_ir
+    assert "R.call_tir(" in legalized_ir
+    tvm.ir.assert_structural_equal(legalized["main"].ret_struct_info, mod["main"].ret_struct_info)
+
+
+@pytest.mark.parametrize("build_kwargs", _DETECTION_POSTPROCESS_SHAPE_CASES)
+def test_detection_postprocess_shape_variations(build_kwargs):
+    mod = _build_detection_postprocess_mod(**build_kwargs)
+    batch_size = build_kwargs["batch_size"]
+    num_anchors = build_kwargs["num_anchors"]
+    input_num_classes = build_kwargs["input_num_classes"]
+    max_detections = build_kwargs["max_detections"]
+
+    tvm.ir.assert_structural_equal(
+        mod["main"].params[1].struct_info,
+        relax.TensorStructInfo((batch_size, num_anchors, input_num_classes), "float32"),
+    )
+    tvm.ir.assert_structural_equal(
+        mod["main"].ret_struct_info,
+        relax.TupleStructInfo(
+            [
+                relax.TensorStructInfo((batch_size, max_detections, 4), "float32"),
+                relax.TensorStructInfo((batch_size, max_detections), "float32"),
+                relax.TensorStructInfo((batch_size, max_detections), "float32"),
+                relax.TensorStructInfo((batch_size,), "float32"),
+            ]
+        ),
+    )
+
+
+def _make_resize_expected(
+    input_shape, output_size, method, coordinate_transformation_mode, rounding_method
+):
+    """Build an Expected IRModule programmatically to avoid TVMScript variable scope limitations."""
+    bb = relax.BlockBuilder()
+    x = relax.Var("x", relax.TensorStructInfo(input_shape, "float32"))
+    with bb.function("main", [x]):
+        with bb.dataflow():
+            gv = bb.emit_output(
+                relax.op.image.resize2d(
+                    x,
+                    size=relax.ShapeExpr([output_size[0], output_size[1]]),
+                    roi=[0.0, 0.0, 0.0, 0.0],
+                    layout="NHWC",
+                    method=method,
+                    coordinate_transformation_mode=coordinate_transformation_mode,
+                    rounding_method=rounding_method,
+                    cubic_alpha=-0.75,
+                    cubic_exclude=0,
+                    extrapolation_value=0.0,
+                    out_dtype="void",
+                )
+            )
+        bb.emit_func_output(gv)
+    mod = bb.get()
+    mod["main"] = mod["main"].with_attr("num_input", 1)
+    return mod
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_size, tf_op, coordinate_transformation_mode",
+    [
+        (
+            (1, 4, 4, 1),
+            [8, 8],
+            lambda x: tf.image.resize(x, [8, 8], method="bilinear"),
+            "half_pixel",
+        ),
+        (
+            (1, 8, 8, 3),
+            [4, 4],
+            lambda x: tf.image.resize(x, [4, 4], method="bilinear"),
+            "half_pixel",
+        ),
+        (
+            (1, 4, 4, 1),
+            [7, 7],
+            lambda x: tf.compat.v1.image.resize_bilinear(x, [7, 7], align_corners=True),
+            "align_corners",
+        ),
+        (
+            (1, 4, 4, 2),
+            [8, 8],
+            lambda x: tf.compat.v1.image.resize_bilinear(x, [8, 8], half_pixel_centers=True),
+            "half_pixel",
+        ),
+        (
+            (2, 6, 6, 16),
+            [12, 12],
+            lambda x: tf.image.resize(x, [12, 12], method="bilinear"),
+            "half_pixel",
+        ),
+        (
+            (1, 5, 5, 3),
+            [5, 5],
+            lambda x: tf.image.resize(x, [5, 5], method="bilinear"),
+            "half_pixel",
+        ),
+        (
+            (1, 4, 8, 1),
+            [8, 16],
+            lambda x: tf.image.resize(x, [8, 16], method="bilinear"),
+            "half_pixel",
+        ),
+    ],
+)
+def test_resize_bilinear(input_shape, output_size, tf_op, coordinate_transformation_mode):
+    class ResizeBilinear(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=tf.float32)])
+        def func(self, x):
+            return tf_op(x)
+
+    expected = _make_resize_expected(
+        input_shape, output_size, "linear", coordinate_transformation_mode, ""
+    )
+    verify(ResizeBilinear, expected)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_size, tf_op, coordinate_transformation_mode, rounding_method",
+    [
+        (
+            (1, 2, 2, 1),
+            [4, 4],
+            lambda x: tf.image.resize(x, [4, 4], method="nearest"),
+            "half_pixel",
+            "round_prefer_ceil",
+        ),
+        (
+            (1, 8, 8, 3),
+            [4, 4],
+            lambda x: tf.image.resize(x, [4, 4], method="nearest"),
+            "half_pixel",
+            "round_prefer_ceil",
+        ),
+        (
+            (1, 4, 4, 1),
+            [7, 7],
+            lambda x: tf.compat.v1.image.resize_nearest_neighbor(x, [7, 7], align_corners=True),
+            "align_corners",
+            "",
+        ),
+        (
+            (4, 3, 3, 8),
+            [6, 6],
+            lambda x: tf.image.resize(x, [6, 6], method="nearest"),
+            "half_pixel",
+            "round_prefer_ceil",
+        ),
+        (
+            (1, 4, 8, 1),
+            [8, 16],
+            lambda x: tf.image.resize(x, [8, 16], method="nearest"),
+            "half_pixel",
+            "round_prefer_ceil",
+        ),
+        (
+            (1, 3, 3, 2),
+            [3, 3],
+            lambda x: tf.image.resize(x, [3, 3], method="nearest"),
+            "half_pixel",
+            "round_prefer_ceil",
+        ),
+    ],
+)
+def test_resize_nearest_neighbor(
+    input_shape, output_size, tf_op, coordinate_transformation_mode, rounding_method
+):
+    class ResizeNearest(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=tf.float32)])
+        def func(self, x):
+            return tf_op(x)
+
+    expected = _make_resize_expected(
+        input_shape,
+        output_size,
+        "nearest_neighbor",
+        coordinate_transformation_mode,
+        rounding_method,
+    )
+    verify(ResizeNearest, expected)
+
+
+def _make_reduce_expected(relax_op, input_shape, axes, keepdims, dtype):
+    if axes is None:
+        axes = list(range(len(input_shape)))
+    bb = relax.BlockBuilder()
+    x = relax.Var("x", relax.TensorStructInfo(input_shape, dtype))
+    with bb.function("main", [x]):
+        with bb.dataflow():
+            gv = bb.emit_output(relax_op(x, axis=axes, keepdims=keepdims))
+        bb.emit_func_output(gv)
+    mod = bb.get()
+    mod["main"] = mod["main"].with_attr("num_input", 1)
+    return mod
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.reduce_sum, relax.op.sum),
+        (tf.reduce_mean, relax.op.mean),
+        (tf.reduce_max, relax.op.max),
+        (tf.reduce_min, relax.op.min),
+        (tf.reduce_prod, relax.op.prod),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, axes",
+    [
+        ((1, 8, 8, 3), 1),
+        ((1, 8, 8, 3), [1, 2]),
+        ((1, 8, 8, 3), -1),
+        ((1, 8, 8, 3), None),
+        ((30,), 0),
+        ((2, 5, 2), [0, 2]),
+    ],
+)
+@pytest.mark.parametrize("keepdims", [True, False])
+@pytest.mark.parametrize("dtype", [tf.float32, tf.int32])
+def test_reduction_ops(tf_op, relax_op, input_shape, axes, keepdims, dtype):
+    class ReduceModule(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=dtype)])
+        def func(self, x):
+            return tf_op(x, axis=axes, keepdims=keepdims)
+
+    relax_dtype = "float32" if dtype == tf.float32 else "int32"
+    expected = _make_reduce_expected(relax_op, input_shape, axes, keepdims, relax_dtype)
+    verify(ReduceModule, expected)
+
+
+def _make_reduce_bool_expected(relax_op, input_shape, axes, keepdims):
+    if axes is None:
+        axes = list(range(len(input_shape)))
+    bb = relax.BlockBuilder()
+    x = relax.Var("x", relax.TensorStructInfo(input_shape, "bool"))
+    with bb.function("main", [x]):
+        with bb.dataflow():
+            cast_in = bb.emit(relax.op.astype(x, "int8"))
+            reduced = bb.emit(relax_op(cast_in, axis=axes, keepdims=keepdims))
+            gv = bb.emit_output(relax.op.astype(reduced, "bool"))
+        bb.emit_func_output(gv)
+    mod = bb.get()
+    mod["main"] = mod["main"].with_attr("num_input", 1)
+    return mod
+
+
+@pytest.mark.parametrize(
+    "tf_op, relax_op",
+    [
+        (tf.reduce_any, relax.op.max),
+        (tf.reduce_all, relax.op.min),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, axes",
+    [
+        ((1, 8, 8, 3), 1),
+        ((1, 8, 8, 3), [1, 2]),
+        ((1, 8, 8, 3), -1),
+        ((1, 8, 8, 3), None),
+        ((30,), 0),
+        ((2, 5, 2), [0, 2]),
+    ],
+)
+@pytest.mark.parametrize("keepdims", [True, False])
+def test_reduction_bool_ops(tf_op, relax_op, input_shape, axes, keepdims):
+    class ReduceBoolModule(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=input_shape, dtype=tf.bool)])
+        def func(self, x):
+            return tf_op(x, axis=axes, keepdims=keepdims)
+
+    expected = _make_reduce_bool_expected(relax_op, input_shape, axes, keepdims)
+    verify(ReduceBoolModule, expected)
+
+    # Regression guard: compile to catch a bool max/min lowering path.
+    tvm.compile(expected, tvm.target.Target("llvm"))
+
+
+def test_pad():
+    class Pad(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 3), dtype=tf.float32)])
+        def func(self, x):
+            return tf.pad(x, [[1, 1], [2, 2]])
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 3), dtype="float32")) -> R.Tensor((4, 7), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((4, 7), dtype="float32") = R.nn.pad(
+                    x, pad_width=[1, 1, 2, 2], pad_value=0.0, pad_mode="constant"
+                )
+                R.output(gv)
+            return gv
+
+    verify(Pad, Expected)
+
+
+def test_pad_v2():
+    class PadV2(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(2, 3), dtype=tf.float32)])
+        def func(self, x):
+            return tf.pad(x, [[1, 1], [2, 2]], constant_values=5.0)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 3), dtype="float32")) -> R.Tensor((4, 7), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((4, 7), dtype="float32") = R.nn.pad(
+                    x, pad_width=[1, 1, 2, 2], pad_value=5.0, pad_mode="constant"
+                )
+                R.output(gv)
+            return gv
+
+    verify(PadV2, Expected)
+
+
+def test_mirror_pad():
+    class MirrorPad(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3, 4), dtype=tf.float32)])
+        def func(self, x):
+            return tf.pad(x, [[1, 1], [2, 2]], mode="REFLECT")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((3, 4), dtype="float32")) -> R.Tensor((5, 8), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((5, 8), dtype="float32") = R.nn.pad(
+                    x, pad_width=[1, 1, 2, 2], pad_value=0.0, pad_mode="reflect"
+                )
+                R.output(gv)
+            return gv
+
+    verify(MirrorPad, Expected)
+
+
+def test_topk_v2():
+    class TopKV2(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(5,), dtype=tf.float32)])
+        def func(self, x):
+            return tf.math.top_k(x, k=3).values
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((5,), dtype="float32")) -> R.Tensor((3,), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tuple(R.Tensor((3,), dtype="float32"), R.Tensor((3,), dtype="int32")) = (
+                    R.topk(x, k=3, axis=-1, ret_type="both", largest=True, dtype="int32")
+                )
+                gv: R.Tensor((3,), dtype="float32") = lv[0]
+                R.output(gv)
+            return gv
+
+    verify(TopKV2, Expected)
+
+
+def test_one_hot():
+    class OneHot(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3,), dtype=tf.int32)])
+        def func(self, x):
+            return tf.one_hot(x, depth=4)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((3,), dtype="int32")) -> R.Tensor((3, 4), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((3, 4), dtype="float32") = R.one_hot(
+                    x,
+                    R.prim_value(T.float32(1.0)),
+                    R.prim_value(T.float32(0.0)),
+                    depth=4,
+                    axis=-1,
+                )
+                R.output(gv)
+            return gv
+
+    verify(OneHot, Expected)
+
+
+def test_select():
+    class Select(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2, 3), dtype=tf.bool),
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(2, 3), dtype=tf.float32),
+            ]
+        )
+        def func(self, cond, x, y):
+            return tf.where(cond, x, y)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            cond: R.Tensor((2, 3), dtype="bool"),
+            x: R.Tensor((2, 3), dtype="float32"),
+            y: R.Tensor((2, 3), dtype="float32"),
+        ) -> R.Tensor((2, 3), dtype="float32"):
+            R.func_attr({"num_input": 3})
+            with R.dataflow():
+                gv: R.Tensor((2, 3), dtype="float32") = R.where(cond, x, y)
+                R.output(gv)
+            return gv
+
+    verify(Select, Expected)
+
+
+def test_depth_to_space():
+    class DepthToSpace(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 2, 4, 8), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.depth_to_space(x, block_size=2)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((1, 2, 4, 8), dtype="float32"),
+        ) -> R.Tensor((1, 4, 8, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 2, 4, 2, 2, 2), dtype="float32") = R.reshape(
+                    x, R.shape([1, 2, 4, 2, 2, 2])
+                )
+                lv1: R.Tensor((1, 2, 2, 4, 2, 2), dtype="float32") = R.permute_dims(
+                    lv, axes=[0, 1, 3, 2, 4, 5]
+                )
+                gv: R.Tensor((1, 4, 8, 2), dtype="float32") = R.reshape(lv1, R.shape([1, 4, 8, 2]))
+                R.output(gv)
+            return gv
+
+    verify(DepthToSpace, Expected)
+
+
+def test_space_to_depth():
+    class SpaceToDepth(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 4, 4, 2), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.space_to_depth(x, block_size=2)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            x: R.Tensor((1, 4, 4, 2), dtype="float32"),
+        ) -> R.Tensor((1, 2, 2, 8), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 2, 2, 2, 2, 2), dtype="float32") = R.reshape(
+                    x, R.shape([1, 2, 2, 2, 2, 2])
+                )
+                lv1: R.Tensor((1, 2, 2, 2, 2, 2), dtype="float32") = R.permute_dims(
+                    lv, axes=[0, 1, 3, 2, 4, 5]
+                )
+                gv: R.Tensor((1, 2, 2, 8), dtype="float32") = R.reshape(lv1, R.shape([1, 2, 2, 8]))
+                R.output(gv)
+            return gv
+
+    verify(SpaceToDepth, Expected)
+
+
+def test_leaky_relu():
+    class LeakyReLU(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.nn.leaky_relu(x, alpha=0.2)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = R.nn.leakyrelu(
+                    x, alpha=0.20000000298023224
+                )
+                R.output(gv)
+            return gv
+
+    verify(LeakyReLU, Expected)
+
+
+def test_hard_swish():
+    class HardSwish(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return x * tf.nn.relu6(x + 3) / 6
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 30), dtype="float32") = R.add(x, R.const(3.0, dtype="float32"))
+                lv1: R.Tensor((1, 30), dtype="float32") = R.clip(
+                    lv, R.prim_value(T.float64(0.0)), R.prim_value(T.float64(6.0))
+                )
+                lv2: R.Tensor((1, 30), dtype="float32") = R.multiply(x, lv1)
+                gv: R.Tensor((1, 30), dtype="float32") = R.divide(
+                    lv2, R.const(6.0, dtype="float32")
+                )
+                R.output(gv)
+            return gv
+
+    verify(HardSwish, Expected)
+
+
+def test_relu_n1_to_1():
+    class ReLU_N1_to_1(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(1, 30), dtype=tf.float32)])
+        def func(self, x):
+            return tf.clip_by_value(x, -1.0, 1.0)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 30), dtype="float32")) -> R.Tensor((1, 30), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 30), dtype="float32") = R.clip(x, min=-1, max=1)
+                R.output(gv)
+            return gv
+
+    verify(ReLU_N1_to_1, Expected)
+
+
+@pytest.mark.parametrize(
+    "shared_axes",
+    [
+        pytest.param([1, 2], id="channelwise_shared_axes"),
+        pytest.param([1, 2, 3], id="scalar_shared_axes"),
+        pytest.param(None, id="elementwise_no_shared_axes"),
+    ],
+)
+def test_prelu(shared_axes):
+    inputs = tf.keras.Input(shape=(4, 4, 3), batch_size=1, dtype=tf.float32)
+    prelu_kwargs = {
+        "alpha_initializer": tf.initializers.constant(0.25),
+    }
+    if shared_axes is not None:
+        prelu_kwargs["shared_axes"] = shared_axes
+    outputs = tf.keras.layers.PReLU(**prelu_kwargs)(inputs)
+    keras_model = tf.keras.Model(inputs, outputs)
+
+    converter = tf.lite.TFLiteConverter.from_keras_model(keras_model)
+    tflite_model_buf = converter.convert()
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
+
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+
+    if shared_axes == [1, 2]:
+        alpha_const = np.full((1, 1, 3), 0.25, dtype=np.float32)
+    elif shared_axes == [1, 2, 3]:
+        alpha_const = np.full((1, 1, 1), 0.25, dtype=np.float32)
+    else:
+        alpha_const = np.full((4, 4, 3), 0.25, dtype=np.float32)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 4, 4, 3), dtype="float32")) -> R.Tensor(
+            (1, 4, 4, 3), dtype="float32"
+        ):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((1, 4, 4, 3), dtype="float32") = R.broadcast_to(
+                    R.const(alpha_const), R.shape([1, 4, 4, 3])
+                )
+                lv1: R.Tensor((48,), dtype="float32") = R.reshape(x, R.shape([48]))
+                lv2: R.Tensor((48,), dtype="float32") = R.reshape(lv, R.shape([48]))
+                lv3: R.Tensor((48,), dtype="float32") = R.nn.prelu(lv1, lv2, axis=0)
+                gv: R.Tensor((1, 4, 4, 3), dtype="float32") = R.reshape(lv3, R.shape([1, 4, 4, 3]))
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_matrix_diag():
+    """Test TFLite MATRIX_DIAG operator."""
+
+    class MatrixDiag(tf.Module):
+        @tf.function(input_signature=[tf.TensorSpec(shape=(3,), dtype=tf.float32)])
+        def func(self, diagonal):
+            return tf.raw_ops.MatrixDiag(diagonal=diagonal)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(diagonal: R.Tensor((3,), dtype="float32")) -> R.Tensor((3, 3), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((3, 3), dtype="float32") = R.zeros(R.shape([3, 3]), dtype="float32")
+                gv = R.call_dps_packed(
+                    "topi.matrix_set_diag",
+                    (
+                        lv,
+                        diagonal,
+                        R.const(0, "int32"),
+                        R.const(0, "int32"),
+                        R.const(False, "bool"),
+                        R.const(False, "bool"),
+                    ),
+                    out_sinfo=R.Tensor((3, 3), dtype="float32"),
+                )
+                R.output(gv)
+            return gv
+
+    verify(MatrixDiag, Expected)
+
+
+def test_matrix_set_diag():
+    """Test TFLite MATRIX_SET_DIAG operator."""
+
+    class MatrixSetDiag(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(3, 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(3,), dtype=tf.float32),
+            ]
+        )
+        def func(self, input, diagonal):
+            return tf.raw_ops.MatrixSetDiag(input=input, diagonal=diagonal)
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            input: R.Tensor((3, 3), dtype="float32"),
+            diagonal: R.Tensor((3,), dtype="float32"),
+        ) -> R.Tensor((3, 3), dtype="float32"):
+            R.func_attr({"num_input": 2})
+            with R.dataflow():
+                gv = R.call_dps_packed(
+                    "topi.matrix_set_diag",
+                    (
+                        input,
+                        diagonal,
+                        R.const(0, "int32"),
+                        R.const(0, "int32"),
+                        R.const(False, "bool"),
+                        R.const(False, "bool"),
+                    ),
+                    out_sinfo=R.Tensor((3, 3), dtype="float32"),
+                )
+                R.output(gv)
+            return gv
+
+    verify(MatrixSetDiag, Expected)
+
+
+def test_sparse_to_dense():
+    """Test TFLite SPARSE_TO_DENSE operator."""
+
+    class SparseToDense(tf.Module):
+        @tf.function(
+            input_signature=[
+                tf.TensorSpec(shape=(2,), dtype=tf.int32),
+                tf.TensorSpec(shape=(2,), dtype=tf.float32),
+                tf.TensorSpec(shape=(), dtype=tf.float32),
+            ]
+        )
+        def func(self, indices, values, default_value):
+            # output_shape is provided as a constant, not an input
+            return tf.raw_ops.SparseToDense(
+                sparse_indices=indices,
+                output_shape=tf.constant([3], dtype=tf.int32),
+                sparse_values=values,
+                default_value=default_value,
+            )
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            indices: R.Tensor((2,), dtype="int32"),
+            values: R.Tensor((2,), dtype="float32"),
+            default_value: R.Tensor((), dtype="float32"),
+        ) -> R.Tensor((3,), dtype="float32"):
+            R.func_attr({"num_input": 3})
+            with R.dataflow():
+                gv = R.call_dps_packed(
+                    "topi.sparse_to_dense",
+                    (indices, R.const([3], "int32"), values, default_value),
+                    out_sinfo=R.Tensor((3,), dtype="float32"),
+                )
+                R.output(gv)
+            return gv
+
+    verify(SparseToDense, Expected)
+
+
+# DENSIFY operator tests
+# DENSIFY converts sparse weight tensors to dense at conversion time (not runtime).
+# Since TensorFlow does not provide an API to create sparse TFLite models,
+# we manually build them using the flatbuffers API.
+
+# Import schema helpers explicitly. CI's generated tflite package does not
+# reliably re-export these builder helpers and enums at the package top-level.
+def _get_tflite_schema_module(module_name):
+    return __import__(f"tflite.{module_name}", fromlist=[module_name])
+
+
+def _get_tflite_schema_enum(enum_name):
+    return getattr(_get_tflite_schema_module(enum_name), enum_name)
+
+
+_tfl_add_options = _get_tflite_schema_module("AddOptions")
+_tfl_buffer = _get_tflite_schema_module("Buffer")
+_tfl_conv2d_options = _get_tflite_schema_module("Conv2DOptions")
+_tfl_dilate_options = _get_tflite_schema_module("DilateOptions")
+_tfl_dimension_metadata = _get_tflite_schema_module("DimensionMetadata")
+_tfl_fully_connected_options = _get_tflite_schema_module("FullyConnectedOptions")
+_tfl_int32_vector = _get_tflite_schema_module("Int32Vector")
+_tfl_model = _get_tflite_schema_module("Model")
+_tfl_operator = _get_tflite_schema_module("Operator")
+_tfl_operator_code = _get_tflite_schema_module("OperatorCode")
+_tfl_sparsity_parameters = _get_tflite_schema_module("SparsityParameters")
+_tfl_subgraph = _get_tflite_schema_module("SubGraph")
+_tfl_tensor = _get_tflite_schema_module("Tensor")
+
+_tfl_builtin_operator = _get_tflite_schema_enum("BuiltinOperator")
+_tfl_builtin_options = _get_tflite_schema_enum("BuiltinOptions")
+_tfl_builtin_options2 = _get_tflite_schema_enum("BuiltinOptions2")
+_tfl_dimension_type = _get_tflite_schema_enum("DimensionType")
+_tfl_fc_weights_format = _get_tflite_schema_enum("FullyConnectedOptionsWeightsFormat")
+_tfl_padding = _get_tflite_schema_enum("Padding")
+_tfl_sparse_index_vector = _get_tflite_schema_enum("SparseIndexVector")
+_tfl_tensor_type = _get_tflite_schema_enum("TensorType")
+
+_DENSIFY_TEST_VALUES = np.array([1.0, 2.0], dtype=np.float32)
+_DENSIFY_TEST_DENSE = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+_DENSIFY_ROW_PTRS = [0, 1, 2]
+_DENSIFY_COL_INDICES = [0, 1]
+_DENSIFY_CONV_KERNEL_DENSE_HWIO = _DENSIFY_TEST_DENSE.reshape(2, 2, 1, 1)
+_DENSIFY_FC_WEIGHT_VALUES = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+_DENSIFY_FC_WEIGHT_DENSE_OI = np.diag(_DENSIFY_FC_WEIGHT_VALUES).astype(np.float32)
+_DENSIFY_FC_ROW_PTRS = [0, 1, 2, 3, 4]
+_DENSIFY_FC_COL_INDICES = [0, 1, 2, 3]
+
+
+def _tflite_int32_vector(builder, start_vector_fn, values):
+    start_vector_fn(builder, len(values))
+    for value in reversed(values):
+        builder.PrependInt32(value)
+    return builder.EndVector()
+
+
+def _tflite_offset_vector(builder, start_vector_fn, offsets):
+    start_vector_fn(builder, len(offsets))
+    for offset in reversed(offsets):
+        builder.PrependUOffsetTRelative(offset)
+    return builder.EndVector()
+
+
+def _tflite_byte_vector(builder, data):
+    _tfl_buffer.BufferStartDataVector(builder, len(data))
+    for byte in reversed(data):
+        builder.PrependByte(byte)
+    return builder.EndVector()
+
+
+def _tflite_int32_table(builder, values):
+    # Build the values vector directly without relying on version-specific
+    # helper Int32VectorStartValuesVector, which is absent in older
+    # tflite package versions used in CI.
+    builder.StartVector(4, len(values), 4)
+    for value in reversed(values):
+        builder.PrependInt32(value)
+    values_vec = builder.EndVector()
+    _tfl_int32_vector.Int32VectorStart(builder)
+    _tfl_int32_vector.Int32VectorAddValues(builder, values_vec)
+    return _tfl_int32_vector.Int32VectorEnd(builder)
+
+
+def _tflite_shape(builder, shape):
+    return _tflite_int32_vector(builder, _tfl_tensor.TensorStartShapeVector, shape)
+
+
+def _build_tensor(builder, buffer_idx, shape, sparsity=None, tensor_type=None):
+    """Helper to build a TFLite tensor."""
+    if tensor_type is None:
+        tensor_type = _tfl_tensor_type.FLOAT32
+    shape_vec = _tflite_shape(builder, shape)
+    _tfl_tensor.TensorStart(builder)
+    _tfl_tensor.TensorAddBuffer(builder, buffer_idx)
+    _tfl_tensor.TensorAddHasRank(builder, True)
+    _tfl_tensor.TensorAddIsVariable(builder, False)
+    _tfl_tensor.TensorAddShape(builder, shape_vec)
+    if sparsity is not None:
+        _tfl_tensor.TensorAddSparsity(builder, sparsity)
+    _tfl_tensor.TensorAddType(builder, tensor_type)
+    return _tfl_tensor.TensorEnd(builder)
+
+
+def _build_buffer(builder, data=None):
+    # Build the data vector before starting the Buffer table to avoid
+    # flatbuffers IsNestedError (vectors cannot be created inside tables).
+    data_offset = None
+    if data is not None:
+        data_offset = _tflite_byte_vector(builder, data)
+    _tfl_buffer.BufferStart(builder)
+    if data_offset is not None:
+        _tfl_buffer.BufferAddData(builder, data_offset)
+    return _tfl_buffer.BufferEnd(builder)
+
+
+def _build_operator(
+    builder,
+    opcode_index,
+    inputs,
+    outputs,
+    builtin_options_type=None,
+    builtin_options=None,
+    builtin_options2_type=None,
+    builtin_options2=None,
+):
+    inputs_vec = _tflite_int32_vector(builder, _tfl_operator.OperatorStartInputsVector, inputs)
+    outputs_vec = _tflite_int32_vector(
+        builder, _tfl_operator.OperatorStartOutputsVector, outputs
+    )
+    _tfl_operator.OperatorStart(builder)
+    _tfl_operator.OperatorAddOpcodeIndex(builder, opcode_index)
+    _tfl_operator.OperatorAddInputs(builder, inputs_vec)
+    _tfl_operator.OperatorAddOutputs(builder, outputs_vec)
+    if builtin_options_type is not None:
+        _tfl_operator.OperatorAddBuiltinOptionsType(builder, builtin_options_type)
+    if builtin_options is not None:
+        _tfl_operator.OperatorAddBuiltinOptions(builder, builtin_options)
+    if builtin_options2_type is not None:
+        _tfl_operator.OperatorAddBuiltinOptions2Type(builder, builtin_options2_type)
+    if builtin_options2 is not None:
+        _tfl_operator.OperatorAddBuiltinOptions2(builder, builtin_options2)
+    return _tfl_operator.OperatorEnd(builder)
+
+
+def _build_operator_code(builder, builtin_op):
+    # deprecated_builtin_code is int8 (max 127). Ops past that write 127 as a
+    # placeholder and use the full builtin_code field.
+    deprecated_code = builtin_op if builtin_op < 127 else 127
+    _tfl_operator_code.OperatorCodeStart(builder)
+    _tfl_operator_code.OperatorCodeAddDeprecatedBuiltinCode(builder, deprecated_code)
+    _tfl_operator_code.OperatorCodeAddBuiltinCode(builder, builtin_op)
+    _tfl_operator_code.OperatorCodeAddVersion(builder, 1)
+    return _tfl_operator_code.OperatorCodeEnd(builder)
+
+
+def _build_subgraph(builder, *, tensors, operators, inputs, outputs):
+    tensors_vec = _tflite_offset_vector(builder, _tfl_subgraph.SubGraphStartTensorsVector, tensors)
+    operators_vec = _tflite_offset_vector(
+        builder, _tfl_subgraph.SubGraphStartOperatorsVector, operators
+    )
+    inputs_vec = _tflite_int32_vector(builder, _tfl_subgraph.SubGraphStartInputsVector, inputs)
+    outputs_vec = _tflite_int32_vector(
+        builder, _tfl_subgraph.SubGraphStartOutputsVector, outputs
+    )
+
+    _tfl_subgraph.SubGraphStart(builder)
+    _tfl_subgraph.SubGraphAddTensors(builder, tensors_vec)
+    _tfl_subgraph.SubGraphAddOperators(builder, operators_vec)
+    _tfl_subgraph.SubGraphAddInputs(builder, inputs_vec)
+    _tfl_subgraph.SubGraphAddOutputs(builder, outputs_vec)
+    return _tfl_subgraph.SubGraphEnd(builder)
+
+
+def _finish_tflite_model(builder, *, subgraph, operator_codes, buffers):
+    buffers_vec = _tflite_offset_vector(builder, _tfl_model.ModelStartBuffersVector, buffers)
+    opcodes_vec = _tflite_offset_vector(
+        builder, _tfl_model.ModelStartOperatorCodesVector, operator_codes
+    )
+    subgraphs_vec = _tflite_offset_vector(builder, _tfl_model.ModelStartSubgraphsVector, [subgraph])
+
+    _tfl_model.ModelStart(builder)
+    _tfl_model.ModelAddBuffers(builder, buffers_vec)
+    _tfl_model.ModelAddSubgraphs(builder, subgraphs_vec)
+    _tfl_model.ModelAddOperatorCodes(builder, opcodes_vec)
+    _tfl_model.ModelAddVersion(builder, 3)
+    model = _tfl_model.ModelEnd(builder)
+
+    builder.Finish(model, b"TFL3")
+    return bytes(builder.Output())
+
+
+def _build_csr_sparsity(
+    builder,
+    *,
+    dense_sizes,
+    row_ptrs,
+    col_indices,
+    sparse_axis,
+    traversal_order=None,
+):
+    row_ptrs_vec = _tflite_int32_table(builder, row_ptrs)
+    col_indices_vec = _tflite_int32_table(builder, col_indices)
+    dim_metadata = []
+
+    for axis, dense_size in enumerate(dense_sizes):
+        _tfl_dimension_metadata.DimensionMetadataStart(builder)
+        if axis == sparse_axis:
+            _tfl_dimension_metadata.DimensionMetadataAddFormat(
+                builder, _tfl_dimension_type.SPARSE_CSR
+            )
+            _tfl_dimension_metadata.DimensionMetadataAddArraySegmentsType(
+                builder, _tfl_sparse_index_vector.Int32Vector
+            )
+            _tfl_dimension_metadata.DimensionMetadataAddArraySegments(builder, row_ptrs_vec)
+            _tfl_dimension_metadata.DimensionMetadataAddArrayIndicesType(
+                builder, _tfl_sparse_index_vector.Int32Vector
+            )
+            _tfl_dimension_metadata.DimensionMetadataAddArrayIndices(builder, col_indices_vec)
+        else:
+            _tfl_dimension_metadata.DimensionMetadataAddFormat(builder, _tfl_dimension_type.DENSE)
+            _tfl_dimension_metadata.DimensionMetadataAddDenseSize(builder, dense_size)
+        dim_metadata.append(_tfl_dimension_metadata.DimensionMetadataEnd(builder))
+
+    if traversal_order is None:
+        traversal_order = list(range(len(dense_sizes)))
+
+    traversal_order_vec = _tflite_int32_vector(
+        builder,
+        _tfl_sparsity_parameters.SparsityParametersStartTraversalOrderVector,
+        traversal_order,
+    )
+    dim_metadata_vec = _tflite_offset_vector(
+        builder, _tfl_sparsity_parameters.SparsityParametersStartDimMetadataVector, dim_metadata
+    )
+
+    _tfl_sparsity_parameters.SparsityParametersStart(builder)
+    _tfl_sparsity_parameters.SparsityParametersAddTraversalOrder(builder, traversal_order_vec)
+    _tfl_sparsity_parameters.SparsityParametersAddDimMetadata(builder, dim_metadata_vec)
+    return _tfl_sparsity_parameters.SparsityParametersEnd(builder)
+
+
+def _build_densify_only_case(builder):
+    sparse_tensor_idx = 0
+    dense_tensor_idx = 1
+    shape = [2, 2]
+    sparsity = _build_csr_sparsity(
+        builder,
+        dense_sizes=shape,
+        row_ptrs=_DENSIFY_ROW_PTRS,
+        col_indices=_DENSIFY_COL_INDICES,
+        sparse_axis=1,
+    )
+
+    sparse_tensor = _build_tensor(builder, 0, shape, sparsity)
+    dense_tensor = _build_tensor(builder, 1, shape)
+    densify_op = _build_operator(
+        builder,
+        0,
+        [sparse_tensor_idx],
+        [dense_tensor_idx],
+        _tfl_builtin_options.DensifyOptions,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[sparse_tensor, dense_tensor],
+        operators=[densify_op],
+        inputs=[],
+        outputs=[dense_tensor_idx],
+    )
+    operator_codes = [_build_operator_code(builder, _tfl_builtin_operator.DENSIFY)]
+    return _DENSIFY_TEST_VALUES, subgraph, operator_codes
+
+
+def _build_densify_add_case(builder):
+    input_tensor_idx = 0
+    sparse_tensor_idx = 1
+    dense_tensor_idx = 2
+    output_tensor_idx = 3
+    shape = [2, 2]
+    sparsity = _build_csr_sparsity(
+        builder,
+        dense_sizes=shape,
+        row_ptrs=_DENSIFY_ROW_PTRS,
+        col_indices=_DENSIFY_COL_INDICES,
+        sparse_axis=1,
+    )
+
+    input_tensor = _build_tensor(builder, 1, shape)
+    sparse_tensor = _build_tensor(builder, 0, shape, sparsity)
+    dense_tensor = _build_tensor(builder, 1, shape)
+    output_tensor = _build_tensor(builder, 1, shape)
+
+    densify_op = _build_operator(
+        builder,
+        1,
+        [sparse_tensor_idx],
+        [dense_tensor_idx],
+        _tfl_builtin_options.DensifyOptions,
+    )
+    _tfl_add_options.AddOptionsStart(builder)
+    add_options = _tfl_add_options.AddOptionsEnd(builder)
+    add_op = _build_operator(
+        builder,
+        0,
+        [input_tensor_idx, dense_tensor_idx],
+        [output_tensor_idx],
+        _tfl_builtin_options.AddOptions,
+        add_options,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[input_tensor, sparse_tensor, dense_tensor, output_tensor],
+        operators=[densify_op, add_op],
+        inputs=[input_tensor_idx],
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [
+        _build_operator_code(builder, _tfl_builtin_operator.ADD),
+        _build_operator_code(builder, _tfl_builtin_operator.DENSIFY),
+    ]
+    return _DENSIFY_TEST_VALUES, subgraph, operator_codes
+
+
+def _build_densify_conv2d_case(builder):
+    input_tensor_idx = 0
+    sparse_kernel_idx = 1
+    dense_kernel_idx = 2
+    output_tensor_idx = 3
+
+    sparsity = _build_csr_sparsity(
+        builder,
+        dense_sizes=[1, 2, 2, 1],
+        row_ptrs=_DENSIFY_ROW_PTRS,
+        col_indices=_DENSIFY_COL_INDICES,
+        sparse_axis=2,
+    )
+
+    input_tensor = _build_tensor(builder, 1, [1, 4, 4, 1])
+    sparse_kernel = _build_tensor(builder, 0, [1, 2, 2, 1], sparsity)
+    dense_kernel = _build_tensor(builder, 1, [1, 2, 2, 1])
+    output_tensor = _build_tensor(builder, 1, [1, 4, 4, 1])
+
+    _tfl_conv2d_options.Conv2DOptionsStart(builder)
+    _tfl_conv2d_options.Conv2DOptionsAddStrideH(builder, 1)
+    _tfl_conv2d_options.Conv2DOptionsAddStrideW(builder, 1)
+    _tfl_conv2d_options.Conv2DOptionsAddPadding(builder, _tfl_padding.SAME)
+    _tfl_conv2d_options.Conv2DOptionsAddDilationHFactor(builder, 1)
+    _tfl_conv2d_options.Conv2DOptionsAddDilationWFactor(builder, 1)
+    conv2d_options = _tfl_conv2d_options.Conv2DOptionsEnd(builder)
+
+    densify_op = _build_operator(
+        builder,
+        1,
+        [sparse_kernel_idx],
+        [dense_kernel_idx],
+        _tfl_builtin_options.DensifyOptions,
+    )
+    conv2d_op = _build_operator(
+        builder,
+        0,
+        [input_tensor_idx, dense_kernel_idx],
+        [output_tensor_idx],
+        _tfl_builtin_options.Conv2DOptions,
+        conv2d_options,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[input_tensor, sparse_kernel, dense_kernel, output_tensor],
+        operators=[densify_op, conv2d_op],
+        inputs=[input_tensor_idx],
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [
+        _build_operator_code(builder, _tfl_builtin_operator.CONV_2D),
+        _build_operator_code(builder, _tfl_builtin_operator.DENSIFY),
+    ]
+    return _DENSIFY_TEST_VALUES, subgraph, operator_codes
+
+
+def _build_densify_fully_connected_case(builder):
+    input_tensor_idx = 0
+    sparse_weight_idx = 1
+    dense_weight_idx = 2
+    output_tensor_idx = 3
+    weight_shape = [4, 4]
+
+    sparsity = _build_csr_sparsity(
+        builder,
+        dense_sizes=weight_shape,
+        row_ptrs=_DENSIFY_FC_ROW_PTRS,
+        col_indices=_DENSIFY_FC_COL_INDICES,
+        sparse_axis=1,
+    )
+
+    input_tensor = _build_tensor(builder, 1, [1, 4])
+    sparse_weight = _build_tensor(builder, 0, weight_shape, sparsity)
+    dense_weight = _build_tensor(builder, 1, weight_shape)
+    output_tensor = _build_tensor(builder, 1, [1, 4])
+
+    _tfl_fully_connected_options.FullyConnectedOptionsStart(builder)
+    _tfl_fully_connected_options.FullyConnectedOptionsAddWeightsFormat(
+        builder, _tfl_fc_weights_format.DEFAULT
+    )
+    fc_options = _tfl_fully_connected_options.FullyConnectedOptionsEnd(builder)
+
+    densify_op = _build_operator(
+        builder,
+        1,
+        [sparse_weight_idx],
+        [dense_weight_idx],
+        _tfl_builtin_options.DensifyOptions,
+    )
+    fc_op = _build_operator(
+        builder,
+        0,
+        [input_tensor_idx, dense_weight_idx],
+        [output_tensor_idx],
+        _tfl_builtin_options.FullyConnectedOptions,
+        fc_options,
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[input_tensor, sparse_weight, dense_weight, output_tensor],
+        operators=[densify_op, fc_op],
+        inputs=[input_tensor_idx],
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [
+        _build_operator_code(builder, _tfl_builtin_operator.FULLY_CONNECTED),
+        _build_operator_code(builder, _tfl_builtin_operator.DENSIFY),
+    ]
+    return _DENSIFY_FC_WEIGHT_VALUES, subgraph, operator_codes
+
+
+def _build_densify_model(*, downstream_op=None):
+    """Build a sparse TFLite model with DENSIFY operator for testing."""
+    scenario_builders = {
+        None: _build_densify_only_case,
+        "add": _build_densify_add_case,
+        "conv2d": _build_densify_conv2d_case,
+        "fully_connected": _build_densify_fully_connected_case,
+    }
+    if downstream_op not in scenario_builders:
+        raise ValueError(f"Unsupported DENSIFY downstream op: {downstream_op}")
+
+    builder = flatbuffers.Builder(4096)
+    sparse_values, subgraph, operator_codes = scenario_builders[downstream_op](builder)
+    sparse_buffer = _build_buffer(builder, sparse_values.tobytes())
+    empty_buffer = _build_buffer(builder)
+    return _finish_tflite_model(
+        builder,
+        subgraph=subgraph,
+        operator_codes=operator_codes,
+        buffers=[sparse_buffer, empty_buffer],
+    )
+
+
+def _load_densify_module(downstream_op=None):
+    """Load a DENSIFY test model and return the converted Relax module."""
+    model_bytes = _build_densify_model(downstream_op=downstream_op)
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(model_bytes, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(model_bytes, 0)
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+    return mod
+
+
+def test_densify():
+    """Test TFLite DENSIFY operator conversion."""
+    mod = _load_densify_module()
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main() -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 0})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = R.const(_DENSIFY_TEST_DENSE)
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_densify_with_add():
+    """Test DENSIFY followed by a downstream ADD operator."""
+    mod = _load_densify_module(downstream_op="add")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((2, 2), dtype="float32")) -> R.Tensor((2, 2), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((2, 2), dtype="float32") = R.add(x, R.const(_DENSIFY_TEST_DENSE))
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+def test_densify_with_conv2d():
+    """Test DENSIFY followed by CONV2D - a real-world scenario.
+
+    This simulates a sparse convolution where DENSIFY converts sparse weights
+    before CONV2D uses them for inference.
+    """
+    mod = _load_densify_module(downstream_op="conv2d")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 4, 4, 1), dtype="float32")) -> R.Tensor(
+            (1, 4, 4, 1), dtype="float32"
+        ):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                gv: R.Tensor((1, 4, 4, 1), dtype="float32") = R.nn.conv2d(
+                    x,
+                    R.const(_DENSIFY_CONV_KERNEL_DENSE_HWIO),
+                    strides=[1, 1],
+                    padding=[0, 0, 1, 1],
+                    dilation=[1, 1],
+                    groups=1,
+                    data_layout="NHWC",
+                    kernel_layout="HWIO",
+                    out_layout="NHWC",
+                    out_dtype="void",
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+def test_densify_with_fully_connected():
+    """Test DENSIFY followed by FULLY_CONNECTED - a real-world scenario.
+
+    This simulates a sparse fully connected layer where DENSIFY converts
+    sparse weights before matrix multiplication for inference.
+    """
+    mod = _load_densify_module(downstream_op="fully_connected")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(x: R.Tensor((1, 4), dtype="float32")) -> R.Tensor((1, 4), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                weight_t: R.Tensor((4, 4), dtype="float32") = R.permute_dims(
+                    R.const(_DENSIFY_FC_WEIGHT_DENSE_OI), axes=[1, 0]
+                )
+                gv: R.Tensor((1, 4), dtype="float32") = R.matmul(x, weight_t, out_dtype="void")
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def _build_dilate_only_case(
+    builder, *, input_shape, dilations, dilation_value, dynamic_dilations=False
+):
+    input_tensor_idx = 0
+    dilations_tensor_idx = 1
+    padding_value_tensor_idx = 2
+    output_tensor_idx = 3
+
+    output_shape = tuple((input_shape[i] - 1) * dilations[i] + 1 for i in range(len(input_shape)))
+
+    input_tensor = _build_tensor(builder, 1, input_shape)
+    dilations_tensor = _build_tensor(
+        builder, 2, [len(dilations)], tensor_type=_tfl_tensor_type.INT32
+    )
+    padding_value_tensor = _build_tensor(builder, 3, [])
+    output_tensor = _build_tensor(builder, 4, output_shape)
+
+    _tfl_dilate_options.DilateOptionsStart(builder)
+    dilate_opts = _tfl_dilate_options.DilateOptionsEnd(builder)
+
+    dilate_op = _build_operator(
+        builder,
+        0,
+        [input_tensor_idx, dilations_tensor_idx, padding_value_tensor_idx],
+        [output_tensor_idx],
+        builtin_options2_type=_tfl_builtin_options2.DilateOptions,
+        builtin_options2=dilate_opts,
+    )
+    sg_inputs = (
+        [input_tensor_idx, dilations_tensor_idx] if dynamic_dilations else [input_tensor_idx]
+    )
+    subgraph = _build_subgraph(
+        builder,
+        tensors=[input_tensor, dilations_tensor, padding_value_tensor, output_tensor],
+        operators=[dilate_op],
+        inputs=sg_inputs,
+        outputs=[output_tensor_idx],
+    )
+    operator_codes = [_build_operator_code(builder, _tfl_builtin_operator.DILATE)]
+    return subgraph, operator_codes
+
+
+def test_dilate():
+    """TFLite DILATE with constant dilations"""
+    builder = flatbuffers.Builder(1024)
+    input_shape = (3, 4)
+    dilations = [2, 2]
+    dilation_value = 0.5
+
+    subgraph, operator_codes = _build_dilate_only_case(
+        builder,
+        input_shape=input_shape,
+        dilations=dilations,
+        dilation_value=dilation_value,
+    )
+
+    buffers = [
+        _build_buffer(builder),
+        _build_buffer(builder),
+        _build_buffer(builder, np.asarray(dilations, dtype=np.int32).tobytes()),
+        _build_buffer(
+            builder, np.asarray([dilation_value], dtype=np.float32).tobytes()
+        ),
+        _build_buffer(builder),
+    ]
+
+    buf = _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=operator_codes, buffers=buffers
+    )
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            tvmgen_tensor_0: R.Tensor((3, 4), dtype="float32"),
+        ) -> R.Tensor((5, 7), dtype="float32"):
+            R.func_attr({"num_input": 1})
+            with R.dataflow():
+                lv: R.Tensor((3, 1, 4), dtype="float32") = R.reshape(
+                    tvmgen_tensor_0, R.shape([3, 1, 4])
+                )
+                lv1: R.Tensor((3, 1, 4), dtype="float32") = R.full(
+                    R.shape([3, 1, 4]), R.const(0.5, "float32"), dtype="float32"
+                )
+                lv2: R.Tensor((3, 2, 4), dtype="float32") = R.concat((lv, lv1), axis=1)
+                lv3: R.Tensor((6, 4), dtype="float32") = R.reshape(lv2, R.shape([6, 4]))
+                lv4: R.Tensor((5, 4), dtype="float32") = R.strided_slice(
+                    lv3, [0, 1], [0, 0], [5, 4], [1, 1], assume_inbound=False
+                )
+                lv5: R.Tensor((5, 4, 1), dtype="float32") = R.reshape(
+                    lv4, R.shape([5, 4, 1])
+                )
+                lv6: R.Tensor((5, 4, 1), dtype="float32") = R.full(
+                    R.shape([5, 4, 1]), R.const(0.5, "float32"), dtype="float32"
+                )
+                lv7: R.Tensor((5, 4, 2), dtype="float32") = R.concat((lv5, lv6), axis=2)
+                lv8: R.Tensor((5, 8), dtype="float32") = R.reshape(lv7, R.shape([5, 8]))
+                gv: R.Tensor((5, 7), dtype="float32") = R.strided_slice(
+                    lv8, [0, 1], [0, 0], [5, 7], [1, 1], assume_inbound=False
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+def test_dilate_dynamic_dilations():
+    """DILATE with runtime dilations"""
+    builder = flatbuffers.Builder(1024)
+    input_shape = (3, 4)
+    dilations_for_shape = [2, 2]
+    dilation_value = 0.5
+
+    subgraph, operator_codes = _build_dilate_only_case(
+        builder,
+        input_shape=input_shape,
+        dilations=dilations_for_shape,
+        dilation_value=dilation_value,
+        dynamic_dilations=True,
+    )
+
+    buffers = [
+        _build_buffer(builder),
+        _build_buffer(builder),
+        _build_buffer(builder),  # dilations is a runtime input so empty buffer
+        _build_buffer(
+            builder, np.asarray([dilation_value], dtype=np.float32).tobytes()
+        ),
+        _build_buffer(builder),
+    ]
+
+    buf = _finish_tflite_model(
+        builder, subgraph=subgraph, operator_codes=operator_codes, buffers=buffers
+    )
+    if hasattr(tflite.Model, "Model"):
+        tflite_model = tflite.Model.Model.GetRootAsModel(buf, 0)
+    else:
+        tflite_model = tflite.Model.GetRootAsModel(buf, 0)
+    mod = from_tflite(tflite_model)
+    mod["main"] = mod["main"].without_attr("params")
+
+    @I.ir_module
+    class Expected:
+        @R.function
+        def main(
+            tvmgen_tensor_0: R.Tensor((3, 4), dtype="float32"),
+            tvmgen_tensor_1: R.Tensor((2,), dtype="int32"),
+        ) -> R.Tensor(dtype="float32", ndim=2):
+            R.func_attr({"num_input": 2})
+            dilate_stride_0 = T.int64()
+            dilate_stride_1 = T.int64()
+            with R.dataflow():
+                lv: R.Tensor((2,), dtype="int32") = R.match_cast(
+                    tvmgen_tensor_1, R.Tensor((2,), dtype="int32")
+                )
+                lv1: R.Tensor((2,), dtype="int64") = R.astype(lv, dtype="int64")
+                lv2: R.Shape(ndim=2) = R.tensor_to_shape(lv1)
+                _lv3: R.Shape([dilate_stride_0, dilate_stride_1]) = R.match_cast(
+                    lv2, R.Shape([dilate_stride_0, dilate_stride_1])
+                )
+                lv4: R.Tensor((3, 1, 4), dtype="float32") = R.reshape(
+                    tvmgen_tensor_0, R.shape([3, 1, 4])
+                )
+                lv5: R.Tensor((3, dilate_stride_0 - 1, 4), dtype="float32") = R.full(
+                    R.shape([3, dilate_stride_0 - 1, 4]),
+                    R.const(0.5, "float32"),
+                    dtype="float32",
+                )
+                lv6: R.Tensor(
+                    (3, 1 + (dilate_stride_0 - 1), 4), dtype="float32"
+                ) = R.concat((lv4, lv5), axis=1)
+                lv7: R.Tensor((3 * dilate_stride_0, 4), dtype="float32") = R.reshape(
+                    lv6, R.shape([3 * dilate_stride_0, 4])
+                )
+                lv8: R.Tensor(
+                    (T.min(dilate_stride_0 * 2 + 1, dilate_stride_0 * 3), 4),
+                    dtype="float32",
+                ) = R.strided_slice(
+                    lv7,
+                    [0, 1],
+                    [0, 0],
+                    [2 * dilate_stride_0 + 1, 4],
+                    [1, 1],
+                    assume_inbound=False,
+                )
+                lv9: R.Tensor(
+                    (2 * dilate_stride_0 + 1, 4, 1), dtype="float32"
+                ) = R.reshape(lv8, R.shape([2 * dilate_stride_0 + 1, 4, 1]))
+                lv10: R.Tensor(
+                    (2 * dilate_stride_0 + 1, 4, dilate_stride_1 - 1), dtype="float32"
+                ) = R.full(
+                    R.shape([2 * dilate_stride_0 + 1, 4, dilate_stride_1 - 1]),
+                    R.const(0.5, "float32"),
+                    dtype="float32",
+                )
+                lv11: R.Tensor(
+                    (2 * dilate_stride_0 + 1, 4, 1 + (dilate_stride_1 - 1)),
+                    dtype="float32",
+                ) = R.concat((lv9, lv10), axis=2)
+                lv12: R.Tensor(
+                    (2 * dilate_stride_0 + 1, 4 * dilate_stride_1), dtype="float32"
+                ) = R.reshape(
+                    lv11, R.shape([2 * dilate_stride_0 + 1, 4 * dilate_stride_1])
+                )
+                gv: R.Tensor(
+                    (
+                        dilate_stride_0 * 2 + 1,
+                        T.min(dilate_stride_1 * 3 + 1, dilate_stride_1 * 4),
+                    ),
+                    dtype="float32",
+                ) = R.strided_slice(
+                    lv12,
+                    [0, 1],
+                    [0, 0],
+                    [2 * dilate_stride_0 + 1, 3 * dilate_stride_1 + 1],
+                    [1, 1],
+                    assume_inbound=False,
+                )
+                R.output(gv)
+            return gv
+
+    tvm.ir.assert_structural_equal(mod, Expected)
+
+
+if __name__ == "__main__":
+    pytest.main(["-s", __file__])

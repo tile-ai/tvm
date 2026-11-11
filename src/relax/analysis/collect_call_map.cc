@@ -24,10 +24,11 @@
  * \brief Collect cross-IR call graph
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ir/analysis.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr_functor.h>
-#include <tvm/tir/expr_functor.h>
+#include <tvm/tirx/expr_functor.h>
 
 namespace tvm {
 namespace relax {
@@ -38,19 +39,22 @@ using ir::CalleeCollector;
 struct Visitor : ExprVisitor {
   explicit Visitor(CalleeCollector* collector) : collector(collector) {}
   CalleeCollector* collector;
-  void VisitExpr_(const GlobalVarNode* node) override { collector->Mark(GetRef<GlobalVar>(node)); }
+  void VisitExpr_(const GlobalVarNode* node) override {
+    collector->Mark(ffi::GetRef<GlobalVar>(node));
+  }
 };
 
 }  // namespace
 
 TVM_STATIC_IR_FUNCTOR(CalleeCollector, vtable)
-    .set_dispatch<relax::FunctionNode>([](const ObjectRef& func, CalleeCollector* collector) {
+    .set_dispatch<relax::FunctionNode>([](const ffi::ObjectRef& func, CalleeCollector* collector) {
       Visitor visitor{collector};
       visitor(Downcast<Function>(func));
     });
 
 TVM_STATIC_IR_FUNCTOR(CalleeCollector, vtable)
-    .set_dispatch<relax::ExternFuncNode>([](const ObjectRef& func, CalleeCollector* collector) {});
+    .set_dispatch<relax::ExternFuncNode>([](const ffi::ObjectRef& func,
+                                            CalleeCollector* collector) {});
 
 }  // namespace relax
 }  // namespace tvm

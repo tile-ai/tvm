@@ -26,12 +26,13 @@
 
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/node/node.h>
+#include <tvm/runtime/base.h>
 
 #include <string>
 #include <utility>
 
 namespace tvm {
+
 /*!
  * \brief A serializable function backed by TVM's global environment.
  *
@@ -40,10 +41,10 @@ namespace tvm {
  * under the assumption that the same function is registered during load.
  * \sa EnvFunc
  */
-class EnvFuncNode : public Object {
+class EnvFuncNode : public ffi::Object {
  public:
   /*! \brief Unique name of the global function */
-  String name;
+  ffi::String name;
   /*! \brief The internal packed function */
   ffi::Function func;
   /*! \brief constructor */
@@ -58,19 +59,21 @@ class EnvFuncNode : public Object {
   }
 
   static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
-  static constexpr const char* _type_key = "ir.EnvFunc";
-
-  TVM_DECLARE_FINAL_OBJECT_INFO(EnvFuncNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.EnvFunc", EnvFuncNode, ffi::Object);
 };
 
 /*!
  * \brief Managed reference to EnvFuncNode.
  * \sa EnvFuncNode
  */
-class EnvFunc : public ObjectRef {
+class EnvFunc : public ffi::ObjectRef {
  public:
   EnvFunc() {}
-  explicit EnvFunc(ObjectPtr<Object> n) : ObjectRef(n) {}
+  explicit EnvFunc(ffi::ObjectPtr<ffi::Object> n) : ffi::ObjectRef(n) {}
+  /*!
+   * \brief constructor with UnsafeInit
+   */
+  explicit EnvFunc(ffi::UnsafeInit tag) : ffi::ObjectRef(tag) {}
   /*! \return The internal global function pointer */
   const EnvFuncNode* operator->() const { return static_cast<const EnvFuncNode*>(get()); }
   /*!
@@ -81,7 +84,7 @@ class EnvFunc : public ObjectRef {
   template <typename... Args>
   ffi::Any operator()(Args&&... args) const {
     const EnvFuncNode* n = operator->();
-    ICHECK(n != nullptr);
+    TVM_FFI_ICHECK(n != nullptr);
     return n->func(std::forward<Args>(args)...);
   }
   /*!
@@ -90,7 +93,7 @@ class EnvFunc : public ObjectRef {
    * \return The created global function.
    * \note The function can be unique
    */
-  TVM_DLL static EnvFunc Get(const String& name);
+  TVM_DLL static EnvFunc Get(const ffi::String& name);
   /*! \brief specify container node */
   using ContainerType = EnvFuncNode;
 };
@@ -111,19 +114,23 @@ class TypedEnvFunc;
  * \sa EnvFunc
  */
 template <typename R, typename... Args>
-class TypedEnvFunc<R(Args...)> : public ObjectRef {
+class TypedEnvFunc<R(Args...)> : public ffi::ObjectRef {
  public:
   /*! \brief short hand for this function type */
   using TSelf = TypedEnvFunc<R(Args...)>;
   TypedEnvFunc() {}
-  explicit TypedEnvFunc(ObjectPtr<Object> n) : ObjectRef(n) {}
+  explicit TypedEnvFunc(ffi::ObjectPtr<ffi::Object> n) : ffi::ObjectRef(n) {}
+  /*!
+   * \brief constructor with UnsafeInit
+   */
+  explicit TypedEnvFunc(ffi::UnsafeInit tag) : ffi::ObjectRef(tag) {}
   /*!
    * \brief Assign global function to a TypedEnvFunc
    * \param other Another global function.
    * \return reference to self.
    */
   TSelf& operator=(const EnvFunc& other) {
-    ObjectRef::operator=(other);
+    ffi::ObjectRef::operator=(other);
     return *this;
   }
   /*! \return The internal global function pointer */
@@ -135,7 +142,7 @@ class TypedEnvFunc<R(Args...)> : public ObjectRef {
    */
   R operator()(Args... args) const {
     const EnvFuncNode* n = operator->();
-    ICHECK(n != nullptr);
+    TVM_FFI_ICHECK(n != nullptr);
     if constexpr (std::is_same_v<R, void>) {
       n->func(std::forward<Args>(args)...);
     } else {

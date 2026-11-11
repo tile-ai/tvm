@@ -21,7 +21,6 @@
  * \file rocm_device_api.cc
  * \brief GPU specific API
  */
-#include <dmlc/thread_local.h>
 #include <hip/hip_runtime_api.h>
 #include <hsa/hsa.h>
 #include <tvm/ffi/extra/c_env_api.h>
@@ -29,7 +28,7 @@
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/logging.h>
-#include <tvm/runtime/profiling.h>
+#include <tvm/runtime/timer.h>
 
 #include "rocm_common.h"
 
@@ -148,7 +147,7 @@ class ROCMDeviceAPI final : public DeviceAPI {
     *rv = value;
   }
   void* AllocDataSpace(Device dev, size_t nbytes, size_t alignment, DLDataType type_hint) final {
-    ICHECK_EQ(256 % alignment, 0U) << "ROCM space is aligned at 256 bytes";
+    TVM_FFI_ICHECK_EQ(256 % alignment, 0U) << "ROCM space is aligned at 256 bytes";
     void* ret;
     if (dev.device_type == kDLROCMHost) {
       VLOG(1) << "allocating " << nbytes << "bytes on host";
@@ -206,7 +205,7 @@ class ROCMDeviceAPI final : public DeviceAPI {
       ROCM_CALL(hipSetDevice(dev_to.device_id));
       GPUCopy(from, to, size, hipMemcpyHostToDevice, hip_stream);
     } else {
-      LOG(FATAL) << "expect copy from/to GPU or between GPU";
+      TVM_FFI_THROW(InternalError) << "expect copy from/to GPU or between GPU";
     }
   }
 
@@ -239,13 +238,14 @@ class ROCMDeviceAPI final : public DeviceAPI {
   }
 };
 
-typedef dmlc::ThreadLocalStore<ROCMThreadEntry> ROCMThreadStore;
-
 ROCMThreadEntry::ROCMThreadEntry() : pool(kDLROCM, ROCMDeviceAPI::Global()) {}
 
-ROCMThreadEntry* ROCMThreadEntry::ThreadLocal() { return ROCMThreadStore::Get(); }
+ROCMThreadEntry* ROCMThreadEntry::ThreadLocal() {
+  static thread_local ROCMThreadEntry inst;
+  return &inst;
+}
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed("device_api.rocm",
@@ -257,14 +257,14 @@ TVM_FFI_STATIC_INIT_BLOCK({
         DeviceAPI* ptr = ROCMDeviceAPI::Global();
         *rv = static_cast<void*>(ptr);
       });
-});
+}
 
 class ROCMTimerNode : public TimerNode {
  public:
   virtual void Start() {
     int device_id;
     ROCM_CALL(hipGetDevice(&device_id));
-    stream_ = TVMFFIEnvGetCurrentStream(kDLROCM, device_id);
+    stream_ = TVMFFIEnvGetStream(kDLROCM, device_id);
     ROCM_CALL(hipEventRecord(start_, static_cast<hipStream_t>(stream_)));
   }
   virtual void Stop() {
@@ -286,9 +286,7 @@ class ROCMTimerNode : public TimerNode {
     ROCM_CALL(hipEventCreate(&start_));
     ROCM_CALL(hipEventCreate(&stop_));
   }
-
-  static constexpr const char* _type_key = "runtime.rocm.ROCMTimerNode";
-  TVM_DECLARE_FINAL_OBJECT_INFO(ROCMTimerNode, TimerNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("runtime.rocm.ROCMTimerNode", ROCMTimerNode, TimerNode);
 
  private:
   hipEvent_t start_;
@@ -296,16 +294,17 @@ class ROCMTimerNode : public TimerNode {
   TVMStreamHandle stream_;
 };
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
-      .def("profiling.timer.rocm", [](Device dev) { return Timer(make_object<ROCMTimerNode>()); })
+      .def("runtime.timer.rocm",
+           [](Device dev) { return Timer(ffi::make_object<ROCMTimerNode>()); })
       .def("runtime.get_rocm_stream", []() {
         int device_id;
         ROCM_CALL(hipGetDevice(&device_id));
-        return static_cast<void*>(TVMFFIEnvGetCurrentStream(kDLROCM, device_id));
+        return static_cast<void*>(TVMFFIEnvGetStream(kDLROCM, device_id));
       });
-});
+}
 
 }  // namespace runtime
 }  // namespace tvm

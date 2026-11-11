@@ -24,10 +24,9 @@
 #ifndef TVM_RUNTIME_RPC_RPC_SESSION_H_
 #define TVM_RUNTIME_RPC_RPC_SESSION_H_
 
+#include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/runtime/device_api.h>
-#include <tvm/runtime/module.h>
-#include <tvm/runtime/object.h>
 
 #include <functional>
 #include <memory>
@@ -37,6 +36,16 @@
 
 namespace tvm {
 namespace runtime {
+
+/*!
+ * \brief Static FFI type index for `runtime::RPCObjectRef`.
+ *
+ * Allocated within the [kTVMFFIDynObjectBegin - 16, kTVMFFIDynObjectBegin)
+ * custom-static slot range. The sibling constant `kRuntimeDiscoDRef` lives in
+ * `tvm/runtime/disco/session.h` and uses `... - 14`; values must remain
+ * disjoint across this small reserved block.
+ */
+constexpr int32_t kRuntimeRPCObjectRef = TVMFFITypeIndex::kTVMFFIDynObjectBegin - 13;
 
 /*!
  * \brief The interface of all remote RPC sessions.
@@ -55,8 +64,8 @@ class RPCSession {
   /*! \brief Module handle in the remote. */
   using ModuleHandle = void*;
 
-  /*! \brief NDArray handle in the remote. */
-  using NDArrayHandle = void*;
+  /*! \brief Tensor handle in the remote. */
+  using TensorHandle = void*;
 
   /*!
    * \brief Callback to send an encoded return values via encode_args.
@@ -66,7 +75,7 @@ class RPCSession {
    * Encoding convention (as list of arguments):
    * - str/float/int/byte: [tcode: int, value: TVMValue] value follows ffi::Function convention.
    * - ffi::Function/Module: [tcode: int, handle: void*]
-   * - NDArray: [tcode: int,  meta: DLTensor*, nd_handle: void*]
+   * - Tensor: [tcode: int,  meta: DLTensor*, nd_handle: void*]
    *            DLTensor* contains the meta-data as well as handle into the remote data.
    *            nd_handle can be used for deletion.
    */
@@ -98,7 +107,7 @@ class RPCSession {
    *  - type_code is follows the ffi::Function convention.
    *  - int/float/string/bytes follows the ffi::Function convention, all data are local.
    *  - ffi::Function/Module and future remote objects: pass remote handle instead.
-   *  - NDArray/DLTensor: pass a DLTensor pointer, the data field of DLTensor
+   *  - Tensor/DLTensor: pass a DLTensor pointer, the data field of DLTensor
    *                      points to a remote data handle returned by the Device API.
    *                      The meta-data of the DLTensor sits on local.
    *
@@ -109,8 +118,8 @@ class RPCSession {
    *
    *  The callee need to store the return value into ret_value.
    *  - ffi::Function/Module are stored as void*
-   *  - NDArray is stored as local NDArray, whose data field is a remote handle.
-   *    Notably the NDArray's deleter won't delete remote handle.
+   *  - Tensor is stored as local Tensor, whose data field is a remote handle.
+   *    Notably the Tensor's deleter won't delete remote handle.
    *    It is up to the user of the RPCSession to such wrapping.
    *  - In short, remote handles are "moved" as return values
    *    and the callee needs to explicitly manage them by calling
@@ -281,12 +290,20 @@ struct RemoteSpace {
   void* data;
   /*! \brief Reference to the underlying RPC session. */
   std::shared_ptr<RPCSession> sess;
+  /*!
+   * \brief The remote Tensor object handle, if this RemoteSpace wraps a returned Tensor.
+   *
+   * Returned RPC Tensors carry both the backing data pointer and a Tensor object handle.  The
+   * object handle must be released with FreeHandle so the remote side can correctly decrement the
+   * Tensor refcount and free the backing storage when it is no longer shared.
+   */
+  void* object_handle{nullptr};
 };
 
 /*!
- * \brief Object wrapper that represents a reference to a remote object
+ * \brief ffi::Object wrapper that represents a reference to a remote object
  */
-class RPCObjectRefObj : public Object {
+class RPCObjectRefObj : public ffi::Object {
  public:
   /*!
    * \brief constructor
@@ -303,7 +320,7 @@ class RPCObjectRefObj : public Object {
     if (object_handle_ != nullptr && sess_ != nullptr) {
       try {
         sess_->FreeHandle(object_handle_);
-      } catch (const Error& e) {
+      } catch (const ffi::Error& e) {
         // fault tolerance to remote close
       }
       object_handle_ = nullptr;
@@ -314,10 +331,9 @@ class RPCObjectRefObj : public Object {
 
   void* object_handle() const { return object_handle_; }
 
-  static constexpr const uint32_t _type_index = TypeIndex::kRuntimeRPCObjectRef;
-  static constexpr const char* _type_key = "runtime.RPCObjectRef";
+  static constexpr const uint32_t _type_index = kRuntimeRPCObjectRef;
   static const constexpr bool _type_final = true;
-  TVM_FFI_DECLARE_STATIC_OBJECT_INFO(RPCObjectRefObj, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_STATIC("runtime.RPCObjectRef", RPCObjectRefObj, ffi::Object);
 
  private:
   // The object handle
@@ -331,9 +347,12 @@ class RPCObjectRefObj : public Object {
  * \sa RPCObjectRefObj
  * \note No public constructor is provided as it is not supposed to be directly created by users.
  */
-class RPCObjectRef : public ObjectRef {
+class RPCObjectRef : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(RPCObjectRef, ObjectRef, RPCObjectRefObj);
+  explicit RPCObjectRef(ffi::ObjectPtr<RPCObjectRefObj> data) : ffi::ObjectRef(data) {
+    TVM_FFI_ICHECK(data != nullptr);
+  }
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(RPCObjectRef, ffi::ObjectRef, RPCObjectRefObj);
 };
 
 /*!

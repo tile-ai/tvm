@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-/* eslint-disable no-undef */
 const path = require("path");
 const fs = require("fs");
 const assert = require("assert");
@@ -158,7 +157,7 @@ test("ExceptionPassing", () => {
   tvm.endScope();
 });
 
-test("NDArrayCbArg", () => {
+test("TensorCbArg", () => {
   tvm.beginScope();
   let use_count = tvm.getGlobalFunc("testing.object_use_count");
   let record = [];

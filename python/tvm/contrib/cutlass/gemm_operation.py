@@ -15,7 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=invalid-name, unused-wildcard-import, wildcard-import, pointless-exception-statement
+# ruff: noqa: E501, F403, F405
 """Generator for CUTLASS GEMM kernels."""
+
 from .library import *
 
 
@@ -58,7 +60,7 @@ class GemmOperation:
             self.tile_description.math_instruction.opcode_class == OpcodeClass.TensorOp
             or self.tile_description.math_instruction.opcode_class == OpcodeClass.WmmaTensorOp
         ):
-            inst_shape = "%d%d%d" % tuple(self.tile_description.math_instruction.instruction_shape)
+            inst_shape = "{}{}{}".format(*self.tile_description.math_instruction.instruction_shape)
             if (
                 self.tile_description.math_instruction.element_a != self.A.element
                 and self.tile_description.math_instruction.element_a
@@ -345,7 +347,7 @@ def instantiate_gemm_template(attrs):
   status = gemm_op.initialize(arguments, workspace.get());
   TVM_FFI_ICHECK(status == cutlass::Status::kSuccess);
 
-  cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetCurrentStream(kDLCUDA, ${A_arg}->device.device_id));
+  cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(kDLCUDA, ${A_arg}->device.device_id));
 
   status = gemm_op(stream);
   TVM_FFI_ICHECK(status == cutlass::Status::kSuccess);
@@ -428,7 +430,7 @@ def emit_fp16A_intB_matmul(attrs):
   int k = ${B_arg}->shape[0];
 
   cudaStream_t stream = static_cast<cudaStream_t>(
-    TVMFFIEnvGetCurrentStream(kDLCUDA, ${A_arg}->device.device_id));
+    TVMFFIEnvGetStream(kDLCUDA, ${A_arg}->device.device_id));
     """,
         attrs,
     )

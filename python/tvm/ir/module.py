@@ -16,13 +16,10 @@
 # under the License.
 """IRModule that holds the functions and type definitions."""
 
-from __future__ import annotations
+import tvm_ffi
 
-from typing import Dict, Union
-
-import tvm.ffi
-from tvm.runtime import Scriptable
-from tvm.runtime.object import Object
+import tvm
+from tvm.runtime import Object, Scriptable
 
 from . import _ffi_api
 from . import expr as _expr
@@ -30,7 +27,7 @@ from .attrs import DictAttrs
 from .base import Node
 
 
-@tvm.ffi.register_object("ir.IRModule")
+@tvm_ffi.register_object("ir.IRModule")
 class IRModule(Node, Scriptable):
     """IRModule that holds functions and type definitions.
 
@@ -66,6 +63,7 @@ class IRModule(Node, Scriptable):
             attrs,
             global_infos,
         )
+        self.pyfuncs = {}
 
     def clone(self) -> "IRModule":
         return _ffi_api.Module_Clone(self)
@@ -122,10 +120,10 @@ class IRModule(Node, Scriptable):
         assert isinstance(var, _expr.GlobalVar)
         return _ffi_api.Module_Lookup(self, var)
 
-    def __delitem__(self, var: Union[str, _expr.GlobalVar]):
+    def __delitem__(self, var: str | _expr.GlobalVar):
         _ffi_api.Module_Remove(self, var)
 
-    def __contains__(self, var: Union[str, _expr.GlobalVar]) -> bool:
+    def __contains__(self, var: str | _expr.GlobalVar) -> bool:
         return _ffi_api.Module_Contains(self, var)
 
     def update(self, other):
@@ -199,7 +197,7 @@ class IRModule(Node, Scriptable):
 
     def replace_global_vars(
         self,
-        replacements: Dict[Union[str, _expr.GlobalVar], Union[str, _expr.GlobalVar]],
+        replacements: dict[str | _expr.GlobalVar, str | _expr.GlobalVar],
     ) -> "IRModule":
         """Replace GlobalVar instances within the module
 
@@ -295,7 +293,7 @@ class IRModule(Node, Scriptable):
 
         return _ffi_api.Module_WithoutAttr(self, attr_key)
 
-    def with_attrs(self, attr_map: Union[DictAttrs, Dict[str, Object]]) -> "IRModule":
+    def with_attrs(self, attr_map: DictAttrs | dict[str, Object]) -> "IRModule":
         """Copy the IRModule and add the given attribute map to it.
         Parameters
         ----------

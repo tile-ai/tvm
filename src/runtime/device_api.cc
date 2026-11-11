@@ -21,7 +21,7 @@
  * \file device_api.cc
  * \brief Device specific implementations
  */
-#include <tvm/ffi/container/ndarray.h>
+#include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/optional.h>
@@ -31,12 +31,12 @@
 #include <tvm/runtime/base.h>
 #include <tvm/runtime/c_backend_api.h>
 #include <tvm/runtime/device_api.h>
-#include <tvm/runtime/module.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -85,7 +85,7 @@ class DeviceAPIManager {
     std::string factory = "device_api." + name;
     const auto f = tvm::ffi::Function::GetGlobal(factory);
     if (!f.has_value()) {
-      ICHECK(allow_missing) << "Device API " << name << " is not enabled.";
+      TVM_FFI_ICHECK(allow_missing) << "Device API " << name << " is not enabled.";
       return nullptr;
     }
     void* ptr = (*f)().cast<void*>();
@@ -107,7 +107,7 @@ static size_t GetDataAlignment(const DLDataType dtype) {
   return align;
 }
 
-size_t DeviceAPI::GetDataSize(const DLTensor& arr, Optional<String> mem_scope) {
+size_t DeviceAPI::GetDataSize(const DLTensor& arr, ffi::Optional<ffi::String> mem_scope) {
   if (!mem_scope.has_value() || mem_scope.value().empty() || mem_scope.value() == "global") {
     size_t size = 1;
     for (int i = 0; i < arr.ndim; ++i) {
@@ -115,13 +115,13 @@ size_t DeviceAPI::GetDataSize(const DLTensor& arr, Optional<String> mem_scope) {
     }
     return ffi::GetDataSize(size, arr.dtype);
   }
-  LOG(FATAL) << "Device does not support physical mem computation with "
-             << "specified memory scope: " << mem_scope.value();
+  TVM_FFI_THROW(InternalError) << "Device does not support physical mem computation with "
+                               << "specified memory scope: " << mem_scope.value();
   return 0;
 }
 
 void* DeviceAPI::AllocDataSpace(Device dev, int ndim, const int64_t* shape, DLDataType dtype,
-                                Optional<String> mem_scope) {
+                                ffi::Optional<ffi::String> mem_scope) {
   if (!mem_scope.has_value() || mem_scope.value().empty() || mem_scope.value() == "global") {
     // by default, we can always redirect to the flat memory allocations
     DLTensor temp;
@@ -132,21 +132,21 @@ void* DeviceAPI::AllocDataSpace(Device dev, int ndim, const int64_t* shape, DLDa
     temp.shape = const_cast<int64_t*>(shape);
     temp.strides = nullptr;
     temp.byte_offset = 0;
-    size_t size = GetDataSize(temp);
+    size_t size = ffi::GetDataSize(temp);
     size_t alignment = GetDataAlignment(temp.dtype);
     return AllocDataSpace(dev, size, alignment, dtype);
   }
-  LOG(FATAL) << "Device does not support allocate data space with "
-             << "specified memory scope: " << mem_scope.value();
+  TVM_FFI_THROW(InternalError) << "Device does not support allocate data space with "
+                               << "specified memory scope: " << mem_scope.value();
   return nullptr;
 }
 
 void DeviceAPI::CopyDataFromTo(DLTensor* from, DLTensor* to, TVMStreamHandle stream) {
   // by default, we can always redirect to the flat memory copy operation.
-  size_t nbytes = GetDataSize(*from);
-  ICHECK_EQ(nbytes, GetDataSize(*to));
+  size_t nbytes = ffi::GetDataSize(*from);
+  TVM_FFI_ICHECK_EQ(nbytes, ffi::GetDataSize(*to));
 
-  ICHECK(ffi::IsContiguous(*from) && ffi::IsContiguous(*to))
+  TVM_FFI_ICHECK(ffi::IsContiguous(*from) && ffi::IsContiguous(*to))
       << "CopyDataFromTo only support contiguous array for now";
   CopyDataFromTo(from->data, from->byte_offset, to->data, to->byte_offset, nbytes, from->device,
                  to->device, from->dtype, stream);
@@ -155,7 +155,7 @@ void DeviceAPI::CopyDataFromTo(DLTensor* from, DLTensor* to, TVMStreamHandle str
 void DeviceAPI::CopyDataFromTo(const void* from, size_t from_offset, void* to, size_t to_offset,
                                size_t num_bytes, Device dev_from, Device dev_to,
                                DLDataType type_hint, TVMStreamHandle stream) {
-  LOG(FATAL) << "Device does not support CopyDataFromTo.";
+  TVM_FFI_THROW(InternalError) << "Device does not support CopyDataFromTo.";
 }
 
 void DeviceAPI::FreeWorkspace(Device dev, void* ptr) { FreeDataSpace(dev, ptr); }
@@ -169,13 +169,13 @@ void DeviceAPI::SetStream(Device dev, TVMStreamHandle stream) {
 }
 
 TVMStreamHandle DeviceAPI::GetCurrentStream(Device dev) {
-  return TVMFFIEnvGetCurrentStream(dev.device_type, dev.device_id);
+  return TVMFFIEnvGetStream(dev.device_type, dev.device_id);
 }
 
 void DeviceAPI::SyncStreamFromTo(Device dev, TVMStreamHandle event_src, TVMStreamHandle event_dst) {
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def("runtime.Device_StreamCreate",
@@ -198,10 +198,10 @@ TVM_FFI_STATIC_INIT_BLOCK({
         DeviceAPIManager::Get(dev)->SyncStreamFromTo(dev, reinterpret_cast<TVMStreamHandle>(src),
                                                      reinterpret_cast<TVMStreamHandle>(dst));
       });
-});
+}
 
 // set device api
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef()
       .def_packed(tvm::runtime::symbol::tvm_set_device,
@@ -235,7 +235,7 @@ TVM_FFI_STATIC_INIT_BLOCK({
         dev.device_id = device_id;
         DeviceAPIManager::Get(dev)->SetStream(dev, stream);
       });
-});
+}
 }  // namespace runtime
 }  // namespace tvm
 

@@ -275,7 +275,7 @@ void DocPrinter::Append(const Doc& doc, const PrinterConfig& cfg) {
   }
 }
 
-String DocPrinter::GetString() const {
+ffi::String DocPrinter::GetString() const {
   std::string text = output_.str();
 
   // Remove any trailing indentation
@@ -343,7 +343,7 @@ void DocPrinter::PrintDoc(const Doc& doc) {
   } else if (auto doc_node = doc.as<DocStringDoc>()) {
     PrintTypedDoc(doc_node.value());
   } else {
-    LOG(FATAL) << "Do not know how to print " << doc->GetTypeKey();
+    TVM_FFI_THROW(InternalError) << "Do not know how to print " << doc->GetTypeKey();
     throw;
   }
 

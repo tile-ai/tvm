@@ -15,15 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 import itertools
-from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import pytest
 import torch
+import tvm_ffi
+from tvm_ffi import Shape
 
 import tvm
 import tvm.testing
-from tvm import dlight as dl
 from tvm.relax.frontend.nn.llm.kv_cache import (
     AttnKind,
     RopeMode,
@@ -34,7 +34,7 @@ from tvm.relax.frontend.nn.llm.kv_cache import (
     _kv_cache_transpose_append_mla,
     _merge_state_inplace,
 )
-from tvm.runtime import ShapeTuple
+from tvm.s_tir import dlight as dl
 
 reserved_nseq = 32
 maximum_total_seq_length = 2048
@@ -79,7 +79,7 @@ w_uv = None
 
 
 # Register a dumb function for testing purpose.
-@tvm.register_func("test.dumb_function", override=True)
+@tvm.register_global_func("test.dumb_function", override=True)
 def _dumb_function():
     raise RuntimeError("Dumb function isn't supposed to be accessed.")
 
@@ -133,8 +133,8 @@ def set_global_func(dtype):
         mod = tvm.IRModule({"main": tir_func})
         with target:
             mod = dl.ApplyDefaultSchedule(dl.gpu.Fallback())(mod)
-        f = tvm.tir.build(mod["main"], target=target)
-        builts.append(f.entry_func)
+        f = tvm.tirx.build(mod["main"], target=target)
+        builts.append(f.main)
 
     (
         ftranspose_append,
@@ -165,7 +165,7 @@ def create_kv_cache(dtype):
     fcreate = tvm.get_global_func("vm.builtin.paged_attention_kv_cache_create")
     fdumb = tvm.get_global_func("test.dumb_function")
     cache = fcreate(
-        tvm.runtime.ShapeTuple(
+        tvm_ffi.Shape(
             [
                 reserved_nseq,
                 maximum_total_seq_length,
@@ -174,28 +174,28 @@ def create_kv_cache(dtype):
                 0,
             ]
         ),
-        tvm.runtime.ShapeTuple([0, num_layers]),
+        tvm_ffi.Shape([0, num_layers]),
         num_attention_heads,
         1,  # num_kv_heads
         kv_lora_rank + qk_rope_head_dim,
         kv_lora_rank,
-        tvm.runtime.ShapeTuple([int(AttnKind.MLA) for _ in range(num_layers)]),
+        tvm_ffi.Shape([int(AttnKind.MLA) for _ in range(num_layers)]),
         False,  # enable_kv_transfer
         RopeMode.NONE,
         1,
         10000,
         None,  # rope_ext_factors
-        tvm.nd.empty((), dtype, device=device),
+        tvm.runtime.empty((), dtype, device=device),
         None,  # f_transpose_append_mha
         ftranspose_append,
-        ["tir", fmla_prefill_ragged],  # fattn_prefill_ragged
+        ["tirx", fmla_prefill_ragged],  # fattn_prefill_ragged
         [],  # fattn_prefill
         [],  # fattn_decode
         [],  # fattn_prefill_sliding_window
         [],  # fattn_decode_sliding_window
         [],  # fattn_prefill_with_tree_mask_paged_kv_cache
         [],  # fattn_prefill_with_tree_mask
-        ["tir", fmla_prefill],
+        ["tirx", fmla_prefill],
         [fmerge_state, fmerge_state_additional],
         fdumb,  # fsplit_rotary
         fcopy_single_page,
@@ -218,7 +218,7 @@ def verify_cached_kv(kv_cache, seq_ids, expected_kv):
     for seq_id in seq_ids:
         kv_expected = expected_kv[seq_id]
         seq_length = expected_kv[seq_id].shape[1]
-        kv_actual = tvm.nd.empty(kv_expected.shape, dtype=dtype, device=device)
+        kv_actual = tvm.runtime.empty(kv_expected.shape, dtype=dtype, device=device)
         fdebug_get_kv(kv_cache, seq_id, 0, seq_length, kv_actual)
         torch.testing.assert_close(
             torch.from_numpy(kv_actual.numpy()).to(device_torch), kv_expected, rtol=1e-3, atol=1e-3
@@ -227,8 +227,8 @@ def verify_cached_kv(kv_cache, seq_ids, expected_kv):
 
 def apply_attention(
     kv_cache,
-    batch: List[Tuple[Union[int, Tuple[int, int, int]], int]],
-    cached_kv: Dict[int, torch.Tensor],
+    batch: list[tuple[int | tuple[int, int, int], int]],
+    cached_kv: dict[int, torch.Tensor],
 ) -> None:
     seq_ids = []
     append_lengths = []
@@ -256,7 +256,7 @@ def apply_attention(
                 device=device_torch,
             )
 
-    fbegin_forward(kv_cache, ShapeTuple(seq_ids), ShapeTuple(append_lengths), None)
+    fbegin_forward(kv_cache, Shape(seq_ids), Shape(append_lengths), None)
 
     global_new_q = torch.zeros(
         (num_layers, 0, num_attention_heads, qk_nope_head_dim + qk_rope_head_dim),
@@ -301,17 +301,17 @@ def apply_attention(
             is_decode_request = False
 
     for layer_id in range(num_layers):
-        queries = tvm.nd.array(global_new_q[layer_id].cpu().numpy(), device)
-        key_value = tvm.nd.array(global_new_kv[layer_id].cpu().numpy(), device)
+        queries = tvm.runtime.tensor(global_new_q[layer_id].cpu().numpy(), device)
+        key_value = tvm.runtime.tensor(global_new_kv[layer_id].cpu().numpy(), device)
         total_seq_length = global_new_q[layer_id].shape[0]
-        outputs1 = tvm.nd.empty(
+        outputs1 = tvm.runtime.empty(
             (total_seq_length, num_attention_heads, v_head_dim), dtype, device=device
         )
-        lse1 = tvm.nd.empty((total_seq_length, num_attention_heads), "float32", device=device)
-        outputs2 = tvm.nd.empty(
+        lse1 = tvm.runtime.empty((total_seq_length, num_attention_heads), "float32", device=device)
+        outputs2 = tvm.runtime.empty(
             (total_seq_length, num_attention_heads, kv_lora_rank), dtype, device=device
         )
-        lse2 = tvm.nd.empty((total_seq_length, num_attention_heads), "float32", device=device)
+        lse2 = tvm.runtime.empty((total_seq_length, num_attention_heads), "float32", device=device)
 
         fappend_mla_kv(kv_cache, layer_id, key_value)
         if not is_decode_request:
@@ -328,8 +328,8 @@ def apply_attention(
                 total_seq_length, num_attention_heads, qk_rope_head_dim
             )
             keys = torch.cat([keys, k_pe_expanded], dim=2)
-            keys_tvm = tvm.nd.array(keys.cpu().numpy(), device)
-            values_tvm = tvm.nd.array(values.cpu().numpy(), device)
+            keys_tvm = tvm.runtime.tensor(keys.cpu().numpy(), device)
+            values_tvm = tvm.runtime.tensor(values.cpu().numpy(), device)
             fself_attn(kv_cache, layer_id, sm_scale, queries, keys_tvm, values_tvm, outputs1, lse1)
 
         if not all_new_sequences or is_decode_request:
@@ -340,9 +340,9 @@ def apply_attention(
             queries_lora_np = torch.cat(
                 [torch.bmm(queries_lora_np.permute(1, 0, 2), w_uk).permute(1, 0, 2), q_pe], dim=2
             )
-            queries_lora = tvm.nd.array(queries_lora_np.cpu().numpy(), device)
+            queries_lora = tvm.runtime.tensor(queries_lora_np.cpu().numpy(), device)
             fcross_attn(kv_cache, layer_id, sm_scale, queries_lora, outputs2, lse2)
-            cross_attn_output = tvm.nd.array(
+            cross_attn_output = tvm.runtime.tensor(
                 torch.bmm(
                     torch.from_numpy(outputs2.numpy()).to(device_torch).permute(1, 0, 2), w_uv
                 )

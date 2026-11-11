@@ -24,7 +24,7 @@ import numpy as np
 import tvm
 import tvm.testing
 from tvm.runtime import Executable
-from tvm.script import tir as T
+from tvm.script import tirx as T
 
 
 @tvm.script.ir_module
@@ -41,7 +41,7 @@ class MyModule:
 
 def test_executable_init():
     """Test initialization of Executable class."""
-    lib = tvm.tir.build(MyModule, target="llvm")
+    lib = tvm.tirx.build(MyModule, target="llvm")
     executable = Executable(lib)
 
     assert executable.mod is lib
@@ -50,7 +50,7 @@ def test_executable_init():
 
 def test_executable_getitem():
     """Test __getitem__ method of Executable class."""
-    lib = tvm.tir.build(MyModule, target="llvm")
+    lib = tvm.tirx.build(MyModule, target="llvm")
     executable = Executable(lib)
 
     # Jit the module first
@@ -60,9 +60,9 @@ def test_executable_getitem():
     add_func = executable["add"]
 
     # Verify the function works
-    a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-    b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-    c = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+    a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+    b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+    c = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
     add_func(a, b, c)
 
@@ -72,7 +72,7 @@ def test_executable_getitem():
 
 def test_executable_jit_already_jitted():
     """Test jit method when module is already jitted."""
-    lib = tvm.tir.build(MyModule, target="llvm")
+    lib = tvm.tirx.build(MyModule, target="llvm")
     executable = Executable(lib)
 
     # First jit call
@@ -87,10 +87,10 @@ def test_executable_jit_already_jitted():
     # The module might be different after force recompilation
 
     # Verify both modules work correctly
-    a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-    b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-    c1 = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
-    c2 = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+    a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+    b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+    c1 = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
+    c2 = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
     jitted_mod1["add"](a, b, c1)
     jitted_mod3["add"](a, b, c2)
@@ -101,7 +101,7 @@ def test_executable_jit_already_jitted():
 
 def test_executable_export_library():
     """Test export_library method."""
-    lib = tvm.tir.build(MyModule, target="llvm")
+    lib = tvm.tirx.build(MyModule, target="llvm")
     executable = Executable(lib)
 
     # Create a temporary directory for the library
@@ -118,9 +118,9 @@ def test_executable_export_library():
         assert loaded_mod is not None
 
         # Test the loaded module
-        a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-        b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-        c = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+        a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+        b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+        c = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
         loaded_mod["add"](a, b, c)
 
@@ -136,7 +136,7 @@ def test_executable_export_library():
 
 def test_executable_export_library_with_workspace():
     """Test export_library method with workspace_dir."""
-    lib = tvm.tir.build(MyModule, target="llvm")
+    lib = tvm.tirx.build(MyModule, target="llvm")
     executable = Executable(lib)
 
     # Create temporary directories
@@ -155,9 +155,9 @@ def test_executable_export_library_with_workspace():
         assert loaded_mod is not None
 
         # Test the loaded module
-        a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-        b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-        c = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+        a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+        b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+        c = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
         loaded_mod["add"](a, b, c)
 
@@ -176,7 +176,7 @@ def test_executable_integration():
     """Integration test for Executable with a simple TVM module."""
     # Create target and build
     target = tvm.target.Target("llvm")
-    lib = tvm.tir.build(MyModule, target=target)
+    lib = tvm.tirx.build(MyModule, target=target)
 
     # Create an executable
     executable = Executable(lib)
@@ -190,9 +190,9 @@ def test_executable_integration():
     assert add_func is not None
 
     # Test the function works
-    a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-    b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-    c = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+    a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+    b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+    c = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
     add_func(a, b, c)
 
@@ -214,7 +214,7 @@ def test_executable_integration():
 
         # Test the loaded module
         loaded_add = loaded_mod["add"]
-        c_loaded = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+        c_loaded = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
         loaded_add(a, b, c_loaded)
 
         # Check results
@@ -232,7 +232,7 @@ def test_executable_jit_force_recompile():
     """Test jit method with force_recompile=True."""
     # Create target and build
     target = tvm.target.Target("c")
-    lib = tvm.tir.build(MyModule, target=target)
+    lib = tvm.tirx.build(MyModule, target=target)
 
     # Create an executable
     executable = Executable(lib)
@@ -249,9 +249,9 @@ def test_executable_jit_force_recompile():
     assert jitted_mod3 is not jitted_mod1
 
     # Test the function works
-    a = tvm.nd.array(np.array([1.0] * 10, dtype="float32"))
-    b = tvm.nd.array(np.array([2.0] * 10, dtype="float32"))
-    c = tvm.nd.array(np.array([0.0] * 10, dtype="float32"))
+    a = tvm.runtime.tensor(np.array([1.0] * 10, dtype="float32"))
+    b = tvm.runtime.tensor(np.array([2.0] * 10, dtype="float32"))
+    c = tvm.runtime.tensor(np.array([0.0] * 10, dtype="float32"))
 
     jitted_mod3["add"](a, b, c)
 

@@ -22,17 +22,18 @@
  * \brief Utility to deduce bound of expression
  */
 #include <tvm/arith/int_solver.h>
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/analysis.h>
-#include <tvm/tir/expr.h>
-#include <tvm/tir/op.h>
-#include <tvm/tir/stmt_functor.h>
+#include <tvm/tirx/analysis.h>
+#include <tvm/tirx/expr.h>
+#include <tvm/tirx/op.h>
+#include <tvm/tirx/stmt_functor.h>
 
 namespace tvm {
 namespace arith {
 
-using namespace tir;
+using namespace tirx;
 
 /* \brief Given a true expression that includes free parameter,
  * generate a true expression without the free parameters.
@@ -48,19 +49,19 @@ using namespace tir;
  */
 // Utility for generating a known true expression from an expression
 // with free parameters, and the range of those parameters.
-class ExpressionNarrower : public tir::ExprMutator {
+class ExpressionNarrower : public tirx::ExprMutator {
  public:
-  static PrimExpr Apply(PrimExpr expr, Map<Var, Range> free_parameters) {
-    ICHECK(expr.dtype().is_bool()) << "Expected boolean expression, but received " << expr;
+  static PrimExpr Apply(PrimExpr expr, ffi::Map<Var, Range> free_parameters) {
+    TVM_FFI_ICHECK(expr.dtype().is_bool()) << "Expected boolean expression, but received " << expr;
     ExpressionNarrower mutator(free_parameters);
     return mutator(expr);
   }
 
  private:
-  explicit ExpressionNarrower(Map<Var, Range> free_parameters)
+  explicit ExpressionNarrower(ffi::Map<Var, Range> free_parameters)
       : free_parameters_(free_parameters) {}
 
-  using Parent = tir::ExprMutator;
+  using Parent = tirx::ExprMutator;
   using Parent::VisitExpr_;
 
   enum class Context {
@@ -111,22 +112,22 @@ class ExpressionNarrower : public tir::ExprMutator {
 
   PrimExpr VisitExpr_(const GTNode* op) override {
     auto current = CurrentContext();
-    return VisitInequality(GetRef<GT>(op), OppositeContext(current), current);
+    return VisitInequality(ffi::GetRef<GT>(op), OppositeContext(current), current);
   }
 
   PrimExpr VisitExpr_(const GENode* op) override {
     auto current = CurrentContext();
-    return VisitInequality(GetRef<GE>(op), OppositeContext(current), current);
+    return VisitInequality(ffi::GetRef<GE>(op), OppositeContext(current), current);
   }
 
   PrimExpr VisitExpr_(const LTNode* op) override {
     auto current = CurrentContext();
-    return VisitInequality(GetRef<LT>(op), current, OppositeContext(current));
+    return VisitInequality(ffi::GetRef<LT>(op), current, OppositeContext(current));
   }
 
   PrimExpr VisitExpr_(const LENode* op) override {
     auto current = CurrentContext();
-    return VisitInequality(GetRef<LE>(op), current, OppositeContext(current));
+    return VisitInequality(ffi::GetRef<LE>(op), current, OppositeContext(current));
   }
 
   PrimExpr VisitExpr_(const EQNode* op) override {
@@ -143,7 +144,7 @@ class ExpressionNarrower : public tir::ExprMutator {
 
   PrimExpr VisitExpr_(const SubNode* op) override {
     auto current = CurrentContext();
-    return VisitInequality(GetRef<Sub>(op), current, OppositeContext(current));
+    return VisitInequality(ffi::GetRef<Sub>(op), current, OppositeContext(current));
   }
 
   PrimExpr VisitExpr_(const NotNode* op) override {
@@ -154,11 +155,11 @@ class ExpressionNarrower : public tir::ExprMutator {
 
   PrimExpr VisitExpr_(const BufferLoadNode* op) override {
     contains_unknown_expr_ = true;
-    return GetRef<PrimExpr>(op);
+    return ffi::GetRef<PrimExpr>(op);
   }
 
   PrimExpr VisitExpr_(const VarNode* op) override {
-    auto it = free_parameters_.find(GetRef<Var>(op));
+    auto it = free_parameters_.find(ffi::GetRef<Var>(op));
     if (it == free_parameters_.end()) {
       return Parent::VisitExpr_(op);
     }
@@ -193,7 +194,7 @@ class ExpressionNarrower : public tir::ExprMutator {
         return Context::Minimize;
 
       default:
-        LOG(FATAL) << "Unhandled Context, all legal values should be handled";
+        TVM_FFI_THROW(InternalError) << "Unhandled Context, all legal values should be handled";
     }
   }
 
@@ -206,18 +207,18 @@ class ExpressionNarrower : public tir::ExprMutator {
   };
 
   std::vector<Context> context_stack_;
-  Map<Var, Range> free_parameters_;
+  ffi::Map<Var, Range> free_parameters_;
   bool contains_unknown_expr_{false};
 };
 
-PrimExpr NarrowPredicateExpression(PrimExpr expr, Map<Var, Range> free_parameters) {
+PrimExpr NarrowPredicateExpression(PrimExpr expr, ffi::Map<Var, Range> free_parameters) {
   return ExpressionNarrower::Apply(std::move(expr), std::move(free_parameters));
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("arith.NarrowPredicateExpression", NarrowPredicateExpression);
-});
+}
 
 }  // namespace arith
 }  // namespace tvm

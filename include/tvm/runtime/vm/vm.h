@@ -23,10 +23,6 @@
 #ifndef TVM_RUNTIME_VM_VM_H_
 #define TVM_RUNTIME_VM_VM_H_
 
-#ifndef TVM_VM_ENABLE_PROFILER
-#define TVM_VM_ENABLE_PROFILER 1
-#endif
-
 #include <tvm/ffi/extra/module.h>
 
 #include <memory>
@@ -62,13 +58,13 @@ enum class VMInstrumentReturnKind : int {
 /*!
  * \brief An object representing a vm closure.
  */
-class VMClosureObj : public Object {
+class VMClosureObj : public ffi::Object {
  public:
   /*!
    * \brief The function name. The function could be any
    * function object that is compatible to the VM runtime.
    */
-  String func_name;
+  ffi::String func_name;
 
   /*!
    * \brief The implementation of the Closure.
@@ -77,16 +73,14 @@ class VMClosureObj : public Object {
    *       the same arguments as the normal function call.
    */
   ffi::Function impl;
-
-  static constexpr const char* _type_key = "relax.vm.Closure";
-  TVM_DECLARE_FINAL_OBJECT_INFO(VMClosureObj, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("relax.vm.Closure", VMClosureObj, ffi::Object);
 };
 
 /*! \brief reference to closure. */
-class VMClosure : public ObjectRef {
+class VMClosure : public ffi::ObjectRef {
  public:
-  VMClosure(String func_name, ffi::Function impl);
-  TVM_DEFINE_OBJECT_REF_METHODS(VMClosure, ObjectRef, VMClosureObj);
+  VMClosure(ffi::String func_name, ffi::Function impl);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(VMClosure, ffi::ObjectRef, VMClosureObj);
 
   /*!
    * \brief Create another ffi::Function with last arguments already bound to last_args.
@@ -107,16 +101,15 @@ class VMClosure : public ObjectRef {
  *
  * This is the base class for all VM extensions and should not be used directly.
  */
-class VMExtensionNode : public Object {
+class VMExtensionNode : public ffi::Object {
  protected:
-  static constexpr const char* _type_key = "runtime.VMExtension";
-  TVM_DECLARE_BASE_OBJECT_INFO(VMExtensionNode, Object);
+  TVM_FFI_DECLARE_OBJECT_INFO("runtime.VMExtension", VMExtensionNode, ffi::Object);
 };
 
 /*! \brief Managed reference to VM extension. */
-class VMExtension : public ObjectRef {
+class VMExtension : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_OBJECT_REF_METHODS(VMExtension, ObjectRef, VMExtensionNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(VMExtension, ffi::ObjectRef, VMExtensionNode);
 };
 
 /*!
@@ -143,21 +136,21 @@ class VirtualMachine : public ffi::ModuleObj {
    * \brief Load the executable for the virtual machine.
    * \param exec The executable.
    */
-  virtual void LoadExecutable(ObjectPtr<VMExecutable> exec) = 0;
+  virtual void LoadExecutable(ffi::ObjectPtr<VMExecutable> exec) = 0;
   /*!
    * \brief Get global function in the VM.
    * \param func_name The name of the function.
    * \return The closure
    */
-  virtual VMClosure GetClosure(const String& func_name) = 0;
+  virtual VMClosure GetClosure(const ffi::String& func_name) = 0;
   /*!
    * \brief Invoke closure or packed function using ffi::Function convention.
    * \param closure_or_packedfunc A VM closure or a packed_func.
    * \param args The input arguments.
    * \param rv The return value.
    */
-  virtual void InvokeClosurePacked(const ObjectRef& closure_or_packedfunc, ffi::PackedArgs args,
-                                   ffi::Any* rv) = 0;
+  virtual void InvokeClosurePacked(const ffi::ObjectRef& closure_or_packedfunc,
+                                   ffi::PackedArgs args, ffi::Any* rv) = 0;
   /*!
    * \brief Set an instrumentation function.
    *
@@ -203,12 +196,7 @@ class VirtualMachine : public ffi::ModuleObj {
    * \brief Create a specific instance of VM.
    * \return Created VM
    */
-  static ObjectPtr<VirtualMachine> Create();
-  /*!
-   * \brief Create an instance of VM with the profiling feature enabled.
-   * \return Created VM
-   */
-  static ObjectPtr<VirtualMachine> CreateProfiler();
+  static ffi::ObjectPtr<VirtualMachine> Create();
   /*!
    * \brief Helper function for vm closure functions to get the context ptr
    * \param arg The argument value.

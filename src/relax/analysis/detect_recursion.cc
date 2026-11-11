@@ -24,10 +24,11 @@
  * \brief Analysis to detect global recursive or mutually recursive functions.
  */
 
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr_functor.h>
-#include <tvm/tir/expr_functor.h>
+#include <tvm/tirx/expr_functor.h>
 
 namespace tvm {
 namespace relax {
@@ -87,7 +88,7 @@ class DependencyGatherer : public ExprVisitor {
 
   void VisitExpr_(const GlobalVarNode* gv) override {
     // disregard PrimFuncs
-    if (!m_->Lookup(GetRef<GlobalVar>(gv)).as<relax::FunctionNode>()) {
+    if (!m_->Lookup(ffi::GetRef<GlobalVar>(gv)).as<relax::FunctionNode>()) {
       return;
     }
     deps_.insert(gv->name_hint);
@@ -111,7 +112,7 @@ adjacency_map GatherDependencyGraph(const IRModule& m) {
       continue;
     }
     std::string name = gv_func.first->name_hint;
-    auto deps = DependencyGatherer(m).Track(GetRef<relax::Function>(func));
+    auto deps = DependencyGatherer(m).Track(ffi::GetRef<relax::Function>(func));
     ret.insert({name, deps});
   }
   return ret;
@@ -369,7 +370,7 @@ std::vector<node_set> CoalesceCircuits(const std::vector<node_set>& circuits) {
   return ret;
 }
 
-tvm::Array<tvm::Array<GlobalVar>> DetectRecursion(const IRModule& m) {
+tvm::ffi::Array<tvm::ffi::Array<GlobalVar>> DetectRecursion(const IRModule& m) {
   auto graph = GatherDependencyGraph(m);
 
   // have to decide on some ordering for names
@@ -382,9 +383,9 @@ tvm::Array<tvm::Array<GlobalVar>> DetectRecursion(const IRModule& m) {
   auto groups = CoalesceCircuits(DetectElementaryCircuits(indices));
 
   // convert to expected representation
-  tvm::Array<tvm::Array<GlobalVar>> ret;
+  tvm::ffi::Array<tvm::ffi::Array<GlobalVar>> ret;
   for (auto group : groups) {
-    tvm::Array<GlobalVar> found;
+    tvm::ffi::Array<GlobalVar> found;
     for (size_t node : group) {
       found.push_back(m->GetGlobalVar(name_ordering[node]));
     }
@@ -393,10 +394,10 @@ tvm::Array<tvm::Array<GlobalVar>> DetectRecursion(const IRModule& m) {
   return ret;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.analysis.detect_recursion", DetectRecursion);
-});
+}
 
 }  // namespace relax
 }  // namespace tvm

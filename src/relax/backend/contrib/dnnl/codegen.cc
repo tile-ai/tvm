@@ -21,6 +21,7 @@
  * \file src/relax/backend/contrib/dnnl/codegen.cc
  * \brief Implementation of the DNNL JSON serializer.
  */
+#include <tvm/ffi/cast.h>
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 
@@ -40,19 +41,19 @@ using backend::contrib::NodeEntries;
 
 class DNNLJSONSerializer : public JSONSerializer {
  public:
-  DNNLJSONSerializer(Map<Constant, String> constant_names, Map<Var, Expr> bindings)
+  DNNLJSONSerializer(ffi::Map<Constant, ffi::String> constant_names, ffi::Map<Var, Expr> bindings)
       : JSONSerializer(constant_names), bindings_(bindings) {}
 
   using JSONSerializer::VisitExpr_;
 
   NodeEntries VisitExpr_(const CallNode* call_node) final {
     const auto* fn_var = call_node->op.as<VarNode>();
-    ICHECK(fn_var);
-    const auto fn = Downcast<Function>(bindings_[GetRef<Var>(fn_var)]);
-    ICHECK(fn.defined()) << "Expects the callee to be a function.";
+    TVM_FFI_ICHECK(fn_var);
+    const auto fn = Downcast<Function>(bindings_[ffi::GetRef<Var>(fn_var)]);
+    TVM_FFI_ICHECK(fn.defined()) << "Expects the callee to be a function.";
 
-    auto composite_opt = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(composite_opt.has_value()) << "Only composite functions are supported.";
+    auto composite_opt = fn->GetAttr<ffi::String>(attr::kComposite);
+    TVM_FFI_ICHECK(composite_opt.has_value()) << "Only composite functions are supported.";
 
     std::string composite_name = composite_opt.value();
 
@@ -69,21 +70,22 @@ class DNNLJSONSerializer : public JSONSerializer {
     if (composite_name.find("conv2d") != std::string::npos) {
       root_call = backend::GetOpInFunction(fn, "relax.nn.conv2d");
     } else {
-      LOG(FATAL) << "Unimplemented pattern: " << composite_name;
+      TVM_FFI_THROW(InternalError) << "Unimplemented pattern: " << composite_name;
     }
 
     SetCallNodeAttribute(node, root_call);
-    return AddNode(node, GetRef<Expr>(call_node));
+    return AddNode(node, ffi::GetRef<Expr>(call_node));
   }
 
  private:
   /*! \brief The bindings to look up composite functions. */
-  Map<Var, Expr> bindings_;
+  ffi::Map<Var, Expr> bindings_;
 };
 
-Array<ffi::Module> DNNLCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
-                                Map<Constant, String> constant_names) {
-  Array<ffi::Module> compiled_functions;
+ffi::Array<ffi::Module> DNNLCompiler(ffi::Array<Function> functions,
+                                     ffi::Map<ffi::String, ffi::Any> /*unused*/,
+                                     ffi::Map<Constant, ffi::String> constant_names) {
+  ffi::Array<ffi::Module> compiled_functions;
 
   for (const auto& func : functions) {
     DNNLJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
@@ -98,10 +100,10 @@ Array<ffi::Module> DNNLCompiler(Array<Function> functions, Map<String, ffi::Any>
   return compiled_functions;
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.ext.dnnl", DNNLCompiler);
-});
+}
 
 }  // namespace contrib
 }  // namespace relax

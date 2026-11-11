@@ -78,12 +78,10 @@ endif()
 
 
 if(NOT USE_HEXAGON)
-  # If nothing related to Hexagon is enabled, add phony Hexagon codegen,
-  # and some stuff needed by cpptests (this part is a temporary workaround
-  # until e2e support for Hexagon is enabled).
-  if(BUILD_FOR_HOST)
-    list(APPEND COMPILER_SRCS src/target/opt/build_hexagon_off.cc)
-  endif()
+  # USE_HEXAGON=OFF: codegen still works through the per-backend fallback
+  # module (src/target/hexagon/hexagon_fallback_module.cc), which is always
+  # compiled into libtvm via CODEGEN_SRCS.  No opt-stub registration is
+  # needed.
   return()
 endif()
 
@@ -142,15 +140,6 @@ if(${supported_arch_index} EQUAL -1)
 endif()
 
 if(BUILD_FOR_HEXAGON)
-  if(DEFINED USE_HEXAGON_GTEST AND EXISTS ${USE_HEXAGON_GTEST})
-    file_glob_append(RUNTIME_HEXAGON_SRCS
-      "${CMAKE_SOURCE_DIR}/tests/cpp-runtime/hexagon/*.cc"
-    )
-    if(${supported_arch_index} EQUAL -1)
-      # Exclude User DMA files when building for archs below v68
-      list(REMOVE_ITEM RUNTIME_HEXAGON_SRCS "${TVMRT_SOURCE_DIR}/hexagon/hexagon_user_dma_tests.cc")
-    endif()
-  endif()
   get_hexagon_sdk_property("${USE_HEXAGON_SDK}" "${USE_HEXAGON_ARCH}"
     SDK_INCLUDE   SDK_INCLUDE_DIRS
     QURT_INCLUDE  QURT_INCLUDE_DIRS

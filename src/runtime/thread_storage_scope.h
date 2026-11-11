@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-#include "meta_data.h"
+#include "metadata.h"
 
 namespace tvm {
 namespace runtime {
@@ -86,7 +86,7 @@ inline StorageRank DefaultStorageRank(int thread_scope_rank) {
     case 1:
       return StorageRank::kLocal;
     default: {
-      LOG(FATAL) << "unknown rank";
+      TVM_FFI_THROW(InternalError) << "unknown rank";
     }
   }
 }
@@ -130,7 +130,8 @@ struct StorageScope {
       case StorageRank::kMetalSimdGroup:
         return "metal.simdgroup" + tag;
       default:
-        LOG(FATAL) << "unknown storage scope";
+        TVM_FFI_THROW(InternalError) << "unknown storage scope";
+        return "";
     }
   }
   /*!
@@ -182,7 +183,7 @@ struct StorageScope {
       r.rank = StorageRank::kMetalSimdGroup;
       r.tag = s.substr(15, std::string::npos);
     } else {
-      LOG(FATAL) << "unknown storage scope " << s;
+      TVM_FFI_THROW(InternalError) << "unknown storage scope " << s;
     }
     return r;
   }
@@ -212,7 +213,7 @@ struct ThreadScope {
       r.rank = 1;
       r.dim_index = static_cast<int>(s[10] - 'x');
     } else {
-      LOG(FATAL) << "Unknown threadscope " << s;
+      TVM_FFI_THROW(InternalError) << "Unknown threadscope " << s;
     }
     return r;
   }
@@ -224,6 +225,8 @@ struct ThreadWorkLoad {
   size_t work_size[6];
   // Dynamic shared memory allocation size in bytes.
   size_t dyn_shmem_size{0};
+  // Cluster dimensions for SM90+ cluster launch (x, y, z)
+  size_t cluster_dim[3] = {1, 1, 1};
   /*!
    * \param i The block dimension.
    * \return i-th block dim
@@ -234,19 +237,38 @@ struct ThreadWorkLoad {
    * \return i-th grid dim
    */
   inline size_t grid_dim(size_t i) const { return work_size[i]; }
+  /*!
+   * \return whether cluster launch is enabled
+   */
+  inline bool use_cluster_launch() const {
+    return cluster_dim[0] > 1 || cluster_dim[1] > 1 || cluster_dim[2] > 1;
+  }
 };
 /*! \brief Launch parameters configuration */
 class LaunchParamConfig {
  public:
-  void Init(size_t base, const std::vector<std::string>& launch_param_tags) {
+  void Init(size_t base, const ffi::Array<ffi::String>& launch_param_tags) {
     base_ = base;
     std::vector<bool> filled(6, false);
     for (size_t i = 0; i < launch_param_tags.size(); ++i) {
-      const std::string& tag = launch_param_tags[i];
+      std::string tag(launch_param_tags[i]);
       if (tag == launch_param::kUseDynamicSharedMemoryTag) {
-        ICHECK_EQ(i, launch_param_tags.size() - 1)
+        TVM_FFI_ICHECK_EQ(i, launch_param_tags.size() - 1)
             << "kUseDynamicSharedMemoryTag should be the last tag in launch_param_tags.";
         use_dyn_shared_memory_ = true;
+      } else if (tag == launch_param::kUseProgramaticDependentLaunch) {
+        use_programmatic_dependent_launch_ = true;
+      } else if (tag == launch_param::kUseCooperativeLaunch) {
+        use_cooperative_launch_ = true;
+      } else if (tag == launch_param::kClusterDimX) {
+        cluster_dim_x_arg_index_ = arg_index_map_.size();
+        arg_index_map_.push_back(100);  // Special marker for cluster dim x
+      } else if (tag == launch_param::kClusterDimY) {
+        cluster_dim_y_arg_index_ = arg_index_map_.size();
+        arg_index_map_.push_back(101);  // Special marker for cluster dim y
+      } else if (tag == launch_param::kClusterDimZ) {
+        cluster_dim_z_arg_index_ = arg_index_map_.size();
+        arg_index_map_.push_back(102);  // Special marker for cluster dim z
       } else {
         ThreadScope ts = ThreadScope::Create(tag);
         arg_index_map_.push_back(ts.rank * 3 + ts.dim_index);
@@ -267,10 +289,19 @@ class LaunchParamConfig {
     const TVMFFIAny* raw_args = reinterpret_cast<const TVMFFIAny*>(args.data());
 
     for (size_t i = 0; i < arg_index_map_.size(); ++i) {
-      // Dynamic shapes can result in 0 dim size. Guard to ensure that the dim size is at least 1.
+      uint32_t idx = arg_index_map_[i];
       size_t size = static_cast<size_t>(raw_args[base_ + i].v_int64);
-      if (size > 0) {
-        w.work_size[arg_index_map_[i]] = size;
+      if (idx == 100) {
+        // Cluster dim X
+        w.cluster_dim[0] = size > 0 ? size : 1;
+      } else if (idx == 101) {
+        // Cluster dim Y
+        w.cluster_dim[1] = size > 0 ? size : 1;
+      } else if (idx == 102) {
+        // Cluster dim Z
+        w.cluster_dim[2] = size > 0 ? size : 1;
+      } else {
+        w.work_size[idx] = size;
       }
     }
     if (use_dyn_shared_memory_) {
@@ -281,6 +312,16 @@ class LaunchParamConfig {
   // return the work dim
   size_t work_dim() const { return work_dim_; }
 
+  bool use_programtic_dependent_launch() const { return use_programmatic_dependent_launch_; }
+
+  bool use_cooperative_launch() const { return use_cooperative_launch_; }
+
+  bool use_cluster_launch() const {
+    return cluster_dim_x_arg_index_ >= 0 || cluster_dim_y_arg_index_ >= 0 ||
+           cluster_dim_z_arg_index_ >= 0;
+  }
+
+
  private:
   /*! \brief base axis */
   size_t base_;
@@ -290,6 +331,14 @@ class LaunchParamConfig {
   std::vector<uint32_t> arg_index_map_;
   /*! \brief Whether or not use dynamic shared memory. */
   bool use_dyn_shared_memory_{false};
+  /*! \brief Whether or not use programmatic dependent launch. */
+  bool use_programmatic_dependent_launch_{false};
+  /*! \brief Whether or not use cooperative launch. */
+  bool use_cooperative_launch_{false};
+  /*! \brief Cluster dimension argument indices (-1 if not used) */
+  int cluster_dim_x_arg_index_{-1};
+  int cluster_dim_y_arg_index_{-1};
+  int cluster_dim_z_arg_index_{-1};
 };
 
 }  // namespace runtime

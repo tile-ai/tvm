@@ -31,51 +31,54 @@
 namespace tvm {
 namespace relax {
 
-Function FunctionBindSymbolicVars(Function func,
-                                  Map<Variant<tir::Var, String>, PrimExpr> obj_remap) {
+Function FunctionBindSymbolicVars(
+    Function func, ffi::Map<ffi::Variant<tirx::Var, ffi::String>, PrimExpr> obj_remap) {
   // Early bail-out if no updates need to be made.
   if (obj_remap.empty()) {
     return func;
   }
 
-  Array<tir::Var> old_symbolic_vars = DefinedSymbolicVars(func);
+  ffi::Array<tirx::Var> old_symbolic_vars = DefinedSymbolicVars(func);
 
   // Map from string to the variable(s) with that name.
-  std::unordered_map<std::string, Array<tir::Var>> string_lookup;
-  std::unordered_set<const tir::VarNode*> symbolic_var_set;
+  std::unordered_map<std::string, ffi::Array<tirx::Var>> string_lookup;
+  std::unordered_set<const tirx::VarNode*> symbolic_var_set;
   for (const auto& var : old_symbolic_vars) {
     string_lookup[var->name_hint].push_back(var);
     symbolic_var_set.insert(var.get());
   }
 
   // Replacement map to be used when rewriting the function.
-  Map<tir::Var, PrimExpr> var_remap;
+  ffi::Map<tirx::Var, PrimExpr> var_remap;
   for (const auto& [key, replacement] : obj_remap) {
     if (auto opt = key.as<ffi::String>()) {
-      String string_key = opt.value();
+      ffi::String string_key = opt.value();
       auto it = string_lookup.find(string_key);
-      CHECK(it != string_lookup.end())
+      TVM_FFI_ICHECK(it != string_lookup.end())
           << "Function does not use symbolic var with name \"" << string_key << "\".  "
           << "Function has symbolic variables " << old_symbolic_vars;
 
-      CHECK_EQ(it->second.size(), 1)
+      TVM_FFI_ICHECK_EQ(it->second.size(), 1)
           << "Function contains multiple symbolic variables with name \"" << string_key << "\".  "
           << "The TIR variables " << it->second << " are all named \"" << string_key << "\"";
       auto var = it->second[0];
 
-      CHECK(!var_remap.count(var)) << "Remap of variable " << var << " was defined multiple times";
+      TVM_FFI_ICHECK(!var_remap.count(var))
+          << "Remap of variable " << var << " was defined multiple times";
       var_remap.Set(var, replacement);
-    } else if (auto opt = key.as<tir::Var>()) {
+    } else if (auto opt = key.as<tirx::Var>()) {
       auto var = opt.value();
 
-      CHECK(!var_remap.count(var)) << "Remap of variable " << var << " was defined multiple times";
-      CHECK(symbolic_var_set.count(var.get()))
+      TVM_FFI_ICHECK(!var_remap.count(var))
+          << "Remap of variable " << var << " was defined multiple times";
+      TVM_FFI_ICHECK(symbolic_var_set.count(var.get()))
           << "Function does not use variable " << var << " as a symbolic variable.  "
           << "Function has symbolic variables " << old_symbolic_vars;
       var_remap.Set(var, replacement);
     } else {
-      LOG(FATAL) << "Expected symbolic variable to be a tir::Var or a string name, "
-                 << "but " << key << " was of type " << key.GetTypeKey();
+      TVM_FFI_THROW(InternalError)
+          << "Expected symbolic variable to be a tirx::Var or a string name, "
+          << "but " << key << " was of type " << key.GetTypeKey();
     }
   }
 
@@ -83,7 +86,7 @@ Function FunctionBindSymbolicVars(Function func,
 
   auto free_symbolic_vars = FreeSymbolicVars(new_func);
 
-  CHECK(free_symbolic_vars.empty())
+  TVM_FFI_ICHECK(free_symbolic_vars.empty())
       << "Resulting function should not have any undefined symbolic variables, "
       << "but TIR variables " << free_symbolic_vars << " were undefined.";
 
@@ -91,8 +94,8 @@ Function FunctionBindSymbolicVars(Function func,
 }
 
 namespace {
-IRModule ModuleBindSymbolicVars(IRModule mod,
-                                Map<Variant<tir::Var, String>, PrimExpr> binding_map) {
+IRModule ModuleBindSymbolicVars(
+    IRModule mod, ffi::Map<ffi::Variant<tirx::Var, ffi::String>, PrimExpr> binding_map) {
   std::unordered_set<ffi::Any, ffi::AnyHash, ffi::AnyEqual> used;
   IRModule updates;
   for (const auto& [gvar, base_func] : mod->functions) {
@@ -100,24 +103,25 @@ IRModule ModuleBindSymbolicVars(IRModule mod,
       auto func = opt.value();
 
       // Collect bindings that are used by this function.
-      auto func_binding_map = [&]() -> Map<Variant<tir::Var, String>, PrimExpr> {
+      auto func_binding_map = [&]() -> ffi::Map<ffi::Variant<tirx::Var, ffi::String>, PrimExpr> {
         std::unordered_set<std::string> var_names;
-        std::unordered_set<const tir::VarNode*> vars;
+        std::unordered_set<const tirx::VarNode*> vars;
         for (const auto& var : DefinedSymbolicVars(func)) {
           var_names.insert(var->name_hint);
           vars.insert(var.get());
         }
 
-        Map<Variant<tir::Var, String>, PrimExpr> out;
+        ffi::Map<ffi::Variant<tirx::Var, ffi::String>, PrimExpr> out;
         for (const auto& [key, replacement] : binding_map) {
           bool used_by_function = false;
-          if (auto opt = key.as<String>()) {
+          if (auto opt = key.as<ffi::String>()) {
             used_by_function = var_names.count(opt.value());
-          } else if (auto ptr = key.as<tir::VarNode>()) {
+          } else if (auto ptr = key.as<tirx::VarNode>()) {
             used_by_function = vars.count(ptr);
           } else {
-            LOG(FATAL) << "Expected symbolic variable to be a tir::Var "
-                       << "or a string name, but " << key << " was of type " << key.GetTypeKey();
+            TVM_FFI_THROW(InternalError)
+                << "Expected symbolic variable to be a tirx::Var "
+                << "or a string name, but " << key << " was of type " << key.GetTypeKey();
           }
           if (used_by_function) {
             used.insert(key);
@@ -134,15 +138,15 @@ IRModule ModuleBindSymbolicVars(IRModule mod,
     }
   }
 
-  Array<ffi::Any> unused;
+  ffi::Array<ffi::Any> unused;
   for (const auto& [key, replacement] : binding_map) {
     if (!used.count(key)) {
       unused.push_back(key);
     }
   }
-  CHECK_EQ(unused.size(), 0) << "Binding map contains keys " << unused
-                             << ", which did not correspond to any symbolic variables "
-                             << "in the module.";
+  TVM_FFI_ICHECK_EQ(unused.size(), 0) << "Binding map contains keys " << unused
+                                      << ", which did not correspond to any symbolic variables "
+                                      << "in the module.";
 
   if (updates->functions.size()) {
     mod.CopyOnWrite()->Update(updates);
@@ -151,15 +155,15 @@ IRModule ModuleBindSymbolicVars(IRModule mod,
 }
 }  // namespace
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.FunctionBindSymbolicVars", FunctionBindSymbolicVars);
-});
+}
 
 namespace transform {
 
-Pass BindSymbolicVars(Map<Variant<tir::Var, String>, PrimExpr> binding_map,
-                      Optional<String> func_name) {
+Pass BindSymbolicVars(ffi::Map<ffi::Variant<tirx::Var, ffi::String>, PrimExpr> binding_map,
+                      ffi::Optional<ffi::String> func_name) {
   auto pass_func = [=](IRModule mod, PassContext context) -> IRModule {
     if (func_name) {
       auto gvar = mod->GetGlobalVar(func_name.value());
@@ -177,10 +181,10 @@ Pass BindSymbolicVars(Map<Variant<tir::Var, String>, PrimExpr> binding_map,
   return tvm::transform::CreateModulePass(pass_func, 1, "relax.BindSymbolicVars", {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("relax.transform.BindSymbolicVars", BindSymbolicVars);
-});
+}
 
 }  // namespace transform
 }  // namespace relax

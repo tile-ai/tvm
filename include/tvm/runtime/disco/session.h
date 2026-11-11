@@ -34,6 +34,7 @@
  * workers' register files could be considered as "identical" (single program) although the values
  * may differ (multiple data).
  *
+ *
  * **DRef.** Following the design above, consider the program in SPMD in a virtual ISA, then each
  * worker is a virtual machine instance to execute the ISA maintaining its own register file.
  * The controler denotes each of their register files with a unique integer "register id",
@@ -46,7 +47,7 @@
  * It is assumed that the controler can synchronize with and access the registers of worker-0.
  * The Disco session provides multiple APIs to interact specifically with the worker-0.
  * To shared data with other workers, a common paradigm in Disco is to copy data from the
- * controler-side NDArray to the worker-0, and then copy it to other workers using primitives on
+ * controler-side Tensor to the worker-0, and then copy it to other workers using primitives on
  * the data plane, for example, `broadcast` and `send`.
  *
  * **Control plane.** The controler broadcasts commands to all the workers as control signals.
@@ -72,17 +73,31 @@
 #ifndef TVM_RUNTIME_DISCO_SESSION_H_
 #define TVM_RUNTIME_DISCO_SESSION_H_
 
+#include <tvm/ffi/container/shape.h>
 #include <tvm/ffi/function.h>
-#include <tvm/runtime/int_tuple.h>
-#include <tvm/runtime/ndarray.h>
-#include <tvm/runtime/object.h>
+#include <tvm/runtime/tensor.h>
 
+#include <mutex>
 #include <queue>
 #include <string>
 #include <utility>
 
 namespace tvm {
 namespace runtime {
+
+/*!
+ * \brief Static FFI type index for `runtime::disco::DRef`.
+ *
+ * Allocated within the [kTVMFFIDynObjectBegin - 16, kTVMFFIDynObjectBegin)
+ * custom-static slot range. The sibling constant `kRuntimeRPCObjectRef`
+ * lives in `src/runtime/rpc/rpc_session.h` and uses `... - 13`; values must
+ * remain disjoint across this small reserved block.
+ */
+constexpr int32_t kRuntimeDiscoDRef = TVMFFITypeIndex::kTVMFFIDynObjectBegin - 14;
+
+static_assert(kRuntimeDiscoDRef >= TVMFFITypeIndex::kTVMFFIStaticObjectEnd &&
+                  kRuntimeDiscoDRef < TVMFFITypeIndex::kTVMFFIDynObjectBegin,
+              "kRuntimeDiscoDRef must live in the static custom-index slot range");
 
 /*!
  * \brief All possible kinds of Disco commands.
@@ -121,7 +136,7 @@ inline std::string DiscoAction2String(DiscoAction action) {
     case DiscoAction::kDebugSetRegister:
       return "kDebugSetRegister";
   }
-  LOG(FATAL) << "ValueError: Unknown DiscoAction: " << static_cast<int>(action);
+  TVM_FFI_THROW(ValueError) << "Unknown DiscoAction: " << static_cast<int>(action);
 }
 
 class SessionObj;
@@ -132,7 +147,7 @@ class SessionObj;
  * The controler assigns a unique "register id" to each object, and the worker uses this id to
  * refer to the object residing on itself.
  */
-class DRefObj : public Object {
+class DRefObj : public ffi::Object {
  public:
   /*!\ brief Send dellocation command for `reg_id` */
   inline ~DRefObj();
@@ -143,21 +158,21 @@ class DRefObj : public Object {
    */
   inline ffi::Any DebugGetFromRemote(int worker_id);
   /*!
-   * \brief Copy from the NDArray provided to a remote worker.
+   * \brief Copy from the Tensor provided to a remote worker.
    * \param worker_id The id of the worker to be copied to.
-   * \param source The NDArray to be copied.
+   * \param source The Tensor to be copied.
    */
   inline void DebugCopyFrom(int worker_id, ffi::AnyView source);
 
-  static constexpr const char* _type_key = "runtime.disco.DRef";
-  static constexpr const uint32_t _type_index = TypeIndex::kRuntimeDiscoDRef;
+  static constexpr const uint32_t _type_index = kRuntimeDiscoDRef;
   static const constexpr bool _type_final = true;
-  TVM_FFI_DECLARE_STATIC_OBJECT_INFO(DRefObj, Object);
+  static constexpr const bool _type_mutable = true;
+  TVM_FFI_DECLARE_OBJECT_INFO_STATIC("runtime.disco.DRef", DRefObj, ffi::Object);
 
   /*! \brief The id of the register */
   int64_t reg_id;
   /*! \brief Back-pointer to the host controler session */
-  ObjectRef session{nullptr};
+  ffi::ObjectRef session{nullptr};
 
  private:
   inline SessionObj* GetSession();
@@ -168,16 +183,19 @@ class DRefObj : public Object {
  * \sa DRefObj
  * \note No public constructor is provided as it is not supposed to be directly created by users.
  */
-class DRef : public ObjectRef {
+class DRef : public ffi::ObjectRef {
  public:
-  TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(DRef, ObjectRef, DRefObj);
+  explicit DRef(ffi::ObjectPtr<DRefObj> data) : ffi::ObjectRef(data) {
+    TVM_FFI_ICHECK(data != nullptr);
+  }
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NOTNULLABLE(DRef, ffi::ObjectRef, DRefObj);
 };
 
 /*!
  * \brief A Disco interactive session. It allows users to interact with the Disco command queue with
  * various ffi::Function calling convention.
  */
-class SessionObj : public Object {
+class SessionObj : public ffi::Object {
  public:
   virtual ~SessionObj() = default;
   /*!
@@ -189,37 +207,39 @@ class SessionObj : public Object {
    * - std::string;
    * - DRef.
    * Examples of unsupported types:
-   * - NDArray, DLTensor;
+   * - Tensor, DLTensor;
    * - TVM Objects, including ffi::Function, Module and String;
    * \param func The function to be called.
    * \param args The variadic arguments.
    * \return The return value of function call
    */
   template <typename... Args>
-  DRef TVM_ALWAYS_INLINE CallPacked(const DRef& func, Args&&... args);
+  TVM_FFI_INLINE DRef CallPacked(const DRef& func, Args&&... args);
   /*!
    * \brief Call packed function on each worker using a packed sequence. The calling convention:
    * The first element must be DiscoAction::kCallPacked,
    * The second element must be 0, which will later be updated by the session to return reg_id
    * The thirtd element is the function to be called.
    */
-  TVM_DLL virtual DRef CallWithPacked(const ffi::PackedArgs& args) = 0;
+  TVM_RUNTIME_DLL virtual DRef CallWithPacked(const ffi::PackedArgs& args) = 0;
   /*! \brief Get the number of workers in the session. */
-  TVM_DLL virtual int64_t GetNumWorkers() = 0;
+  TVM_RUNTIME_DLL virtual int64_t GetNumWorkers() = 0;
   /*! \brief Get a global functions on workers. */
-  TVM_DLL virtual DRef GetGlobalFunc(const std::string& name) = 0;
+  TVM_RUNTIME_DLL virtual DRef GetGlobalFunc(const std::string& name) = 0;
   /*!
-   * \brief Copy an NDArray from worker-0 to the controler-side NDArray
+   * \brief Copy an Tensor from worker-0 to the controler-side Tensor
    * \param host_array The array to be copied to worker-0
-   * \param remote_array The NDArray on worker-0
+   * \param remote_array The Tensor on worker-0
    */
-  TVM_DLL virtual void CopyFromWorker0(const NDArray& host_array, const DRef& remote_array) = 0;
+  TVM_RUNTIME_DLL virtual void CopyFromWorker0(const Tensor& host_array,
+                                               const DRef& remote_array) = 0;
   /*!
-   * \brief Copy the controler-side NDArray to worker-0
+   * \brief Copy the controler-side Tensor to worker-0
    * \param host_array The array to be copied to worker-0
-   * \param remote_array The NDArray on worker-0
+   * \param remote_array The Tensor on worker-0
    */
-  TVM_DLL virtual void CopyToWorker0(const NDArray& host_array, const DRef& remote_array) = 0;
+  TVM_RUNTIME_DLL virtual void CopyToWorker0(const Tensor& host_array,
+                                             const DRef& remote_array) = 0;
   /*!
    * \brief Synchrnoize the controler with a worker, and it will wait until worker finishes
    * executing this instruction.
@@ -227,35 +247,37 @@ class SessionObj : public Object {
    * \note This function is usually used for worker-0, because it is the only worker that is
    * assumed to collocate with the controler. Syncing with other workers may not be supported.
    */
-  TVM_DLL virtual void SyncWorker(int worker_id) = 0;
+  TVM_RUNTIME_DLL virtual void SyncWorker(int worker_id) = 0;
   /*! \brief Signal all the workers to shutdown */
-  TVM_DLL virtual void Shutdown() = 0;
+  TVM_RUNTIME_DLL virtual void Shutdown() = 0;
   /*!
    * \brief Initialize the data plane between workers.
    * \param ccl The name of the communication backend, e.g., nccl, rccl, mpi.
    * \param device_ids The device ids of the workers.
    */
-  TVM_DLL virtual void InitCCL(String ccl, IntTuple device_ids) = 0;
+  TVM_RUNTIME_DLL virtual void InitCCL(ffi::String ccl, ffi::Shape device_ids) = 0;
   /*!
    * \brief Get the value of a register from a remote worker.
    * \param reg_id The id of the register to be fetched.
    * \param worker_id The id of the worker to be fetched from.
    * \return The value of the register.
    */
-  TVM_DLL virtual ffi::Any DebugGetFromRemote(int64_t reg_id, int worker_id) = 0;
+  TVM_RUNTIME_DLL virtual ffi::Any DebugGetFromRemote(int64_t reg_id, int worker_id) = 0;
   /*!
    * \brief Set the value of a register on a remote worker.
    * \param reg_id The id of the register to be set.
    * \param value The value to be set.
    * \param worker_id The id of the worker to be set.
    */
-  TVM_DLL virtual void DebugSetRegister(int64_t reg_id, ffi::AnyView value, int worker_id) = 0;
+  TVM_RUNTIME_DLL virtual void DebugSetRegister(int64_t reg_id, ffi::AnyView value,
+                                                int worker_id) = 0;
 
   struct FFI;
   friend struct SessionObj::FFI;
   friend class DRefObj;
-  static constexpr const char* _type_key = "runtime.disco.Session";
-  TVM_DECLARE_BASE_OBJECT_INFO(SessionObj, Object);
+
+  static constexpr const bool _type_mutable = true;
+  TVM_FFI_DECLARE_OBJECT_INFO("runtime.disco.Session", SessionObj, ffi::Object);
 
  protected:
   /*! \brief Deallocate a register id, kill it on all workers, and append it to `free_regs_`. */
@@ -266,14 +288,14 @@ class SessionObj : public Object {
  * \brief Managed reference to SessionObj
  * \sa SessionObj
  */
-class Session : public ObjectRef {
+class Session : public ffi::ObjectRef {
  public:
   /*!
    * \brief Create a session backed by a thread pool of workers
    * \param num_workers The number of workers.
    * \param num_groups The number of worker groups.
    */
-  TVM_DLL static Session ThreadedSession(int num_workers, int num_groups);
+  TVM_RUNTIME_DLL static Session ThreadedSession(int num_workers, int num_groups);
   /*!
    * \brief Create a session backed by pipe-based multiprocessing
    * \param num_workers The number of workers.
@@ -286,10 +308,11 @@ class Session : public ObjectRef {
    * \note Worker-0 is always co-located with the controler as a separate thread, and therefore
    * worker-0 does not exist in the process pool.
    */
-  TVM_DLL static Session ProcessSession(int num_workers, int num_groups,
-                                        String process_pool_creator, String entrypoint);
+  TVM_RUNTIME_DLL static Session ProcessSession(int num_workers, int num_groups,
+                                                ffi::String process_pool_creator,
+                                                ffi::String entrypoint);
 
-  TVM_FFI_DEFINE_MUTABLE_OBJECT_REF_METHODS(Session, ObjectRef, SessionObj);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(Session, ffi::ObjectRef, SessionObj);
 };
 
 /*!
@@ -319,7 +342,7 @@ class WorkerZeroData {
    * \brief The host-side arrays to passed to worker-0 for special uses, for example,
    * copy-to-worker0 and copy-from-worker0
    */
-  std::queue<NDArray> host_arrays;
+  std::queue<Tensor> host_arrays;
   /*! \brief The mutex that guards `host_arrays` */
   std::mutex queue_mutex_;
 };

@@ -26,7 +26,8 @@
 
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/reflection/registry.h>
-#include <tvm/tir/op.h>
+#include <tvm/ir/cow.h>
+#include <tvm/tirx/op.h>
 
 #include <limits>
 
@@ -75,9 +76,7 @@ class IntervalSetNode : public IntSetNode {
   }
   /*! \return whether interval represent everything */
   bool IsEverything() const { return is_neg_inf(min_value) && is_pos_inf(max_value); }
-
-  static constexpr const char* _type_key = "arith.IntervalSet";
-  TVM_DECLARE_FINAL_OBJECT_INFO(IntervalSetNode, IntSetNode);
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL("arith.IntervalSet", IntervalSetNode, IntSetNode);
 };
 
 /*!
@@ -113,7 +112,7 @@ class IntervalSet : public IntSet {
   static IntervalSet Empty() { return IntervalSet(pos_inf(), neg_inf()); }
 
   TVM_DEFINE_OBJECT_REF_COW_METHOD(IntervalSetNode);
-  TVM_DEFINE_OBJECT_REF_METHODS(IntervalSet, IntSet, IntervalSetNode);
+  TVM_FFI_DEFINE_OBJECT_REF_METHODS_NULLABLE(IntervalSet, IntSet, IntervalSetNode);
 };
 
 /*!

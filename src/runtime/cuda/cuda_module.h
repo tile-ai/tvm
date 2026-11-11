@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../meta_data.h"
+#include "../metadata.h"
 
 namespace tvm {
 namespace runtime {

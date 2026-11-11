@@ -25,7 +25,7 @@
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/transform.h>
 #include <tvm/relax/expr.h>
-#include <tvm/tir/function.h>
+#include <tvm/tirx/function.h>
 
 #include <unordered_set>
 
@@ -36,8 +36,8 @@ namespace transform {
 
 namespace {
 BaseFunc BaseFuncWithAttr(BaseFunc func, const std::string& attr_key, Any attr_value) {
-  if (auto tir = func.as<tir::PrimFunc>()) {
-    return WithAttr(tir.value(), attr_key, attr_value);
+  if (auto tirx = func.as<tirx::PrimFunc>()) {
+    return WithAttr(tirx.value(), attr_key, attr_value);
   } else if (auto relax = func.as<relax::Function>()) {
     return WithAttr(relax.value(), attr_key, attr_value);
   } else {
@@ -46,8 +46,8 @@ BaseFunc BaseFuncWithAttr(BaseFunc func, const std::string& attr_key, Any attr_v
 }
 
 BaseFunc BaseFuncWithoutAttr(BaseFunc func, const std::string& attr_key) {
-  if (auto tir = func.as<tir::PrimFunc>()) {
-    return WithoutAttr(tir.value(), attr_key);
+  if (auto tirx = func.as<tirx::PrimFunc>()) {
+    return WithoutAttr(tirx.value(), attr_key);
   } else if (auto relax = func.as<relax::Function>()) {
     return WithoutAttr(relax.value(), attr_key);
   } else {
@@ -56,7 +56,7 @@ BaseFunc BaseFuncWithoutAttr(BaseFunc func, const std::string& attr_key) {
 }
 }  // namespace
 
-Pass ApplyPassToFunction(Pass pass, String func_name_regex,
+Pass ApplyPassToFunction(Pass pass, ffi::String func_name_regex,
                          bool error_if_no_function_matches_regex) {
   auto pass_name =
       static_cast<const std::stringstream&>(std::stringstream() << "ApplyPassTo" << func_name_regex)
@@ -65,15 +65,15 @@ Pass ApplyPassToFunction(Pass pass, String func_name_regex,
   auto pass_func = [pass, func_name_regex, error_if_no_function_matches_regex](
                        IRModule mod, PassContext) -> IRModule {
     bool at_least_one_function_matched_regex = false;
-    std::unordered_set<String> keep_original_version;
-    std::unordered_set<String> internal_functions;
+    std::unordered_set<ffi::String> keep_original_version;
+    std::unordered_set<ffi::String> internal_functions;
     IRModule subset;
 
     for (auto [gvar, func] : mod->functions) {
       std::string name = gvar->name_hint;
       if (tvm::runtime::regex_match(name, func_name_regex)) {
         at_least_one_function_matched_regex = true;
-        if (!func->GetAttr<String>(tvm::attr::kGlobalSymbol).has_value()) {
+        if (!func->GetAttr<ffi::String>(tvm::attr::kGlobalSymbol).has_value()) {
           // Function may be mutated, but is an internal function.  Mark
           // it as externally-exposed, so that any call-tracing internal
           // transforms do not remove this function, in case it its
@@ -95,9 +95,9 @@ Pass ApplyPassToFunction(Pass pass, String func_name_regex,
     }
 
     if (error_if_no_function_matches_regex) {
-      CHECK(at_least_one_function_matched_regex)
+      TVM_FFI_ICHECK(at_least_one_function_matched_regex)
           << "No function matched regex '" << func_name_regex << "', out of functions " << [&]() {
-               Array<String> function_names;
+               ffi::Array<ffi::String> function_names;
                for (const auto& [gvar, func] : mod->functions) {
                  function_names.push_back(gvar->name_hint);
                }
@@ -130,10 +130,10 @@ Pass ApplyPassToFunction(Pass pass, String func_name_regex,
   return CreateModulePass(pass_func, 0, pass_name, {});
 }
 
-TVM_FFI_STATIC_INIT_BLOCK({
+TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("transform.ApplyPassToFunction", ApplyPassToFunction);
-});
+}
 
 }  // namespace transform
 }  // namespace tvm

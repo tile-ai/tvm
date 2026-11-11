@@ -48,7 +48,7 @@ function call whose caller and callee may be in different languages.
 
 The following code block provides an example in C++
 
-.. _PackedFunc: https://github.com/apache/tvm/blob/main/include/tvm/runtime/packed_func.h
+.. _PackedFunc: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/function.h
 
 .. code:: c
 
@@ -80,10 +80,10 @@ The following example registers PackedFunc in C++ and calls from python.
 .. code:: c
 
     // register a global packed function in c++
-    TVM_FFI_STATIC_INIT_BLOCK({
+    TVM_FFI_STATIC_INIT_BLOCK() {
       namespace refl = tvm::ffi::reflection;
       refl::GlobalDef().def_packed("myadd", MyAdd);
-    });
+    }
 
 .. code:: python
 
@@ -112,13 +112,13 @@ we can pass functions from python (as PackedFunc) to C++.
 
 .. code:: c
 
-    TVM_FFI_STATIC_INIT_BLOCK({
+    TVM_FFI_STATIC_INIT_BLOCK() {
       namespace refl = tvm::ffi::reflection;
       refl::GlobalDef().def_packed("callhello", [](ffi::PackedArgs args, ffi::Any* rv) {
         ffi::Function f = args[0].cast<ffi::Function>();
         f("hello world");
       });
-    });
+    }
 
 .. code:: python
 
@@ -128,7 +128,7 @@ we can pass functions from python (as PackedFunc) to C++.
       print(msg)
 
     # convert to PackedFunc
-    f = tvm.convert(callback)
+    f = tvm.runtime.convert(callback)
     callhello = tvm.get_global_func("callhello")
     # prints hello world
     callhello(f)
@@ -138,7 +138,7 @@ which allows us to embed the PackedFunc into any languages. Besides python, so f
 `java`_ and `javascript`_.
 This philosophy of embedded API is very like Lua, except that we don't have a new language but use C++.
 
-.. _minimum C API: https://github.com/apache/tvm/blob/main/include/tvm/runtime/base.h
+.. _minimum C API: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/c_api.h
 .. _java: https://github.com/apache/tvm/tree/main/jvm
 .. _javascript: https://github.com/apache/tvm/tree/main/web
 
@@ -169,7 +169,7 @@ TVM defines the compiled object as `Module`_.
 The user can get the compiled function from Module as PackedFunc.
 The generated compiled code can dynamically get function from Module in runtime. It caches the function handle in the first call and reuses in subsequent calls. We use this to link device code and callback into any PackedFunc(e.g., python) from generated code.
 
-.. _Module: https://github.com/apache/tvm/blob/main/include/tvm/runtime/module.h
+.. _Module: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/extra/module.h
 
 The ModuleNode is an abstract class that can be implemented by each type of device.
 So far we support modules for CUDA, Metal, OpenCL and loading dynamic shared libraries. This abstraction makes introduction
@@ -227,12 +227,10 @@ Each ``Object`` subclass will override this to register its members. Here is an 
       namespace refl = tvm::ffi::reflection;
       refl::ObjectDef<IntImmNode>().def_ro("value", &IntImmNode::value);
     }
-
-    static constexpr const char* _type_key = "ir.IntImm";
-    TVM_DECLARE_FINAL_OBJECT_INFO(IntImmNode, PrimExprNode);
+    TVM_FFI_DECLARE_OBJECT_INFO_FINAL("ir.IntImm", IntImmNode, PrimExprNode);
   };
   // in cc file
-  TVM_FFI_STATIC_INIT_BLOCK({ IntImmNode::RegisterReflection(); });
+  TVM_FFI_STATIC_INIT_BLOCK() { IntImmNode::RegisterReflection(); }
 
 The RegisterReflection gives us a reflection API to register each member of the object.
 We can use this function to visit the node and serialize any language object recursively.
@@ -243,7 +241,7 @@ For example,  we can access the value field of the IntImmNode.
 
     import tvm
 
-    x = tvm.tir.IntImm("int32", 1)
+    x = tvm.tirx.IntImm("int32", 1)
     # access the value field of IntImmNode
     print(x.value)
 
@@ -259,20 +257,18 @@ Each argument in PackedFunc contains a union value `TVMValue`_
 and a type code. This design allows the dynamically typed language to convert to the corresponding type directly, and statically typed language to
 do runtime type checking during conversion.
 
-.. _TVMValue: https://github.com/apache/tvm/blob/main/include/tvm/runtime/base.h#L135
+.. _TVMValue: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/c_api.h
 
 The relevant files are
 
-- `packed_func.h`_ for C++ API
-- `c_runtime_api.cc`_ for C API and how to provide callback.
+- `function.h`_ for C++ PackedFunc API
+- `c_api.h`_ for C API.
 
-.. _packed_func.h: https://github.com/apache/tvm/blob/main/include/tvm/runtime/packed_func.h
-.. _c_runtime_api.cc: https://github.com/apache/tvm/blob/main/src/runtime/c_runtime_api.cc#L262
+.. _function.h: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/function.h
+.. _c_api.h: https://github.com/apache/tvm/blob/main/3rdparty/tvm-ffi/include/tvm/ffi/c_api.h
 
 To support extension types, we used a registry system to register type related information, like support of any
-in C++, see `Extension types`_ for more details.
-
-.. _Extension types: https://github.com/apache/tvm/tree/main/apps/extension
+in C++. See the ``tvm-ffi`` subproject under ``3rdparty/tvm-ffi/`` for more details on the FFI type system.
 
 
 Runtime-Specific Information

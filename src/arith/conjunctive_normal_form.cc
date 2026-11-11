@@ -24,7 +24,7 @@
 #include "conjunctive_normal_form.h"
 
 #include <tvm/arith/analyzer.h>
-#include <tvm/tir/expr.h>
+#include <tvm/tirx/expr.h>
 
 #include <optional>
 #include <unordered_map>
@@ -133,15 +133,15 @@ class AndOfOrs {
   std::vector<std::vector<Key>> chunks_;
 
   /*! \brief Mapping from internal Key to PrimExpr */
-  std::unordered_map<Key, PrimExpr, StructuralHash, StructuralEqual> key_to_expr_;
+  std::unordered_map<Key, PrimExpr, ffi::StructuralHash, ffi::StructuralEqual> key_to_expr_;
 
   /*! \brief Mapping from PrimExpr to internal Key */
-  std::unordered_map<PrimExpr, Key, StructuralHash, StructuralEqual> expr_to_key_;
+  std::unordered_map<PrimExpr, Key, ffi::StructuralHash, ffi::StructuralEqual> expr_to_key_;
 
-  /*! \brief Cached key representing tir::Bool(true) */
+  /*! \brief Cached key representing tirx::Bool(true) */
   Key key_true_;
 
-  /*! \brief Cached key representing tir::Bool(false) */
+  /*! \brief Cached key representing tirx::Bool(false) */
   Key key_false_;
 };
 
@@ -228,7 +228,7 @@ AndOfOrs::Key AndOfOrs::GetKey(const PrimExpr& expr) {
 
 PrimExpr AndOfOrs::GetExpr(AndOfOrs::Key key) const {
   auto it = key_to_expr_.find(key);
-  ICHECK(it != key_to_expr_.end());
+  TVM_FFI_ICHECK(it != key_to_expr_.end());
   return it->second;
 }
 
