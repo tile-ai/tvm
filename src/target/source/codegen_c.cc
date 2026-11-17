@@ -42,6 +42,7 @@ void CodeGenC::Init(bool output_ssa) { print_ssa_form_ = output_ssa; }
 void CodeGenC::InitFuncState(const PrimFunc& f) {
   alloc_storage_scope_.clear();
   handle_data_type_.clear();
+  let_binding_.clear();
   CodeGenSourceBase::ClearFuncState();
   ReserveKeywordsAsUnique();
 }
