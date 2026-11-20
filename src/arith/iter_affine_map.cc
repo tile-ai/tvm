@@ -2032,6 +2032,19 @@ PrimExpr IterMapRewriter::SplitFloorModConst(IterSplitExpr lhs, PrimExpr base, P
     return PrimExpr();
   }
 
+  // Padding a constituent iterator can change a fused mark between the two
+  // passes. If the new mark was not padded, its split cannot encode a
+  // nonzero modulo phase. A mark created by padding has a single split
+  // in its source and is handled by the existing padding path.
+  const auto* source_sum = lhs->source->source.as<IterSumExprNode>();
+  if (check_level_ != IterMapLevel::Bijective && !update_iterator_padding_ && source_sum &&
+      source_sum->args.size() > 1 && padded->source.same_as(lhs->source) &&
+      !CanProveDivisible(pair.second, rhs)) {
+    ErrorLogger(this) << "Cannot represent as IterMap: fused FloorMod mark did not receive "
+                      << "the required left padding " << pair.second;
+    return PrimExpr();
+  }
+
   // floormod(floormod(floordiv(iter, lower_factor), c1c2), c1)
   // = floormod(floordiv(iter, lower_factor), c1), where c1=rhs
   return IterSplitExpr(padded->source,

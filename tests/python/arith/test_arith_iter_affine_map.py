@@ -261,6 +261,25 @@ def test_nested_floormod_requires_divisible_extents():
     assert_iter_map_simplify({divisible: flm(x, 8)}, var_dom([(x, 128)]))
 
 
+def test_surjective_iter_map_preserves_column_rotation():
+    tx = tvm.tirx.Var("tx", "int32")
+    lane = tvm.tirx.Var("lane", "int32")
+    domain = var_dom([(tx, 128), (lane, 2)])
+    analyzer = tvm.arith.Analyzer()
+
+    for col_shift in (0, 2):
+        row = (tx // 8 + 3) % 16
+        col = (tx % 8 * 2 + lane + col_shift) % 16
+        (simplified,) = tvm.arith.iter_map_simplify([row * 16 + col], domain)
+        # The original expression is a valid fallback if the phases cannot share a mark.
+        for t in range(128):
+            for v in range(2):
+                expected = ((t // 8 + 3) % 16) * 16 + (t % 8 * 2 + v + col_shift) % 16
+                values = {tx: tvm.tirx.const(t), lane: tvm.tirx.const(v)}
+                actual = analyzer.simplify(tvm.tirx.stmt_functor.substitute(simplified, values))
+                assert int(actual) == expected, (col_shift, t, v, expected, int(actual))
+
+
 def test_predicate():
     x = tvm.tirx.Var("x", "int32")
     y = tvm.tirx.Var("y", "int32")
