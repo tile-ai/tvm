@@ -16,6 +16,7 @@
 # under the License.
 
 import numpy as np
+import pytest
 
 import tvm
 import tvm.testing
@@ -59,6 +60,69 @@ def test_add():
         tvm.testing.assert_allclose(c.numpy(), a.numpy() + b.numpy())
 
     check_c()
+
+
+def test_shift_unsigned_amount_preserves_signed_lhs():
+    @I.ir_module
+    class Module:
+        @T.prim_func
+        def main(
+            A: T.Buffer((4,), "int32"),
+            N: T.Buffer((4,), "uint32"),
+            Right: T.Buffer((4,), "int64"),
+        ):
+            for i in T.serial(4):
+                Right[i] = A[i] >> N[i]
+
+    mhost = tvm.compile(Module, target="c")
+    temp = utils.tempdir()
+    path_dso = temp.relpath("temp.so")
+    mhost.export_library(path_dso)
+    func = tvm.runtime.load_module(path_dso)["main"]
+
+    a = tvm.runtime.tensor(np.array([-256, -64, -16, -1], dtype="int32"))
+    n = tvm.runtime.tensor(np.array([4, 3, 2, 1], dtype="uint32"))
+    right = tvm.runtime.tensor(np.zeros(4, dtype="int64"))
+    func(a, n, right)
+
+    np.testing.assert_array_equal(right.numpy(), np.array([-16, -8, -4, -1], dtype="int64"))
+
+
+@pytest.mark.parametrize(
+    "dtype,value,expected",
+    [
+        ("uint8", 200, 42),
+        ("int8", 64, 7),
+    ],
+    ids=["unsigned", "signed"],
+)
+def test_shift_narrow_result_is_truncated_for_buffer_index(dtype, value, expected):
+    @I.ir_module
+    class Module:
+        @T.prim_func
+        def main(
+            A: T.Buffer((1024,), "int32"),
+            N: T.Buffer((1,), dtype),
+            Out: T.Buffer((1,), "int32"),
+        ):
+            Out[0] = A[N[0] << 2]
+
+    mhost = tvm.compile(Module, target="c")
+    temp = utils.tempdir()
+    path_dso = temp.relpath("temp.so")
+    mhost.export_library(path_dso)
+    func = tvm.runtime.load_module(path_dso)["main"]
+
+    a = np.zeros(1024, dtype="int32")
+    a[0] = 7
+    a[32] = 42
+    a[256] = 99
+    a[800] = 99
+    n = np.array([value], dtype=dtype)
+    out = tvm.runtime.tensor(np.zeros(1, dtype="int32"))
+    func(tvm.runtime.tensor(a), tvm.runtime.tensor(n), out)
+
+    np.testing.assert_array_equal(out.numpy(), np.array([expected], dtype="int32"))
 
 
 def test_reinterpret():

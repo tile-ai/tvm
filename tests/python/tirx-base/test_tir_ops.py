@@ -183,6 +183,30 @@ def test_binary_dtype_match():
     assert tvm.tirx.const(2) != tvm.tirx.const(True)
 
 
+@pytest.mark.parametrize(
+    "shift_op,lhs_value,expected",
+    [
+        (tvm.tirx.shift_left, -16, -256),
+        (tvm.tirx.shift_right, -256, -16),
+    ],
+    ids=["left", "right"],
+)
+@pytest.mark.parametrize("rhs_dtype", ["int32", "uint8", "uint32"])
+def test_shift_preserves_lhs_type(shift_op, lhs_value, rhs_dtype, expected):
+    lhs = tvm.tirx.Var("lhs", "int32")
+    rhs = tvm.tirx.Var("rhs", rhs_dtype)
+    shifted = shift_op(lhs, rhs)
+
+    assert shifted.dtype == "int32"
+    assert shifted.args[0].same_as(lhs)
+    assert shifted.args[1].dtype == "int32"
+
+    folded = shift_op(tvm.tirx.const(lhs_value, "int32"), tvm.tirx.const(4, rhs_dtype))
+    assert isinstance(folded, tvm.tirx.IntImm)
+    assert folded.dtype == "int32"
+    assert folded.value == expected
+
+
 def test_if_then_else():
     cases = [
         [(tvm.tirx.Var("cond", "bool"), "bool", "int32"), "int32"],
