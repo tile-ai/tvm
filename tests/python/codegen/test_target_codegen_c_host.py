@@ -88,6 +88,40 @@ def test_shift_unsigned_amount_preserves_signed_lhs():
     np.testing.assert_array_equal(right.numpy(), np.array([-16, -8, -4, -1], dtype="int64"))
 
 
+def test_signed_left_shift_is_defined():
+    @I.ir_module
+    class Module:
+        @T.prim_func
+        def main(
+            A: T.Buffer((4,), "int32"),
+            N: T.Buffer((4,), "uint32"),
+            Left: T.Buffer((4,), "int64"),
+        ):
+            for i in T.serial(4):
+                Left[i] = A[i] << N[i]
+
+    mhost = tvm.compile(Module, target="c")
+    temp = utils.tempdir()
+    source_path = temp.relpath("shift.c")
+    mhost.mod.write_to_file(source_path)
+    with open(source_path, encoding="utf-8") as source_file:
+        source = source_file.read()
+    assert "(uint32_t)" in source
+    path_dso = temp.relpath("temp.so")
+    mhost.export_library(
+        path_dso,
+        options=["-fsanitize=undefined", "-fno-sanitize-recover=all"],
+    )
+    func = tvm.runtime.load_module(path_dso)["main"]
+
+    a = tvm.runtime.tensor(np.array([-16, -64, -16, -1], dtype="int32"))
+    n = tvm.runtime.tensor(np.array([4, 3, 2, 1], dtype="uint32"))
+    left = tvm.runtime.tensor(np.zeros(4, dtype="int64"))
+    func(a, n, left)
+
+    np.testing.assert_array_equal(left.numpy(), np.array([-256, -512, -64, -2], dtype="int64"))
+
+
 @pytest.mark.parametrize(
     "dtype,value,expected",
     [
