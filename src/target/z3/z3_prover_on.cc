@@ -800,13 +800,18 @@ private:
     auto b = VisitInt(op->b);
     return z3::ite(a > b, a, b);
   }
+  // Z3's native operator/ and operator% on Int are Euclidean (remainder in
+  // [0, |b|)), which coincides with TVM's truncdiv/truncmod when a >= 0 and
+  // with floordiv/floormod when b > 0.
+  static z3::expr truncdiv(const z3::expr & a, const z3::expr & b) { return z3::ite(a >= 0, a / b, -((-a) / b)); }
+  static z3::expr truncmod(const z3::expr & a, const z3::expr & b) { return z3::ite(a >= 0, a % b, -((-a) % b)); }
   static z3::expr floordiv(const z3::expr & a, const z3::expr & b) { return z3::ite(b > 0, a / b, -((-a) / b)); }
   static z3::expr floormod(const z3::expr & a, const z3::expr & b) { return z3::ite(b > 0, a % b, -((-a) % b)); }
   z3::expr VisitExpr_(const AddNode *op) override { return VisitArith(z3::operator +, op, op->a, op->b); }
   z3::expr VisitExpr_(const SubNode *op) override { return VisitArith(z3::operator -, op, op->a, op->b); }
   z3::expr VisitExpr_(const MulNode *op) override { return VisitArith(z3::operator *, op, op->a, op->b); }
-  z3::expr VisitExpr_(const DivNode *op) override { return VisitArith(z3::operator /, op, op->a, op->b); }
-  z3::expr VisitExpr_(const ModNode *op) override { return VisitArith(z3::operator %, op, op->a, op->b); }
+  z3::expr VisitExpr_(const DivNode *op) override { return VisitArith(truncdiv, op, op->a, op->b); }
+  z3::expr VisitExpr_(const ModNode *op) override { return VisitArith(truncmod, op, op->a, op->b); }
   z3::expr VisitExpr_(const FloorDivNode *op) override { return VisitArith(floordiv, op, op->a, op->b); }
   z3::expr VisitExpr_(const FloorModNode *op) override { return VisitArith(floormod, op, op->a, op->b); }
   z3::expr VisitExpr_(const EQNode *op) override { return VisitArith(z3::operator==, op, op->a, op->b); }
@@ -892,19 +897,7 @@ private:
 
     // Shift operations require integer types for both operands
     if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
-      // For shift operations, we need to ensure the shift amount is non-negative
-      // and within reasonable bounds
       z3::expr a_expr = VisitInt(a);
-      z3::expr b_expr = VisitInt(b);
-
-      // Add constraint that shift amount should be non-negative
-      // This is a common assumption in many programming languages
-      solver->add(b_expr >= 0);
-
-      // Also limit shift amount to avoid unrealistic large shifts
-      // We'll limit to 64 bits (reasonable for most use cases)
-      solver->add(b_expr < 64);
-
       unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
       const bool is_signed_right_shift =
           op->op.same_as(tirx::builtin::shift_right()) && a.dtype().is_int();
@@ -919,6 +912,11 @@ private:
         return signed_value / ctx->int_val(uint64_t{1} << *shift_amount);
       }
 
+      // Rely on Z3's native bit-vector shift semantics. Do not add unscoped
+      // assertions such as `b_expr >= 0` to `solver`: CanProve evaluates
+      // queries without push/pop, so mutating `solver` here would permanently
+      // constrain `b` or contradict an outer scope.
+      z3::expr b_expr = VisitInt(b);
       z3::expr a_bv = z3::int2bv(bit_width, a_expr);
       z3::expr b_bv = z3::int2bv(bit_width, b_expr);
 

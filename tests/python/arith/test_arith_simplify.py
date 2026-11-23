@@ -223,5 +223,55 @@ def test_z3_constant_signed_right_shift(bits, shift):
         assert solver.check(at_value, z3.Int("result") != expected) == z3.unsat
 
 
+def test_z3_shift_does_not_poison_solver():
+    analyzer = tvm.arith.Analyzer()
+    if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
+        pytest.skip("Z3 support is disabled")
+
+    a = tirx.Var("a", "int32")
+    b = tirx.Var("b", "int32")
+
+    # Visiting a shift expression must not permanently constrain `b` on the
+    # shared solver or contradict an outer scope where `b` is out of range.
+    assert not analyzer.can_prove(tirx.shift_left(a, b) >= 0)
+    assert not analyzer.can_prove(b >= 0)
+    assert not analyzer.can_prove(b < 64)
+
+    with analyzer.constraint_scope(b == -1):
+        analyzer.can_prove(tirx.shift_left(a, b) == 0)
+        assert not analyzer.can_prove(a == a + 1)
+
+
+def test_z3_truncdiv_truncmod_semantics():
+    analyzer = tvm.arith.Analyzer()
+    if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
+        pytest.skip("Z3 support is disabled")
+    z3 = pytest.importorskip("z3")
+
+    a = tirx.Var("a", "int32")
+    b = tirx.Var("b", "int32")
+
+    # TVM Div/Mod truncate toward zero, so negative dividends yield negative remainders.
+    assert not analyzer.can_prove(tirx.truncmod(a, 4) >= 0)
+    with analyzer.constraint_scope(b != 0):
+        assert analyzer.can_prove(tirx.truncdiv(a, b) * b + tirx.truncmod(a, b) == a)
+
+    q = tirx.Var("q", "int32")
+    r = tirx.Var("r", "int32")
+    smt = analyzer.get_smtlib2(tirx.Or(q != tirx.truncdiv(a, b), r != tirx.truncmod(a, b)))
+    solver = z3.Solver()
+    solver.from_string(smt)
+    for dividend, divisor, exp_q, exp_r in [
+        (7, 4, 1, 3),
+        (7, -4, -1, 3),
+        (-7, 4, -1, -3),
+        (-7, -4, 1, -3),
+    ]:
+        inputs = z3.And(z3.Int("a") == dividend, z3.Int("b") == divisor)
+        expected = z3.And(z3.Int("q") == exp_q, z3.Int("r") == exp_r)
+        assert solver.check(inputs, expected) == z3.sat
+        assert solver.check(inputs, z3.Not(expected)) == z3.unsat
+
+
 if __name__ == "__main__":
     tvm.testing.main()
