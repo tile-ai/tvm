@@ -29,6 +29,7 @@
 #include <tvm/tirx/op_attr_types.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -905,6 +906,16 @@ private:
       solver->add(b_expr < 64);
 
       unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
+      if (const auto* shift = b.as<IntImmNode>();
+          op->op.same_as(tirx::builtin::shift_right()) && a.dtype().is_int() && shift &&
+          shift->value >= 0 && shift->value < bit_width && bit_width <= 64) {
+        // Translate a constant arithmetic shift in integer arithmetic. The input to
+        // int2bv may be an unbounded expression, so recover its signed value first.
+        z3::expr half_range = ctx->int_val(uint64_t{1} << (bit_width - 1));
+        z3::expr signed_value = z3::mod(a_expr + half_range, 2 * half_range) - half_range;
+        return signed_value / ctx->int_val(uint64_t{1} << shift->value);
+      }
+
       z3::expr a_bv = z3::int2bv(bit_width, a_expr);
       z3::expr b_bv = z3::int2bv(bit_width, b_expr);
 
