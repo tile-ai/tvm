@@ -198,5 +198,30 @@ def test_z3_context_scope_clone_lifetime():
     assert cloned.can_prove(x < 16)
 
 
+@pytest.mark.parametrize("bits, shift", [(8, 1), (32, 12), (64, 63)])
+def test_z3_constant_signed_right_shift(bits, shift):
+    analyzer = tvm.arith.Analyzer()
+    if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
+        pytest.skip("Z3 support is disabled")
+    z3 = pytest.importorskip("z3")
+
+    dtype = f"int{bits}"
+    x = tirx.Var("x", dtype)
+    result = tirx.Var("result", dtype)
+    shifted = tirx.shift_right(x + tirx.const(1, dtype), tirx.const(shift, dtype))
+    # The dump asserts the negation of its argument, so it defines result == shifted.
+    smt = analyzer.get_smtlib2(result != shifted)
+    assert "bvashr" not in smt
+    solver = z3.Solver()
+    solver.from_string(smt)
+
+    highest = (1 << (bits - 1)) - 1
+    lowest = -(1 << (bits - 1))
+    for value, expected in [(highest, lowest >> shift), (-2, -1), (0, 1 >> shift)]:
+        at_value = z3.Int("x") == value
+        assert solver.check(at_value, z3.Int("result") == expected) == z3.sat
+        assert solver.check(at_value, z3.Int("result") != expected) == z3.unsat
+
+
 if __name__ == "__main__":
     tvm.testing.main()

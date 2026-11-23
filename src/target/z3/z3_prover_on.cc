@@ -29,6 +29,7 @@
 #include <tvm/tirx/op_attr_types.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -905,6 +906,19 @@ private:
       solver->add(b_expr < 64);
 
       unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
+      const bool is_signed_right_shift =
+          op->op.same_as(tirx::builtin::shift_right()) && a.dtype().is_int();
+      const int64_t* shift_amount = as_const_int(b);
+      const bool has_valid_const_shift =
+          shift_amount && 0 <= *shift_amount && *shift_amount < bit_width;
+      if (is_signed_right_shift && has_valid_const_shift && bit_width <= 64) {
+        // Both powers of two fit in uint64_t. Wrap the unbounded input to its
+        // signed value before dividing to model an arithmetic right shift.
+        z3::expr half_range = ctx->int_val(uint64_t{1} << (bit_width - 1));
+        z3::expr signed_value = z3::mod(a_expr + half_range, 2 * half_range) - half_range;
+        return signed_value / ctx->int_val(uint64_t{1} << *shift_amount);
+      }
+
       z3::expr a_bv = z3::int2bv(bit_width, a_expr);
       z3::expr b_bv = z3::int2bv(bit_width, b_expr);
 
