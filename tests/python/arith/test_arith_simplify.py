@@ -223,6 +223,49 @@ def test_z3_constant_signed_right_shift(bits, shift):
         assert solver.check(at_value, z3.Int("result") != expected) == z3.unsat
 
 
+@pytest.mark.parametrize(
+    "dtype, mask, values",
+    [
+        ("int8", 0, [-128, 0, 127]),
+        ("int32", 31, [-33, -2, 4, (1 << 31) - 1]),
+        ("uint8", 127, [0, 127, 254, 255]),
+        ("int64", (1 << 63) - 1, [-(1 << 63), -2, 0, (1 << 63) - 1]),
+    ],
+)
+@pytest.mark.parametrize("mask_first", [False, True])
+def test_z3_low_bit_mask(dtype, mask, values, mask_first):
+    analyzer = tvm.arith.Analyzer()
+    if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
+        pytest.skip("Z3 support is disabled")
+    z3 = pytest.importorskip("z3")
+
+    x = tirx.Var("x", dtype)
+    result = tirx.Var("result", dtype)
+    value = x + tirx.const(1, dtype)
+    literal = tirx.const(mask, dtype)
+    masked = tirx.bitwise_and(literal, value) if mask_first else tirx.bitwise_and(value, literal)
+    smt = analyzer.get_smtlib2(result != masked)
+    assert "bvand" not in smt
+    solver = z3.Solver()
+    solver.from_string(smt)
+
+    for n in values:
+        at_value = z3.Int("x") == n
+        expected = (n + 1) & mask
+        assert solver.check(at_value, z3.Int("result") == expected) == z3.sat
+        assert solver.check(at_value, z3.Int("result") != expected) == z3.unsat
+
+
+@pytest.mark.parametrize("dtype, mask", [("int8", -1), ("uint8", 255), ("int32", 5)])
+def test_z3_other_bit_masks_use_bitvectors(dtype, mask):
+    analyzer = tvm.arith.Analyzer()
+    if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
+        pytest.skip("Z3 support is disabled")
+    x = tirx.Var("x", dtype)
+    masked = tirx.bitwise_and(x, tirx.const(mask, dtype))
+    assert "bvand" in analyzer.get_smtlib2(masked == 0)
+
+
 def test_z3_shift_does_not_poison_solver():
     analyzer = tvm.arith.Analyzer()
     if analyzer.get_smtlib2() == "; Z3 Prover is disabled.":
