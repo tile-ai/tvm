@@ -847,6 +847,22 @@ private:
     }
   }
 
+  std::optional<z3::expr> TryLowBitMask(const PrimExpr& value, const PrimExpr& mask,
+                                        unsigned bit_width) {
+    const int64_t* imm = as_const_int(mask);
+    if (!imm || *imm < 0 || bit_width == 0 || bit_width > 64) return std::nullopt;
+
+    // A mask of k low bits is 2^k - 1. Use unsigned arithmetic so that
+    // INT64_MAX + 1 is representable as the modulus.
+    uint64_t modulus = static_cast<uint64_t>(*imm) + 1;
+    if ((modulus & (modulus - 1)) != 0) return std::nullopt;
+
+    // The bit-vector path interprets its result as signed. When the mask
+    // clears the sign bit, x & (2^k - 1) equals x mod 2^k even for negative x.
+    if (modulus > (uint64_t{1} << (bit_width - 1))) return std::nullopt;
+    return z3::mod(VisitInt(value), ctx->int_val(modulus));
+  }
+
   /// @brief Helper function to visit binary bitwise operations
   z3::expr VisitBitwiseOp(z3::expr(*op_func)(const z3::expr &, const z3::expr &), const CallNode *op) {
     if (op->args.size() != 2) {
@@ -859,6 +875,10 @@ private:
     unsigned bit_width = std::max(op->args[0].dtype().bits(), op->args[1].dtype().bits());
 
     if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
+      if (op->op.same_as(tirx::builtin::bitwise_and())) {
+        if (auto masked = TryLowBitMask(a, b, bit_width)) return *masked;
+        if (auto masked = TryLowBitMask(b, a, bit_width)) return *masked;
+      }
       return z3::bv2int(op_func(z3::int2bv(bit_width, VisitInt(a)), z3::int2bv(bit_width, VisitInt(b))), true);
     } else {
       return Create(op);
