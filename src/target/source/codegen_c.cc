@@ -548,6 +548,33 @@ inline void PrintBinaryIntrinsic(const CallNode* op, const char* opstr,
     p->PrintVecBinaryOp(opstr, op->dtype, op->args[0], op->args[1], os);
   }
 }
+
+inline void PrintShiftIntrinsic(const CallNode* op, const char* opstr, bool is_left_shift,
+                                std::ostream& os,  // NOLINT(*)
+                                CodeGenC* p) {
+  if (is_left_shift && op->dtype.is_int() && op->dtype.lanes() == 1) {
+    DataType unsigned_dtype(DataType::kUInt, op->dtype.bits(), op->dtype.lanes());
+    std::ostringstream lhs;
+    std::ostringstream rhs;
+    std::ostringstream shifted;
+    p->PrintExpr(op->args[0], lhs);
+    p->PrintExpr(op->args[1], rhs);
+    shifted << '(' << p->CastFromTo(lhs.str(), op->dtype, unsigned_dtype) << opstr << rhs.str()
+            << ')';
+    os << p->CastFromTo(shifted.str(), unsigned_dtype, op->dtype);
+    return;
+  }
+  if (op->dtype.lanes() == 1) {
+    os << '(';
+    p->PrintType(op->dtype, os);
+    os << ")(";
+    PrintBinaryIntrinsic(op, opstr, os, p);
+    os << ')';
+  } else {
+    PrintBinaryIntrinsic(op, opstr, os, p);
+  }
+}
+
 void CodeGenC::VisitExpr_(const CastNode* op, std::ostream& os) {  // NOLINT(*)
   std::stringstream value;
   this->PrintExpr(op->value, value);
@@ -681,9 +708,9 @@ void CodeGenC::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*)
       this->PrintExpr(op->args[0], os);
       os << ')';
     } else if (op->op.same_as(builtin::shift_left())) {
-      PrintBinaryIntrinsic(op, " << ", os, this);
+      PrintShiftIntrinsic(op, " << ", true, os, this);
     } else if (op->op.same_as(builtin::shift_right())) {
-      PrintBinaryIntrinsic(op, " >> ", os, this);
+      PrintShiftIntrinsic(op, " >> ", false, os, this);
     } else if (op->op.same_as(builtin::if_then_else())) {
       // Conditional that skips eval if cond evals to false.
       // When inside a select, combine conditions to prevent OOB access.
