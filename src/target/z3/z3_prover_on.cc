@@ -29,6 +29,7 @@
 #include <tvm/tirx/op_attr_types.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -799,13 +800,18 @@ private:
     auto b = VisitInt(op->b);
     return z3::ite(a > b, a, b);
   }
+  // Z3's native operator/ and operator% on Int are Euclidean (remainder in
+  // [0, |b|)), which coincides with TVM's truncdiv/truncmod when a >= 0 and
+  // with floordiv/floormod when b > 0.
+  static z3::expr truncdiv(const z3::expr & a, const z3::expr & b) { return z3::ite(a >= 0, a / b, -((-a) / b)); }
+  static z3::expr truncmod(const z3::expr & a, const z3::expr & b) { return z3::ite(a >= 0, a % b, -((-a) % b)); }
   static z3::expr floordiv(const z3::expr & a, const z3::expr & b) { return z3::ite(b > 0, a / b, -((-a) / b)); }
   static z3::expr floormod(const z3::expr & a, const z3::expr & b) { return z3::ite(b > 0, a % b, -((-a) % b)); }
   z3::expr VisitExpr_(const AddNode *op) override { return VisitArith(z3::operator +, op, op->a, op->b); }
   z3::expr VisitExpr_(const SubNode *op) override { return VisitArith(z3::operator -, op, op->a, op->b); }
   z3::expr VisitExpr_(const MulNode *op) override { return VisitArith(z3::operator *, op, op->a, op->b); }
-  z3::expr VisitExpr_(const DivNode *op) override { return VisitArith(z3::operator /, op, op->a, op->b); }
-  z3::expr VisitExpr_(const ModNode *op) override { return VisitArith(z3::operator %, op, op->a, op->b); }
+  z3::expr VisitExpr_(const DivNode *op) override { return VisitArith(truncdiv, op, op->a, op->b); }
+  z3::expr VisitExpr_(const ModNode *op) override { return VisitArith(truncmod, op, op->a, op->b); }
   z3::expr VisitExpr_(const FloorDivNode *op) override { return VisitArith(floordiv, op, op->a, op->b); }
   z3::expr VisitExpr_(const FloorModNode *op) override { return VisitArith(floormod, op, op->a, op->b); }
   z3::expr VisitExpr_(const EQNode *op) override { return VisitArith(z3::operator==, op, op->a, op->b); }
@@ -841,6 +847,22 @@ private:
     }
   }
 
+  std::optional<z3::expr> TryLowBitMask(const PrimExpr& value, const PrimExpr& mask,
+                                        unsigned bit_width) {
+    const int64_t* imm = as_const_int(mask);
+    if (!imm || *imm < 0 || bit_width == 0 || bit_width > 64) return std::nullopt;
+
+    // A mask of k low bits is 2^k - 1. Use unsigned arithmetic so that
+    // INT64_MAX + 1 is representable as the modulus.
+    uint64_t modulus = static_cast<uint64_t>(*imm) + 1;
+    if ((modulus & (modulus - 1)) != 0) return std::nullopt;
+
+    // The bit-vector path interprets its result as signed. When the mask
+    // clears the sign bit, x & (2^k - 1) equals x mod 2^k even for negative x.
+    if (modulus > (uint64_t{1} << (bit_width - 1))) return std::nullopt;
+    return z3::mod(VisitInt(value), ctx->int_val(modulus));
+  }
+
   /// @brief Helper function to visit binary bitwise operations
   z3::expr VisitBitwiseOp(z3::expr(*op_func)(const z3::expr &, const z3::expr &), const CallNode *op) {
     if (op->args.size() != 2) {
@@ -853,6 +875,10 @@ private:
     unsigned bit_width = std::max(op->args[0].dtype().bits(), op->args[1].dtype().bits());
 
     if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
+      if (op->op.same_as(tirx::builtin::bitwise_and())) {
+        if (auto masked = TryLowBitMask(a, b, bit_width)) return *masked;
+        if (auto masked = TryLowBitMask(b, a, bit_width)) return *masked;
+      }
       return z3::bv2int(op_func(z3::int2bv(bit_width, VisitInt(a)), z3::int2bv(bit_width, VisitInt(b))), true);
     } else {
       return Create(op);
@@ -891,20 +917,26 @@ private:
 
     // Shift operations require integer types for both operands
     if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
-      // For shift operations, we need to ensure the shift amount is non-negative
-      // and within reasonable bounds
       z3::expr a_expr = VisitInt(a);
-      z3::expr b_expr = VisitInt(b);
-
-      // Add constraint that shift amount should be non-negative
-      // This is a common assumption in many programming languages
-      solver->add(b_expr >= 0);
-
-      // Also limit shift amount to avoid unrealistic large shifts
-      // We'll limit to 64 bits (reasonable for most use cases)
-      solver->add(b_expr < 64);
-
       unsigned bit_width = std::max(a.dtype().bits(), b.dtype().bits());
+      const bool is_signed_right_shift =
+          op->op.same_as(tirx::builtin::shift_right()) && a.dtype().is_int();
+      const int64_t* shift_amount = as_const_int(b);
+      const bool has_valid_const_shift =
+          shift_amount && 0 <= *shift_amount && *shift_amount < bit_width;
+      if (is_signed_right_shift && has_valid_const_shift && bit_width <= 64) {
+        // Both powers of two fit in uint64_t. Wrap the unbounded input to its
+        // signed value before dividing to model an arithmetic right shift.
+        z3::expr half_range = ctx->int_val(uint64_t{1} << (bit_width - 1));
+        z3::expr signed_value = z3::mod(a_expr + half_range, 2 * half_range) - half_range;
+        return signed_value / ctx->int_val(uint64_t{1} << *shift_amount);
+      }
+
+      // Rely on Z3's native bit-vector shift semantics. Do not add unscoped
+      // assertions such as `b_expr >= 0` to `solver`: CanProve evaluates
+      // queries without push/pop, so mutating `solver` here would permanently
+      // constrain `b` or contradict an outer scope.
+      z3::expr b_expr = VisitInt(b);
       z3::expr a_bv = z3::int2bv(bit_width, a_expr);
       z3::expr b_bv = z3::int2bv(bit_width, b_expr);
 
